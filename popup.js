@@ -1,3 +1,5 @@
+document.querySelector("#volume-slider").focus();
+
 function listenForEvents() {
 	function err(error) {
 		console.error(`Volume Control: Error: ${error}`);
