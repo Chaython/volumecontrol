@@ -1,26 +1,20 @@
 {
   "manifest_version": 2,
   "name": "Volume Control",
-  "version": "2.4",
+  "version": "2.3",
   "description": "Adds a volume control for the current site, that can also boost the volume beyond the normal range.",
   "homepage_url": "https://github.com/Chaython/volumecontrol",
   "icons": {
     "96": "icon.png"
   },
-  "permissions": ["activeTab"],
+  "permissions": [
+    "activeTab"
+  ],
   "browser_action": {
     "default_icon": "icon.png",
     "default_title": "Volume Control",
     "default_popup": "popup.html"
   },
-  "content_scripts": [
-    {
-      "matches": ["http://*/*", "https://*/*", "file:///*"],
-      "js": ["lib/arrive.min.js", "cs.js"],
-      "all_frames": true,
-      "match_about_blank": true
-    }
-  ],
   "commands": {
     "_execute_browser_action": {
       "description": "Open volume control"

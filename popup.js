@@ -80,29 +80,33 @@ function listenForEvents() {
         showError("No audio playing.");
         return;
       }
-      const volumeSlider = document.querySelector("#volume-slider");
-      const volumeText = document.querySelector("#volume-text");
-      const monoCheckbox = document.querySelector("#mono-checkbox");
+      browser.tabs.executeScript({ file: "cs.js" })
+        .then(() => {
+          const volumeSlider = document.querySelector("#volume-slider");
+          const volumeText = document.querySelector("#volume-text");
+          const monoCheckbox = document.querySelector("#mono-checkbox");
 
-      volumeSlider.addEventListener("input", updateVolumeFromSlider);
-      volumeSlider.addEventListener("change", updateVolumeFromSlider);
-      volumeText.addEventListener("input", updateVolumeFromText);
-      monoCheckbox.addEventListener("change", toggleMono);
-      document.addEventListener("change", handleInputChange);
+          volumeSlider.addEventListener("input", updateVolumeFromSlider);
+          volumeSlider.addEventListener("change", updateVolumeFromSlider);
+          volumeText.addEventListener("input", updateVolumeFromText);
+          monoCheckbox.addEventListener("change", toggleMono);
+          document.addEventListener("change", handleInputChange);
 
-      volumeSlider.focus();
-      browser.tabs
-        .sendMessage(tabs[0].id, { command: "getVolume" })
-        .then((response) => {
-          setVolume(response.response);
+          volumeSlider.focus();
+
+          browser.tabs.sendMessage(tabs[0].id, { command: "getVolume" })
+            .then(response => {
+              setVolume(response.response);
+            })
+            .catch(err);
+
+          browser.tabs.sendMessage(tabs[0].id, { command: "getMono" })
+            .then(response => {
+              monoCheckbox.checked = response.response;
+            })
+            .catch(err);
         })
-        .catch(err);
-      browser.tabs
-        .sendMessage(tabs[0].id, { command: "getMono" })
-        .then((response) => {
-          monoCheckbox.checked = response.response;
-        })
-        .catch(err);
+        .catch(showError);
     })
     .catch(showError);
 }
