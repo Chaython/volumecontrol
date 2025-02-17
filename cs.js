@@ -169,15 +169,6 @@ function checkExclusion() {
       initWhenReady(document);
       return;
     }
-
-    // Handle other sites
-    if (isFdqnBlacklisted(fqdn, data.fqdns)) {
-      if (!data.disableAlert) {
-        alert("This site is in the exclusion list.");
-      }
-    } else {
-      initWhenReady(document);
-    }
   });
 }
 
