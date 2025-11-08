@@ -135,7 +135,7 @@ function isValidURL(urlString) {
 }
 
 function initializeFqdnList() {
-  const defaultFqdns = ["shadertoy.com", "clips.twitch.tv", "www.twitch.tv/*/clip/*"];
+  const defaultFqdns = ["shadertoy.com"];
   browser.storage.local.get({ fqdns: [] }).then(data => {
     const { fqdns } = data;
     const updatedFqdns = [...new Set([...fqdns, ...defaultFqdns])];
@@ -154,21 +154,6 @@ function checkExclusion() {
   browser.storage.local.get({ fqdns: [] }).then(data => {
     const currentUrl = new URL(window.location.href);
     const fqdn = extractRootDomain(currentUrl.href);
-
-    // Store exclusion state in session storage
-    if (currentUrl.hostname === "clips.twitch.tv" || 
-        currentUrl.pathname.includes("/clip/") ||
-        isFdqnBlacklisted(fqdn, data.fqdns)) {
-      sessionStorage.setItem('volumecontrol-excluded', 'true');
-      browser.runtime.sendMessage({ type: "exclusion" });
-      return;
-    }
-
-    if (fqdn === "twitch.tv") {
-      sessionStorage.setItem('volumecontrol-excluded', 'false');
-      initWhenReady(document);
-      return;
-    }
 
     // Only initialize if not excluded
     if (!sessionStorage.getItem('volumecontrol-excluded')) {
