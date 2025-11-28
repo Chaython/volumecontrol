@@ -3,12 +3,8 @@
 <head>
     <meta charset="utf-8">
     <title>Volume Control Settings</title>
-    <link rel="stylesheet" href="options.css"> <style>
-        /* Existing inline styles are moved to options.css or kept here. 
-           For this solution, I've left your existing inline styles in the head 
-           but I recommend moving them to options.css eventually. 
-           I have added the specific styles for the new footer below. */
-        
+    <link rel="stylesheet" href="options.css">
+    <style>
         body { 
             font-family: "Segoe UI", Tahoma, sans-serif; 
             padding: 20px; 
@@ -138,7 +134,7 @@
         input[type="checkbox"] { width: 18px; height: 18px; margin-right: 10px; }
         .hint { display: block; margin-left: 28px; font-weight: normal; font-size: 0.9em; color: #666; margin-top: 5px;}
 
-        /* --- NEW: Footer / About Section Styles --- */
+        /* Footer / About Section Styles */
         .footer-box {
             margin-top: 30px;
             border-top: 1px solid #eee;
@@ -184,8 +180,6 @@
             .hint { color: #aaa; }
             .setting-group { background: #333; border-color: #444; color: #ccc; }
             .remove-btn:hover { background: #555; }
-            
-            /* Footer Dark Mode */
             .footer-box { border-top-color: #444; }
             .footer-link { color: #8ab4f8; }
             .footer-link:hover { color: #aecbfa; }
@@ -220,6 +214,16 @@
     </div>
     <div id="memoryList" class="list-container">
         </div>
+
+    <div class="toggle-box" style="margin-top: 30px;">
+        <label>
+            <input type="checkbox" id="debugMode"> 
+            Show Debug Highlight
+        </label>
+        <span class="hint">
+            Draws a <span style="color:green; font-weight:bold;">Green</span> border around video elements when successfully hooked.
+        </span>
+    </div>
 
     <div class="footer-box">
         <h3>About Volume Control</h3>

@@ -54,16 +54,13 @@ function handleTabs(tabs) {
     
     if (restrictedProtocols.includes(protocol)) {
         showError({ message: "Volume control is not available on system pages." });
-        // Hide the active switch on system pages
         const switchLabel = document.querySelector('label[for="enable-checkbox"]');
         if(switchLabel) switchLabel.style.display = 'none';
         return;
     }
 
-    // 1. Setup the Active Switch
     updateEnableSwitch(currentTab);
 
-    // 2. Check content script status
     browserApi.tabs.sendMessage(currentTab.id, { command: "checkExclusion" }, (response) => {
         if (browserApi.runtime.lastError) {
             showError({ type: "exclusion" });
@@ -73,7 +70,6 @@ function handleTabs(tabs) {
     initializeControls(currentTab);
 }
 
-// --- NEW: Toggle Switch Logic ---
 function updateEnableSwitch(tab) {
     const checkbox = document.getElementById('enable-checkbox');
     const switchLabel = document.querySelector('label[for="enable-checkbox"]');
@@ -90,20 +86,15 @@ function updateEnableSwitch(tab) {
         let isExcluded = false;
         
         if (data.whitelistMode) {
-            // Whitelist Mode: Excluded if NOT in list
             isExcluded = !data.whitelist.includes(domain);
         } else {
-            // Blocklist Mode: Excluded if IN list
             isExcluded = data.fqdns.includes(domain);
         }
 
-        // Set Checkbox State (Checked = Active/Enabled)
         checkbox.checked = !isExcluded;
 
-        // Attach Change Handler
         checkbox.onchange = (e) => {
             const isActive = e.target.checked;
-            // If isActive is true, we are un-excluding. If false, we are excluding.
             toggleSitePermission(domain, data, !isActive, tab.id);
         };
     });
@@ -113,24 +104,18 @@ function toggleSitePermission(domain, data, shouldExclude, tabId) {
     let newData = {};
 
     if (data.whitelistMode) {
-        // Whitelist Logic
         newData.whitelist = data.whitelist || [];
         if (shouldExclude) {
-            // Remove from whitelist
             const idx = newData.whitelist.indexOf(domain);
             if (idx > -1) newData.whitelist.splice(idx, 1);
         } else {
-            // Add to whitelist
             if (!newData.whitelist.includes(domain)) newData.whitelist.push(domain);
         }
     } else {
-        // Blocklist Logic
         newData.fqdns = data.fqdns || [];
         if (shouldExclude) {
-            // Add to blocklist
             if (!newData.fqdns.includes(domain)) newData.fqdns.push(domain);
         } else {
-            // Remove from blocklist
             const idx = newData.fqdns.indexOf(domain);
             if (idx > -1) newData.fqdns.splice(idx, 1);
         }
@@ -142,14 +127,18 @@ function toggleSitePermission(domain, data, shouldExclude, tabId) {
     });
 }
 
-// --- STANDARD LOGIC ---
-
+// --- ERROR HANDLING FIX ---
 function err(error) {
   const msg = error.message || error;
-  if (typeof msg === 'string' && (
-      msg.includes("Receiving end does not exist") || 
-      msg.includes("Could not establish connection")
-  )) return;
+  if (typeof msg === 'string') {
+      // Ignore common connectivity errors that aren't critical
+      if (msg.includes("Receiving end does not exist") || 
+          msg.includes("Could not establish connection") ||
+          msg.includes("message channel closed") // <--- Added this check
+      ) {
+          return; 
+      }
+  }
   console.error(`Volume Control: Error: ${msg}`);
 }
 
@@ -227,18 +216,15 @@ function showError(error) {
   if (exclusionMessage) exclusionMessage.classList.add("hidden");
 
   if (error.type === "exclusion") {
-    // Show Main + Exclusion Banner
     if (popupContent) popupContent.classList.remove("hidden");
     if (exclusionMessage) exclusionMessage.classList.remove("hidden");
     
-    // Hide controls but keep Active switch visible
     const top = document.querySelector(".top-controls");
     const left = document.querySelector(".left");
     if(top) top.classList.add("hidden");
     if(left) left.classList.add("hidden"); 
     document.body.classList.add("excluded-site");
   } else {
-    // Show Generic Error (System Pages)
     if (errorContent) {
         errorContent.classList.remove("hidden");
         errorContent.querySelector("p").textContent = error.message || "An error occurred";

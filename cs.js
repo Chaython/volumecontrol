@@ -1,59 +1,60 @@
-// cs.js - Volume Control (Fixed checkExclusion)
-const browserAPI = window.browser || window.chrome;
+// 1. Safe API Detection (checks both namespace and undefined)
+const browserAPI = (typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null));
 
 var tc = {
-  settings: {
-    logLevel: 0, 
-    defaultLogLevel: 4,
+  settings: { 
+      logLevel: 4,
+      debugMode: false // Will be updated from storage
   },
   vars: {
     dB: 0,
     mono: false,
     audioCtx: undefined, 
     gainNode: undefined,
-    isBlocked: false // New flag to track status
+    isBlocked: false 
   },
 };
 
 const logTypes = ["ERROR", "WARNING", "INFO", "DEBUG"];
-
-function log(message, level = tc.settings.defaultLogLevel) {
-  if (tc.settings.logLevel >= level) {
-    console.log(`[VolumeControl] ${logTypes[level - 2]}: ${message}`);
-  }
+function log(msg, level = 4) {
+  if (tc.settings.logLevel >= level) console.log(`[VolumeControl] ${logTypes[level-2]}: ${msg}`);
 }
 
-// --- MESSAGE LISTENER (Global Scope) ---
-// We listen immediately so the popup never thinks we are "Excluded" due to timing issues.
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    // If the site is legitimately blocked, we ignore requests (triggering lastError in popup)
-    if (tc.vars.isBlocked) return;
+// --- MESSAGE LISTENER ---
+if (browserAPI) {
+    browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+        if (tc.vars.isBlocked) return;
+        
+        switch (msg.command) {
+            case "checkExclusion": 
+                sendResponse({ status: "active" }); 
+                break;
+            
+            case "setVolume": 
+                tc.vars.dB = msg.dB; 
+                applyState(); 
+                sendResponse({}); // Confirm receipt to close async channel
+                break;
+            
+            case "getVolume": 
+                sendResponse({ response: tc.vars.dB }); 
+                break;
+            
+            case "setMono": 
+                tc.vars.mono = msg.mono; 
+                applyState(); 
+                sendResponse({}); // Confirm receipt to close async channel
+                break;
+            
+            case "getMono": 
+                sendResponse({ response: tc.vars.mono }); 
+                break;
+        }
+        return true; // Indicates async response
+    });
+}
 
-    switch (msg.command) {
-        case "checkExclusion":
-            // Just confirm we are alive.
-            sendResponse({ status: "active" });
-            break;
-        case "setVolume":
-            tc.vars.dB = msg.dB;
-            applyState();
-            break;
-        case "getVolume":
-            sendResponse({ response: tc.vars.dB });
-            break;
-        case "setMono":
-            tc.vars.mono = msg.mono;
-            applyState();
-            break;
-        case "getMono":
-            sendResponse({ response: tc.vars.mono });
-            break;
-    }
-    // Return true to indicate we might respond asynchronously (good practice)
-    return true;
-});
-
-// --- CORE VOLUME LOGIC ---
+// --- AUDIO LOGIC ---
 
 function getGainValue(dB) {
     if (isNaN(dB)) return 1.0;
@@ -66,8 +67,10 @@ function applyState() {
     const targetGain = getGainValue(tc.vars.dB);
     const now = tc.vars.audioCtx.currentTime;
 
+    // 1. Force value immediately (safest for responsiveness)
     tc.vars.gainNode.gain.value = targetGain;
 
+    // 2. Schedule value if engine is running (overrides automation)
     if (tc.vars.audioCtx.state === 'running') {
         try {
             tc.vars.gainNode.gain.cancelScheduledValues(now);
@@ -75,6 +78,7 @@ function applyState() {
         } catch(e) {}
     }
 
+    // 3. Apply Mono
     if (tc.vars.mono) {
         tc.vars.gainNode.channelCountMode = "explicit";
         tc.vars.gainNode.channelCount = 1;
@@ -95,10 +99,13 @@ function createGainNode() {
 }
 
 function connectOutput(element) {
+    // Prevent double hooking
     if (element.dataset.vcHooked === "true") return;
 
+    // Init Audio Context if missing
     if (!tc.vars.audioCtx) {
         tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        // Listener: Re-apply settings when audio engine wakes up (Autoplay fix)
         tc.vars.audioCtx.onstatechange = () => {
             if (tc.vars.audioCtx.state === 'running') applyState();
         };
@@ -107,15 +114,48 @@ function connectOutput(element) {
     if (!tc.vars.gainNode) createGainNode();
 
     try {
-        const source = tc.vars.audioCtx.createMediaElementSource(element);
+        log(`Attempting hook: ${element.tagName}`, 4);
+
+        let source;
+        
+        // --- FIREFOX FIX: Unwrap Xray Wrapper ---
+        // Firefox wraps DOM elements in a security layer that AudioContext rejects.
+        // We access the underlying object using .wrappedJSObject.
+        if (typeof element.wrappedJSObject !== 'undefined') {
+            try {
+                source = tc.vars.audioCtx.createMediaElementSource(element.wrappedJSObject);
+            } catch(e) { log("Unwrap failed, trying direct...", 3); }
+        }
+
+        // Standard Chrome/Edge Fallback
+        if (!source) {
+            source = tc.vars.audioCtx.createMediaElementSource(element);
+        }
+
+        // Connect Graph
         source.connect(tc.vars.gainNode);
         tc.vars.gainNode.connect(tc.vars.audioCtx.destination);
         
+        // Mark as Success
         element.dataset.vcHooked = "true";
-        applyState(); 
-        log(`Hooked ${element.tagName}`, 5);
+        applyState();
+        
+        // Visual Debug: Green Border (Only if enabled)
+        if (tc.settings.debugMode) {
+            element.style.border = "2px solid #00ff00"; 
+        } else {
+            element.style.border = ""; 
+        }
+        log("Hook Success!", 4);
+
     } catch (e) {
-        // Ignored
+        // Visual Debug: Red Border (Only if enabled)
+        if (tc.settings.debugMode) {
+            element.style.border = "5px solid red"; 
+        }
+        
+        // Note: It is normal for this to fail on some iframes or cross-origin media
+        // log(`Hook FAILED: ${e.message}`, 1);
     }
 }
 
@@ -124,8 +164,10 @@ function connectOutput(element) {
 function init() {
     if (document.body.classList.contains("vc-init")) return;
     
+    // 1. Hook existing elements
     document.querySelectorAll("audio, video").forEach(connectOutput);
 
+    // 2. Watch for new elements (SPA/YouTube support)
     new MutationObserver(mutations => {
         mutations.forEach(m => m.addedNodes.forEach(n => {
             if (n.nodeType === 1) {
@@ -135,6 +177,7 @@ function init() {
         }));
     }).observe(document.body, { childList: true, subtree: true });
 
+    // 3. Failsafe: Resume AudioContext on user interaction
     document.addEventListener('click', () => {
         if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
             tc.vars.audioCtx.resume().then(applyState);
@@ -154,7 +197,18 @@ function extractRootDomain(url) {
 // --- ENTRY POINT ---
 
 function start() {
-    browserAPI.storage.local.get({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {} }, (data) => {
+    // Safety: If API is missing (restricted frame), exit to prevent crash
+    if (!browserAPI) return;
+
+    browserAPI.storage.local.get({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false }, (data) => {
+        // Prevent random permission errors
+        if (browserAPI.runtime.lastError) return;
+
+        // Apply Debug Preference
+        if (data.debugMode !== undefined) {
+            tc.settings.debugMode = data.debugMode;
+        }
+
         const currentDomain = extractRootDomain(window.location.href);
 
         // 1. Check Exclusion/Inclusion Lists
@@ -167,8 +221,6 @@ function start() {
 
         if (blocked) {
             tc.vars.isBlocked = true;
-            // We do NOT call init(). The listener up top will see isBlocked=true 
-            // and ignore messages, causing the popup to correctly show "Excluded".
             return;
         }
 
@@ -184,6 +236,7 @@ function start() {
     });
 }
 
+// Run immediately (document_start)
 if (document.readyState === "loading") {
     document.addEventListener('DOMContentLoaded', start);
 } else {
