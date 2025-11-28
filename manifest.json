@@ -5,7 +5,7 @@
   "description": "Adds a volume control for the current site, that can also boost the volume beyond the normal range.",
   "homepage_url": "https://github.com/Chaython/volumecontrol",
   "icons": {
-    "96": "ico.svg"
+    "96": "chrome.png"
   },
   "permissions": [
     "storage", 
@@ -15,7 +15,7 @@
     "<all_urls>"
   ],
   "action": {
-    "default_icon": "ico.svg",
+    "default_icon": "chrome.png",
     "default_title": "Volume Control",
     "default_popup": "popup.html"
   },
