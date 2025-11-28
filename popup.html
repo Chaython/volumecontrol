@@ -9,26 +9,48 @@
 </head>
 <body>
   <div id="popup-content">
-    <div class="exclusion-message hidden">This site is in the exclusion list</div>
+    <div class="exclusion-message hidden">
+        Volume Control is disabled for this site.
+    </div>
+    
     <div class="top-controls">
       <input type="range" id="volume-slider" value="0" min="-32" max="32" step="1" aria-label="Volume control">
       <input type="text" id="volume-text" value="0 dB" aria-label="Volume in decibels">
     </div>
+
     <div class="bot-controls"> 
       <div class="left">
-          <label class="switch-container" for="mono-checkbox">
+          <label class="switch-container" for="mono-checkbox" title="Toggle Mono Audio">
               <div class="switch">
                   <input type="checkbox" id="mono-checkbox">
                   <span class="slider"></span>
               </div>
               <span class="label-text">Mono</span>
           </label>
+
+          <label class="switch-container" for="remember-checkbox" title="Remember volume for this site">
+              <div class="switch">
+                  <input type="checkbox" id="remember-checkbox">
+                  <span class="slider"></span>
+              </div>
+              <span class="label-text">Remember</span>
+          </label>
       </div>
+
       <div class="right">
+          <label class="switch-container" for="enable-checkbox" title="Enable/Disable on this site">
+              <div class="switch">
+                  <input type="checkbox" id="enable-checkbox" checked>
+                  <span class="slider"></span>
+              </div>
+              <span class="label-text">Active</span>
+          </label>
+          
           <button id="settings" class="settings" aria-label="Open settings">Settings</button>
       </div>
     </div>
   </div>
+
   <div id="error-content" class="hidden">
     <p></p>
   </div>

@@ -1,13 +1,17 @@
+// cs.js - Volume Control (Fixed checkExclusion)
+const browserAPI = window.browser || window.chrome;
+
 var tc = {
   settings: {
-    logLevel: 0,
+    logLevel: 0, 
     defaultLogLevel: 4,
   },
   vars: {
     dB: 0,
     mono: false,
-    audioCtx: new (window.AudioContext || window.webkitAudioContext)(),
+    audioCtx: undefined, 
     gainNode: undefined,
+    isBlocked: false // New flag to track status
   },
 };
 
@@ -15,231 +19,173 @@ const logTypes = ["ERROR", "WARNING", "INFO", "DEBUG"];
 
 function log(message, level = tc.settings.defaultLogLevel) {
   if (tc.settings.logLevel >= level) {
-    console.log(`${logTypes[level - 2]}: ${message}`);
+    console.log(`[VolumeControl] ${logTypes[level - 2]}: ${message}`);
   }
+}
+
+// --- MESSAGE LISTENER (Global Scope) ---
+// We listen immediately so the popup never thinks we are "Excluded" due to timing issues.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // If the site is legitimately blocked, we ignore requests (triggering lastError in popup)
+    if (tc.vars.isBlocked) return;
+
+    switch (msg.command) {
+        case "checkExclusion":
+            // Just confirm we are alive.
+            sendResponse({ status: "active" });
+            break;
+        case "setVolume":
+            tc.vars.dB = msg.dB;
+            applyState();
+            break;
+        case "getVolume":
+            sendResponse({ response: tc.vars.dB });
+            break;
+        case "setMono":
+            tc.vars.mono = msg.mono;
+            applyState();
+            break;
+        case "getMono":
+            sendResponse({ response: tc.vars.mono });
+            break;
+    }
+    // Return true to indicate we might respond asynchronously (good practice)
+    return true;
+});
+
+// --- CORE VOLUME LOGIC ---
+
+function getGainValue(dB) {
+    if (isNaN(dB)) return 1.0;
+    return Math.pow(10, dB / 20);
+}
+
+function applyState() {
+    if (!tc.vars.gainNode || !tc.vars.audioCtx) return;
+
+    const targetGain = getGainValue(tc.vars.dB);
+    const now = tc.vars.audioCtx.currentTime;
+
+    tc.vars.gainNode.gain.value = targetGain;
+
+    if (tc.vars.audioCtx.state === 'running') {
+        try {
+            tc.vars.gainNode.gain.cancelScheduledValues(now);
+            tc.vars.gainNode.gain.setValueAtTime(targetGain, now);
+        } catch(e) {}
+    }
+
+    if (tc.vars.mono) {
+        tc.vars.gainNode.channelCountMode = "explicit";
+        tc.vars.gainNode.channelCount = 1;
+    } else {
+        tc.vars.gainNode.channelCountMode = "max";
+        tc.vars.gainNode.channelCount = 2;
+    }
+}
+
+function createGainNode() {
+    if (!tc.vars.audioCtx) return;
+
+    if (!tc.vars.gainNode) {
+        tc.vars.gainNode = tc.vars.audioCtx.createGain();
+        tc.vars.gainNode.channelInterpretation = "speakers";
+    }
+    applyState();
 }
 
 function connectOutput(element) {
-  log("Begin connectOutput", 5);
-  log(`Element found ${element.toString()}`, 5);
-  tc.vars.audioCtx.createMediaElementSource(element).connect(tc.vars.gainNode);
-  tc.vars.gainNode.connect(tc.vars.audioCtx.destination);
-  log("End connectOutput", 5);
-}
+    if (element.dataset.vcHooked === "true") return;
 
-function setVolume(dB) {
-  tc.vars.gainNode.gain.value = Math.pow(10, dB / 20);
-}
-
-function enableMono() {
-  tc.vars.mono = true;
-  tc.vars.gainNode.channelCountMode = "explicit";
-  tc.vars.gainNode.channelCount = 1;
-}
-
-function disableMono() {
-  tc.vars.mono = false;
-  tc.vars.gainNode.channelCountMode = "max";
-  tc.vars.gainNode.channelCount = 2;
-}
-
-function init(document) {
-  log("Begin init", 5);
-  if (!document.body || 
-      document.body.classList.contains("volumecontrol-initialized") || 
-      sessionStorage.getItem('volumecontrol-excluded') === 'true') {
-    log("Skipping initialization", 5);
-    return;
-  }
-  if (!tc.vars.audioCtx) {
-    tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  tc.vars.gainNode = tc.vars.audioCtx.createGain();
-  tc.vars.gainNode.channelInterpretation = "speakers";
-  document.querySelectorAll("audio, video").forEach(connectOutput);
-  document.arrive?.("audio, video", function (newElem) {
-    connectOutput(newElem);
-  });
-
-  document.addEventListener("click", function () {
-    if (tc.vars.audioCtx && 
-        tc.vars.audioCtx.state === "suspended" && 
-        sessionStorage.getItem('volumecontrol-excluded') !== 'true') {
-      tc.vars.audioCtx.resume();
-    }
-  });
-
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    switch (message.command) {
-      case "setVolume":
-        tc.vars.dB = message.dB;
-        setVolume(message.dB);
-        break;
-      case "getVolume":
-        sendResponse({ response: tc.vars.dB });
-        break;
-      case "setMono":
-        if (message.mono) {
-          enableMono();
-        } else {
-          disableMono();
-        }
-        break;
-      case "getMono":
-        sendResponse({ response: tc.vars.mono });
-        break;
-    }
-  });
-  document.body.classList.add("volumecontrol-initialized");
-  log("End init", 5);
-}
-
-function initWhenReady(document) {
-  log("Begin initWhenReady", 5);
-  window.onload = () => {
     if (!tc.vars.audioCtx) {
-      tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    init(window.document);
-  };
-  if (document) {
-    if (document.readyState === "complete") {
-      if (!tc.vars.audioCtx) {
         tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      init(document);
-    } else {
-      document.onreadystatechange = () => {
-        if (document.readyState === "complete") {
-          if (!tc.vars.audioCtx) {
-            tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-          }
-          init(document);
-        }
-      };
+        tc.vars.audioCtx.onstatechange = () => {
+            if (tc.vars.audioCtx.state === 'running') applyState();
+        };
     }
-  }
-  log("End initWhenReady", 5);
+    
+    if (!tc.vars.gainNode) createGainNode();
+
+    try {
+        const source = tc.vars.audioCtx.createMediaElementSource(element);
+        source.connect(tc.vars.gainNode);
+        tc.vars.gainNode.connect(tc.vars.audioCtx.destination);
+        
+        element.dataset.vcHooked = "true";
+        applyState(); 
+        log(`Hooked ${element.tagName}`, 5);
+    } catch (e) {
+        // Ignored
+    }
+}
+
+// --- INITIALIZATION ---
+
+function init() {
+    if (document.body.classList.contains("vc-init")) return;
+    
+    document.querySelectorAll("audio, video").forEach(connectOutput);
+
+    new MutationObserver(mutations => {
+        mutations.forEach(m => m.addedNodes.forEach(n => {
+            if (n.nodeType === 1) {
+                if (n.tagName === 'AUDIO' || n.tagName === 'VIDEO') connectOutput(n);
+                else if (n.querySelectorAll) n.querySelectorAll('audio, video').forEach(connectOutput);
+            }
+        }));
+    }).observe(document.body, { childList: true, subtree: true });
+
+    document.addEventListener('click', () => {
+        if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
+            tc.vars.audioCtx.resume().then(applyState);
+        }
+    }, { passive: true });
+
+    document.body.classList.add("vc-init");
 }
 
 function extractRootDomain(url) {
-  let domain = url.replace(/^(https?|ftp):\/\/(www\.)?/, '');
-  domain = domain.split('/')[0];
-  domain = domain.split(':')[0];
-  return domain.toLowerCase();
+    if(!url) return "";
+    let domain = url.replace(/^(https?|ftp):\/\/(www\.)?/, '');
+    domain = domain.split('/')[0].split(':')[0];
+    return domain.toLowerCase();
 }
 
-function isValidURL(urlString) {
-  const urlFqdnRegex = /^((https?|ftp):\/\/)?([a-z0-9-\*\.]+\.[a-z\*]+)(:[0-9\*]{1,5})?(\/.*)?$/i;
-  return urlFqdnRegex.test(urlString);
-}
+// --- ENTRY POINT ---
 
-function initializeFqdnList() {
-  const defaultFqdns = ["shadertoy.com"];
-  browser.storage.local.get({ fqdns: [] }).then(data => {
-    const { fqdns } = data;
-    const updatedFqdns = [...new Set([...fqdns, ...defaultFqdns])];
-    if (updatedFqdns.length > fqdns.length) {
-      browser.storage.local.set({ fqdns: updatedFqdns }).then(() => {
-        log("FQDN list initialized/updated", 5);
-        updateFqdnList();
-      });
-    }
-  });
-}
+function start() {
+    browserAPI.storage.local.get({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {} }, (data) => {
+        const currentDomain = extractRootDomain(window.location.href);
 
-function checkExclusion() {
-  initializeFqdnList();
+        // 1. Check Exclusion/Inclusion Lists
+        let blocked = false;
+        if (data.whitelistMode) {
+            if (!data.whitelist.some(d => currentDomain.includes(d))) blocked = true;
+        } else {
+            if (data.fqdns.some(d => currentDomain.includes(d))) blocked = true;
+        }
 
-  browser.storage.local.get({ fqdns: [] }).then(data => {
-    const currentUrl = new URL(window.location.href);
-    const fqdn = extractRootDomain(currentUrl.href);
+        if (blocked) {
+            tc.vars.isBlocked = true;
+            // We do NOT call init(). The listener up top will see isBlocked=true 
+            // and ignore messages, causing the popup to correctly show "Excluded".
+            return;
+        }
 
-    // Only initialize if not excluded
-    if (!sessionStorage.getItem('volumecontrol-excluded')) {
-      initWhenReady(document);
-    }
-  });
-}
+        // 2. Restore Saved Volume/Mono
+        if (data.siteSettings && data.siteSettings[currentDomain]) {
+            const s = data.siteSettings[currentDomain];
+            if (s.volume !== undefined) tc.vars.dB = parseInt(s.volume);
+            if (s.mono !== undefined) tc.vars.mono = s.mono;
+        }
 
-function isFdqnBlacklisted(fqdn, blacklistedFdqns) {
-  return blacklistedFdqns.some(el => {
-    const elRegexPrep = el.replaceAll('.', '\\.').replaceAll('*', '.+');
-    const elRegex = new RegExp(`^${elRegexPrep}$`, 'i');
-    return elRegex.test(fqdn);
-  });
-}
-
-checkExclusion();
-
-document.getElementById('newFqdn')?.addEventListener('keydown', function (event) {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    addFqdn();
-  }
-});
-
-document.getElementById('addFqdn')?.addEventListener('click', function () {
-  addFqdn();
-});
-
-document.getElementById('fqdnList')?.addEventListener('click', function (e) {
-  if (e.target.classList.contains('remove-entry')) {
-    const entry = e.target.parentNode;
-    const index = entry.dataset.index;
-    removeFqdn(index);
-    entry.remove();
-  }
-});
-
-function addFqdn() {
-  const userInput = document.getElementById('newFqdn').value.trim();
-  if (isValidURL(userInput)) {
-    const rootDomain = extractRootDomain(userInput);
-    browser.storage.local.get({ fqdns: [] }).then(data => {
-      const { fqdns } = data;
-      if (!fqdns.includes(rootDomain)) {
-        fqdns.push(rootDomain);
-        browser.storage.local.set({ fqdns }).then(updateFqdnList);
-      }
-    });
-  } else {
-    alert('Invalid URL or FQDN');
-  }
-  document.getElementById('newFqdn').value = '';
-}
-
-function removeFqdn(index) {
-  browser.storage.local.get({ fqdns: [] })
-    .then(data => {
-      const { fqdns } = data;
-      fqdns.splice(index, 1);
-      return browser.storage.local.set({ fqdns });
-    })
-    .then(() => {
-      updateFqdnList();
-    })
-    .catch(error => {
-      console.error('Error removing FQDN:', error);
+        // 3. Start Extension
+        init();
     });
 }
 
-function updateFqdnList() {
-  browser.storage.local.get({ fqdns: [] }).then(data => {
-    const fqdnList = document.getElementById('fqdnList');
-    fqdnList.innerHTML = '';
-    data.fqdns.forEach((fqdn, index) => {
-      const entry = document.createElement('div');
-      entry.classList.add('fqdn-entry');
-      entry.textContent = fqdn;
-      entry.dataset.index = index;
-      const removeButton = document.createElement('span');
-      removeButton.classList.add('remove-entry');
-      removeButton.textContent = 'x';
-      entry.appendChild(removeButton);
-      fqdnList.appendChild(entry);
-    });
-  });
+if (document.readyState === "loading") {
+    document.addEventListener('DOMContentLoaded', start);
+} else {
+    start();
 }
-
-document.getElementById('newFqdn') && updateFqdnList();
