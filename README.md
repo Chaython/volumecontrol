@@ -13,12 +13,10 @@ Planned features: Added to chrome extension store,
 
 ⚠ Important: To add functionality to more websites, the permission "all_urls" was necessary, however with the recent update to manifest v3, it's optional. If the extension can't access audio on a certain site do the following: Right click the extension, click "manage extension", click the permission tab, allow "Access your data for all websites". This is a necessary permission to access iframes. The extension is open source and fully adheres to this repository. There's no form of analytics in this extension. So don't be afraid of the permissions.
 
+<img width="472" height="182" alt="firefox_sqvsowk1NI" src="https://github.com/user-attachments/assets/7790e01c-ccb5-41c1-b24c-0ac4123b35ab" />
 
-![image](https://github.com/Chaython/volumecontrol/assets/6486343/9265c022-fc42-4b1d-ab46-be7e2f338e4b)
+<img width="472" height="182" alt="firefox_6Jn4rh739p" src="https://github.com/user-attachments/assets/f366b636-ac39-4e23-b929-c6f29b34b8b9" />
 
-
-
-![image](https://github.com/Chaython/volumecontrol/assets/6486343/9d2573f6-70ab-4d14-acbe-7707f702a4f5)
 
 
 Supports HTML5 video and audio only (no Flash).
