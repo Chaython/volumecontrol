@@ -67,6 +67,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (message.type === "exclusion") showError({ type: "exclusion" });
   });
 
+  document.addEventListener('keydown', () => {
+    if (slider && document.activeElement !== slider) {
+      slider.focus();
+    }
+  }, { once: true });
+
   listenForEvents();
 });
 
