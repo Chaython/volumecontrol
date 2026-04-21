@@ -10,7 +10,8 @@ const tc = {
     mono: false,
     audioCtx: undefined,
     gainNode: undefined,
-    isBlocked: false
+    isBlocked: false,
+    mediaElements: new Set()
   }
 };
 
@@ -120,6 +121,9 @@ function connectOutput(element) {
 
     if (!tc.vars.gainNode) createGainNode();
 
+    // Ensure the tracking set exists
+    if (!tc.vars.mediaElements) tc.vars.mediaElements = new Set();
+
     try {
         log(`Attempting hook: ${element.tagName} id=${element.id || ''} src=${element.currentSrc || element.src || ''}`, 4);
         let source = null;
@@ -147,6 +151,40 @@ function connectOutput(element) {
             tc.vars.gainNode.connect(tc.vars.audioCtx.destination);
 
             element.dataset.vcHooked = "true";
+            tc.vars.mediaElements.add(element);
+
+            // Wake up the AudioContext when media starts playing
+            element.addEventListener('play', () => {
+                if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
+                    tc.vars.audioCtx.resume().then(applyState);
+                }
+            });
+
+            // Suspend the AudioContext when media stops to release the Bluetooth lock
+            const checkSuspend = () => {
+                let isPlaying = false;
+                for (const el of tc.vars.mediaElements) {
+                    // Clean up elements that have been removed from the DOM (prevents memory leaks)
+                    if (!el.isConnected) {
+                        tc.vars.mediaElements.delete(el);
+                        continue;
+                    }
+                    if (!el.paused && !el.ended) {
+                        isPlaying = true;
+                        break;
+                    }
+                }
+                
+                if (!isPlaying && tc.vars.audioCtx && tc.vars.audioCtx.state === 'running') {
+                    tc.vars.audioCtx.suspend();
+                }
+            };
+
+            // Attach listeners for any event that stops playback
+            element.addEventListener('pause', checkSuspend);
+            element.addEventListener('ended', checkSuspend);
+            element.addEventListener('emptied', checkSuspend);
+
             // Remove any fallback adjustments we may have made earlier
             if (element.dataset.vcFallback === 'true') {
                 try {
@@ -186,7 +224,7 @@ function connectOutput(element) {
         log(`connectOutput outer failure: ${e && e.message}`, 1);
         if (tc.settings.debugMode) element.style.border = "5px solid red";
     }
-} 
+}
 
 function init() {
     if (document.body.classList.contains("vc-init")) return;
