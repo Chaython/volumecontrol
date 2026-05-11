@@ -27,6 +27,63 @@ function Remove-DirectoryInRepo {
     }
 }
 
+function New-ExtensionZip {
+    param(
+        [string]$SourceDir,
+        [string]$ZipPath
+    )
+
+    $sourceFullPath = Assert-InRepo $SourceDir
+    $zipFullPath = Assert-InRepo $ZipPath
+
+    if (Test-Path -LiteralPath $zipFullPath) {
+        Remove-Item -LiteralPath $zipFullPath -Force
+    }
+
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+    $sourceRoot = [System.IO.Path]::GetFullPath($sourceFullPath).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+
+    $zipStream = [System.IO.File]::Open($zipFullPath, [System.IO.FileMode]::CreateNew)
+    try {
+        $archive = New-Object System.IO.Compression.ZipArchive(
+            $zipStream,
+            [System.IO.Compression.ZipArchiveMode]::Create,
+            $false
+        )
+        try {
+            $files = Get-ChildItem -LiteralPath $sourceRoot -File -Recurse
+            foreach ($file in $files) {
+                $relativePath = $file.FullName.Substring($sourceRoot.Length).TrimStart(
+                    [System.IO.Path]::DirectorySeparatorChar,
+                    [System.IO.Path]::AltDirectorySeparatorChar
+                )
+                $entryName = $relativePath -replace "\\", "/"
+                $entry = $archive.CreateEntry($entryName, [System.IO.Compression.CompressionLevel]::Optimal)
+                $entryStream = $entry.Open()
+                $fileStream = [System.IO.File]::OpenRead($file.FullName)
+                try {
+                    $fileStream.CopyTo($entryStream)
+                }
+                finally {
+                    $fileStream.Dispose()
+                    $entryStream.Dispose()
+                }
+            }
+        }
+        finally {
+            $archive.Dispose()
+        }
+    }
+    finally {
+        $zipStream.Dispose()
+    }
+}
+
 function Update-Arrive {
     $sourceUrl = "https://raw.githubusercontent.com/uzairfarooq/arrive/refs/heads/master/minified/arrive.min.js"
     $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ("volumecontrol-arrive-" + [System.Guid]::NewGuid().ToString("N"))
@@ -126,7 +183,7 @@ function Write-Package {
     Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json | Out-Null
 
     $zipPath = Assert-InRepo (Join-Path $OutputRoot ("volume-control-$Browser-v$Version.zip"))
-    Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $zipPath -Force
+    New-ExtensionZip -SourceDir $packageDir -ZipPath $zipPath
 
     Write-Host "Created $zipPath"
 }

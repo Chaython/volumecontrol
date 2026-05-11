@@ -44,6 +44,15 @@ function extractRootDomain(url) {
     return domain.toLowerCase();
 }
 
+function getSiteSettingsKey(siteSettings, domain) {
+    if (!siteSettings || !domain) return null;
+    if (siteSettings[domain]) return domain;
+
+    return Object.keys(siteSettings)
+        .filter(savedDomain => domain === savedDomain || domain.endsWith(`.${savedDomain}`))
+        .sort((a, b) => b.length - a.length)[0] || null;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const slider = document.getElementById('volume-slider');
   if (slider) {
@@ -115,8 +124,7 @@ function handleTabs(tabs) {
                     const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {} });
                     let isExcluded = false;
                     if (data.whitelistMode) {
-                        const remembered = Object.keys(data.siteSettings || {});
-                        isExcluded = !remembered.includes(domain);
+                        isExcluded = !getSiteSettingsKey(data.siteSettings || {}, domain);
                     } else {
                         isExcluded = data.fqdns.includes(domain);
                     }
@@ -243,7 +251,8 @@ async function saveSiteSettings(tab) {
 
         const data = await storageGet({ siteSettings: {} });
         data.siteSettings = data.siteSettings || {};
-        data.siteSettings[domain] = {
+        const settingsKey = getSiteSettingsKey(data.siteSettings, domain) || domain;
+        data.siteSettings[settingsKey] = {
             volume: parseInt(volumeSlider?.value, 10) || 0,
             mono: Boolean(monoCheckbox?.checked)
         };
@@ -252,12 +261,12 @@ async function saveSiteSettings(tab) {
         // Notify the content script in this tab immediately so volume/mono are applied without waiting
         if (tab && tab.id) {
             try {
-                browserApi.tabs.sendMessage(tab.id, { command: "setVolume", dB: data.siteSettings[domain].volume }, () => {
+                browserApi.tabs.sendMessage(tab.id, { command: "setVolume", dB: data.siteSettings[settingsKey].volume }, () => {
                     if (browserApi.runtime && browserApi.runtime.lastError) {
                         // It's possible the content script hasn't injected into the page yet; ignore harmless errors.
                     }
                 });
-                browserApi.tabs.sendMessage(tab.id, { command: "setMono", mono: Boolean(data.siteSettings[domain].mono) }, () => {
+                browserApi.tabs.sendMessage(tab.id, { command: "setMono", mono: Boolean(data.siteSettings[settingsKey].mono) }, () => {
                     if (browserApi.runtime && browserApi.runtime.lastError) {}
                 });
             } catch (e) {
@@ -303,8 +312,9 @@ async function toggleRemember(tab) {
             await saveSiteSettings(tab);
         } else {
             const data = await storageGet({ siteSettings: {} });
-            if (data.siteSettings && data.siteSettings[domain]) {
-                delete data.siteSettings[domain];
+            const settingsKey = getSiteSettingsKey(data.siteSettings, domain);
+            if (data.siteSettings && settingsKey) {
+                delete data.siteSettings[settingsKey];
                 await storageSet({ siteSettings: data.siteSettings });
             }
         }
@@ -374,11 +384,18 @@ async function initializeControls(tab) {
 
     try {
         const data = await storageGet({ siteSettings: {} });
-        const saved = (data.siteSettings || {})[domain];
+        const settingsKey = getSiteSettingsKey(data.siteSettings || {}, domain);
+        const saved = settingsKey ? data.siteSettings[settingsKey] : null;
         if (saved) {
             if (rememberCheckbox) rememberCheckbox.checked = true;
             if (saved.volume !== undefined) setVolume(saved.volume, null);
             if (saved.mono !== undefined && monoCheckbox) monoCheckbox.checked = saved.mono;
+            browserApi.tabs.sendMessage(tab.id, { command: "setVolume", dB: Number(saved.volume) || 0 }, () => {
+                if (browserApi.runtime.lastError) handleError(browserApi.runtime.lastError);
+            });
+            browserApi.tabs.sendMessage(tab.id, { command: "setMono", mono: Boolean(saved.mono) }, () => {
+                if (browserApi.runtime.lastError) handleError(browserApi.runtime.lastError);
+            });
         } else {
             browserApi.tabs.sendMessage(tab.id, { command: "getVolume" }, (response) => {
                 if (!browserApi.runtime.lastError && response && response.response !== undefined) {

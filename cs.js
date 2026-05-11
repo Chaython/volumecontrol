@@ -217,6 +217,7 @@ function connectOutput(element) {
             }
 
             applyState();
+            checkSuspend();
 
             if (tc.settings.debugMode) element.style.border = "2px solid #00ff00";
             else element.style.border = "";
@@ -272,10 +273,6 @@ function init() {
         }
     }).observe(document.body, { childList: true, subtree: true });
 
-    document.addEventListener('click', () => {
-        if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') tc.vars.audioCtx.resume().then(applyState);
-    }, { passive: true });
-
     document.body.classList.add("vc-init");
     return true;
 } 
@@ -308,6 +305,15 @@ function extractRootDomain(url) {
     return domain.toLowerCase();
 } 
 
+function getSiteSettingsKey(siteSettings, domain) {
+    if (!siteSettings || !domain) return null;
+    if (siteSettings[domain]) return domain;
+
+    return Object.keys(siteSettings)
+        .filter(savedDomain => domain === savedDomain || domain.endsWith(`.${savedDomain}`))
+        .sort((a, b) => b.length - a.length)[0] || null;
+}
+
 function start() {
     if (!browserAPI) return;
 
@@ -328,7 +334,7 @@ function start() {
             // Whitelist is derived from remembered sites (siteSettings)
             const remembered = Object.keys(data.siteSettings || {});
             if (tc.settings.debugMode) log(`start(): remembered samples=[${remembered.slice(0,5).join(',')}]`, 4);
-            if (!remembered.some(d => currentDomain.includes(d))) blocked = true;
+            if (!getSiteSettingsKey(data.siteSettings || {}, currentDomain)) blocked = true;
         } else {
             if (data.fqdns.some(d => currentDomain.includes(d))) blocked = true;
         }
@@ -343,8 +349,9 @@ function start() {
             return;
         }
 
-        if (data.siteSettings && data.siteSettings[currentDomain]) {
-            const s = data.siteSettings[currentDomain];
+        const siteSettingsKey = getSiteSettingsKey(data.siteSettings, currentDomain);
+        if (siteSettingsKey) {
+            const s = data.siteSettings[siteSettingsKey];
             if (s.volume !== undefined) tc.vars.dB = parseInt(s.volume, 10) || 0;
             if (s.mono !== undefined) tc.vars.mono = s.mono;
         }
@@ -373,17 +380,17 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
             const currentDomain = extractRootDomain(window.location.href);
             browserAPI.storage.local.get({ siteSettings: {} }, (data) => {
                 if (browserAPI.runtime && browserAPI.runtime.lastError) return;
-                if (data.siteSettings && data.siteSettings[currentDomain]) {
-                    const s = data.siteSettings[currentDomain];
+                const siteSettingsKey = getSiteSettingsKey(data.siteSettings, currentDomain);
+                if (siteSettingsKey) {
+                    const s = data.siteSettings[siteSettingsKey];
                     if (s.volume !== undefined) tc.vars.dB = parseInt(s.volume, 10) || 0;
                     if (s.mono !== undefined) tc.vars.mono = s.mono;
-                    if (tc.settings.debugMode) log(`siteSettings updated for ${currentDomain}: dB=${tc.vars.dB}, mono=${tc.vars.mono}`, 4);
+                    if (tc.settings.debugMode) log(`siteSettings updated for ${currentDomain} via ${siteSettingsKey}: dB=${tc.vars.dB}, mono=${tc.vars.mono}`, 4);
                     applyState();
                     // Ensure audio nodes exist for any existing media elements
                     try {
                         init();
                         for (const el of document.querySelectorAll('audio, video')) connectOutput(el);
-                        if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') tc.vars.audioCtx.resume().then(applyState);
                     } catch (e) {
                         if (tc.settings.debugMode) log(`re-hook after siteSettings failed: ${e.message}`, 3);
                     }

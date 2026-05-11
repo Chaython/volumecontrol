@@ -12,8 +12,11 @@ Newest update: Added Storage options, allowing the user to blacklist the extensi
 
 - Added Manifest V3 page-world audio integration for stricter CSP sites and app-style audio.
 - Improved detection for dynamically created audio/video and detached `Audio` elements.
+- Reduced Bluetooth idle popping by avoiding generic page-interaction AudioContext resumes.
+- Improved remembered site settings on app-style pages and subdomains.
 - Added automated Firefox and Chrome package builds with separate SVG/PNG manifest icons.
 - Build script now checks upstream `arrive.min.js` before every package build.
+- Build zips now use AMO-compatible forward-slash archive paths.
 - Updated project license notice to include Chaython Meredith.
 
 Planned features: Added to chrome extension store,

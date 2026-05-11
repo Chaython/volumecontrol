@@ -92,9 +92,32 @@
         }
     }
 
-    function resumeManagedContexts() {
-        resumeContext(mediaAudioContext);
-        for (const context of Array.from(contexts)) resumeContext(context);
+    function isMediaPlaying(element) {
+        return Boolean(element && !element.paused && !element.ended);
+    }
+
+    function isAudibleMediaElement(element) {
+        if (!isMediaElement(element)) return false;
+        if (element.muted) return false;
+        return getMediaState(element).baseVolume > 0;
+    }
+
+    function suspendMediaContextIfIdle() {
+        if (!mediaAudioContext || mediaAudioContext.state !== "running") return;
+
+        for (const element of Array.from(mediaElements)) {
+            if (mediaRoutes.has(element) && isMediaPlaying(element) && isAudibleMediaElement(element)) {
+                return;
+            }
+        }
+
+        try {
+            if (typeof mediaAudioContext.suspend === "function") {
+                mediaAudioContext.suspend();
+            }
+        } catch (e) {
+            log(`media context suspend failed: ${e && e.message}`);
+        }
     }
 
     function setGainValue(graph) {
@@ -274,7 +297,7 @@
     }
 
     function ensureMediaRoute(element) {
-        if (!mediaNeedsAudioRoute()) return null;
+        if (!mediaNeedsAudioRoute() || !isAudibleMediaElement(element)) return null;
         if (mediaRoutes.has(element)) return mediaRoutes.get(element);
 
         const context = getMediaContext();
@@ -304,12 +327,17 @@
         }
     }
 
-    function applyMediaElementState(element) {
+    function applyMediaElementState(element, options = {}) {
         if (!isMediaElement(element)) return;
 
         const entry = getMediaState(element);
         const gain = state.enabled ? getGainValue(state.dB) : 1.0;
-        const route = mediaRoutes.get(element) || ensureMediaRoute(element);
+        const shouldUseRoute = Boolean(
+            mediaRoutes.has(element) ||
+            options.forceRoute ||
+            isMediaPlaying(element)
+        );
+        const route = shouldUseRoute ? (mediaRoutes.get(element) || ensureMediaRoute(element)) : null;
 
         if (route) {
             setNativeVolume(element, entry.baseVolume);
@@ -327,19 +355,31 @@
         }
     }
 
-    function registerMediaElement(element) {
+    function registerMediaElement(element, options = {}) {
         if (!isMediaElement(element)) return element;
 
         mediaElements.add(element);
         const entry = getMediaState(element);
         if (!entry.listenersInstalled && typeof element.addEventListener === "function") {
-            const release = () => mediaElements.delete(element);
+            const applyOnPlay = () => {
+                applyMediaElementState(element, { forceRoute: true });
+                resumeContext(mediaAudioContext);
+            };
+            const suspendWhenIdle = () => setTimeout(suspendMediaContextIfIdle, 250);
+            const release = () => {
+                mediaElements.delete(element);
+                suspendWhenIdle();
+            };
+
+            element.addEventListener("play", applyOnPlay, { passive: true });
+            element.addEventListener("playing", applyOnPlay, { passive: true });
+            element.addEventListener("pause", suspendWhenIdle, { passive: true });
             element.addEventListener("ended", release, { passive: true });
             element.addEventListener("emptied", release, { passive: true });
             element.addEventListener("error", release, { passive: true });
             entry.listenersInstalled = true;
         }
-        applyMediaElementState(element);
+        applyMediaElementState(element, options);
         return element;
     }
 
@@ -432,8 +472,8 @@
         if (window.HTMLMediaElement.prototype.__volumeControlPlayPatched) return;
 
         window.HTMLMediaElement.prototype.play = function patchedPlay() {
-            registerMediaElement(this);
-            resumeManagedContexts();
+            registerMediaElement(this, { forceRoute: true });
+            resumeContext(mediaAudioContext);
             return nativePlay.apply(this, arguments);
         };
 
@@ -517,13 +557,6 @@
         }
     }
 
-    function installGestureResumers() {
-        const resume = () => resumeManagedContexts();
-        for (const eventName of ["click", "pointerdown", "keydown", "touchstart"]) {
-            window.addEventListener(eventName, resume, { passive: true, capture: true });
-        }
-    }
-
     function handleBridgeMessage(event) {
         if (event.source !== window) return;
 
@@ -556,7 +589,6 @@
     patchMediaPlayback();
     patchAudioConstructor();
     patchElementCreation();
-    installGestureResumers();
 
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", () => {
