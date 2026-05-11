@@ -8,6 +8,14 @@
 ***
 Newest update: Added Storage options, allowing the user to blacklist the extension from running on sites where the extension breaks functionality.
 
+## Version 6 Patch Notes
+
+- Added Manifest V3 page-world audio integration for stricter CSP sites and app-style audio.
+- Improved detection for dynamically created audio/video and detached `Audio` elements.
+- Added automated Firefox and Chrome package builds with separate SVG/PNG manifest icons.
+- Build script now checks upstream `arrive.min.js` before every package build.
+- Updated project license notice to include Chaython Meredith.
+
 Planned features: Added to chrome extension store,
 
 
@@ -27,3 +35,15 @@ Supports HTML5 video and audio only (no Flash).
 Other Useful Extensions: 
 https://github.com/Chaython/TogglePIP (Allow a site to run PIP consistently with an [Left Alt]+[P] toggle.)
 https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colors, search providers....)
+
+***
+
+## Build packages
+
+Create Firefox and Chrome zip packages:
+
+```powershell
+.\scripts\build.ps1
+```
+
+The script checks `lib/arrive.min.js` against upstream GitHub on every run, then writes clean packages to `dist/`, using `ico.svg` for Firefox and `chrome.png` for Chrome. The bundled zips exclude repo files and `README.md`.
