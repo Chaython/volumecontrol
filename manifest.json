@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Volume Control",
-  "version": "5.2",
+  "version": "6",
   "description": "Adds a volume control for the current site, that can also boost the volume beyond the normal range.",
   "homepage_url": "https://github.com/Chaython/volumecontrol",
   "icons": {
     "96": "ico.svg"
   },
   "permissions": [
-    "storage", 
+    "storage",
     "activeTab"
   ],
   "host_permissions": [
@@ -21,11 +21,34 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*", "file:///*"],
-      "js": ["lib/arrive.min.js", "cs.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file:///*"
+      ],
+      "js": [
+        "page-audio-hook.js"
+      ],
       "run_at": "document_start",
       "all_frames": true,
-      "match_about_blank": true
+      "match_about_blank": true,
+      "match_origin_as_fallback": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file:///*"
+      ],
+      "js": [
+        "lib/arrive.min.js",
+        "cs.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
     }
   ],
   "options_ui": {
@@ -41,9 +64,11 @@
     "gecko": {
       "id": "{57e8684d-5ae8-47d6-93c9-f870ef0e40a3}",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       },
-      "strict_min_version": "109.0"
+      "strict_min_version": "128.0"
     }
   }
 }

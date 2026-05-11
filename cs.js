@@ -1,4 +1,6 @@
 const browserAPI = (typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null));
+const PAGE_BRIDGE_SOURCE = "volume-control-extension";
+const PAGE_BRIDGE_TARGET = "volume-control-page-audio";
 
 const tc = {
   settings: {
@@ -11,6 +13,7 @@ const tc = {
     audioCtx: undefined,
     gainNode: undefined,
     isBlocked: false,
+    pendingInit: false,
     mediaElements: new Set()
   }
 };
@@ -54,10 +57,29 @@ function getGainValue(dB) {
     return Math.pow(10, n / 20);
 }
 
+function syncPageAudioHook() {
+    try {
+        window.postMessage({
+            source: PAGE_BRIDGE_SOURCE,
+            target: PAGE_BRIDGE_TARGET,
+            command: "setState",
+            enabled: !tc.vars.isBlocked,
+            dB: tc.vars.isBlocked ? 0 : tc.vars.dB,
+            mono: !tc.vars.isBlocked && tc.vars.mono,
+            debugMode: tc.settings.debugMode
+        }, "*");
+    } catch (e) {
+        if (tc.settings.debugMode) log(`page audio sync failed: ${e.message}`, 3);
+    }
+}
+
 function applyState() {
+    syncPageAudioHook();
+
     const audioCtx = tc.vars.audioCtx;
     const gainNode = tc.vars.gainNode;
-    const targetGain = getGainValue(tc.vars.dB);
+    const isEnabled = !tc.vars.isBlocked;
+    const targetGain = isEnabled ? getGainValue(tc.vars.dB) : 1.0;
 
     if (gainNode && audioCtx) {
         const now = audioCtx.currentTime;
@@ -72,7 +94,7 @@ function applyState() {
             }
         }
 
-        if (tc.vars.mono) {
+        if (isEnabled && tc.vars.mono) {
             gainNode.channelCountMode = "explicit";
             gainNode.channelCount = 1;
         } else {
@@ -227,7 +249,8 @@ function connectOutput(element) {
 }
 
 function init() {
-    if (document.body.classList.contains("vc-init")) return;
+    if (!document.body) return false;
+    if (document.body.classList.contains("vc-init")) return true;
 
     for (const el of document.querySelectorAll("audio, video")) connectOutput(el);
 
@@ -254,7 +277,29 @@ function init() {
     }, { passive: true });
 
     document.body.classList.add("vc-init");
+    return true;
 } 
+
+function initWhenReady() {
+    if (document.body) {
+        init();
+        try {
+            for (const el of document.querySelectorAll('audio, video')) {
+                connectOutput(el);
+            }
+        } catch (e) {
+            if (tc.settings.debugMode) log(`re-hook existing elements failed: ${e.message}`, 3);
+        }
+        return;
+    }
+
+    if (tc.vars.pendingInit) return;
+    tc.vars.pendingInit = true;
+    document.addEventListener('DOMContentLoaded', () => {
+        tc.vars.pendingInit = false;
+        initWhenReady();
+    }, { once: true });
+}
 
 function extractRootDomain(url) {
     if (!url) return "";
@@ -294,6 +339,7 @@ function start() {
         // Ensure the content script's blocked flag reflects the current state (clear it when unblocked)
         tc.vars.isBlocked = blocked;
         if (blocked) {
+            applyState();
             return;
         }
 
@@ -303,25 +349,12 @@ function start() {
             if (s.mono !== undefined) tc.vars.mono = s.mono;
         }
 
-        init();
-
-        // Also attempt to (re)hook any existing media elements immediately. This helps when a page
-        // was previously blocked and is now allowed — ensure a gain node/source gets created.
-        try {
-            for (const el of document.querySelectorAll('audio, video')) {
-                connectOutput(el);
-            }
-        } catch (e) {
-            if (tc.settings.debugMode) log(`re-hook existing elements failed: ${e.message}`, 3);
-        }
+        applyState();
+        initWhenReady();
     });
 }
 
-if (document.readyState === "loading") {
-    document.addEventListener('DOMContentLoaded', start);
-} else {
-    start();
-}
+start();
 
 // Keep content script state in sync when settings change in the extension UI
 if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
@@ -363,6 +396,7 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
         // Update debug mode live
         if (changes.debugMode) {
             tc.settings.debugMode = !!changes.debugMode.newValue;
+            syncPageAudioHook();
         }
     });
 } 
