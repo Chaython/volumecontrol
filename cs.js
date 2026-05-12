@@ -57,6 +57,52 @@ function getGainValue(dB) {
     return Math.pow(10, n / 20);
 }
 
+function getMediaSourceUrl(element) {
+    const directSrc = element.currentSrc || element.src;
+    if (directSrc) return directSrc;
+
+    try {
+        const source = element.querySelector && element.querySelector("source[src]");
+        return source ? source.src : "";
+    } catch (e) {
+        return "";
+    }
+}
+
+function isLikelyCrossOriginMedia(element) {
+    const src = getMediaSourceUrl(element);
+    if (!src || element.crossOrigin) return false;
+
+    try {
+        const url = new URL(src, document.baseURI);
+        return url.protocol.indexOf("http") === 0 && url.origin !== window.location.origin;
+    } catch (e) {
+        return false;
+    }
+}
+
+function applyFallbackVolume(element) {
+    const gain = getGainValue(tc.vars.dB);
+
+    if (element.dataset.vcFallback !== 'true') {
+        try {
+            element.__vc_originalVolume = gain > 1 ? 1 : element.volume;
+        } catch (e) {}
+        element.dataset.vcFallback = 'true';
+    }
+
+    try {
+        const baseVolume = element.__vc_originalVolume !== undefined
+            ? element.__vc_originalVolume
+            : (gain > 1 ? 1 : element.volume);
+        const newVol = Math.min(1, Math.max(0, baseVolume * Math.min(gain, 1)));
+        element.volume = newVol;
+        if (tc.settings.debugMode) element.style.border = "2px dashed #ffa500";
+    } catch (e) {
+        log(`Fallback volume set failed: ${e && e.message}`, 2);
+    }
+}
+
 function syncPageAudioHook() {
     try {
         window.postMessage({
@@ -107,13 +153,7 @@ function applyState() {
     try {
         for (const el of document.querySelectorAll('audio, video')) {
             if (el.dataset.vcFallback === 'true') {
-                try {
-                    const gain = targetGain;
-                    const newVol = Math.min(1, Math.max(0, gain));
-                    el.volume = newVol;
-                } catch (e) {
-                    if (tc.settings.debugMode) log(`applyState fallback update failed: ${e.message}`, 3);
-                }
+                applyFallbackVolume(el);
             }
         }
     } catch (e) {
@@ -131,8 +171,48 @@ function createGainNode() {
     applyState();
 }
 
+function isMediaPlaying(element) {
+    return Boolean(element && !element.paused && !element.ended);
+}
+
+function isAudibleMediaElement(element) {
+    try {
+        return Boolean(element && !element.muted && element.volume > 0);
+    } catch (e) {
+        return true;
+    }
+}
+
+function registerMediaElement(element) {
+    if (!element || element.dataset.vcWatched === "true" || element.dataset.vcHooked === "true") return;
+
+    element.dataset.vcWatched = "true";
+
+    const hookIfPlaying = () => {
+        if (!tc.vars.isBlocked && isMediaPlaying(element) && isAudibleMediaElement(element)) {
+            connectOutput(element);
+        }
+    };
+
+    element.addEventListener('play', hookIfPlaying, { passive: true });
+    element.addEventListener('playing', hookIfPlaying, { passive: true });
+    element.addEventListener('volumechange', hookIfPlaying, { passive: true });
+
+    hookIfPlaying();
+}
+
 function connectOutput(element) {
     if (element.dataset.vcHooked === "true") return;
+    if (!isMediaPlaying(element) || !isAudibleMediaElement(element)) {
+        registerMediaElement(element);
+        return;
+    }
+
+    if (isLikelyCrossOriginMedia(element)) {
+        applyFallbackVolume(element);
+        log(`Skipped WebAudio hook for cross-origin media: ${getMediaSourceUrl(element)}`, 3);
+        return;
+    }
 
     if (!tc.vars.audioCtx) {
         tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -224,22 +304,7 @@ function connectOutput(element) {
             log("Hook Success!", 4);
         } else {
             // Fallback: if we can't create an audio node, adjust element.volume directly so user notices changes
-            if (element.dataset.vcFallback !== 'true') {
-                try {
-                    element.__vc_originalVolume = element.volume;
-                } catch (e) {}
-                element.dataset.vcFallback = 'true';
-            }
-            // Apply current state to fallback element
-            try {
-                const gain = getGainValue(tc.vars.dB);
-                // map gain to 0..1 for element.volume (best-effort)
-                const newVol = Math.min(1, Math.max(0, gain));
-                element.volume = newVol;
-                if (tc.settings.debugMode) element.style.border = "2px dashed #ffa500";
-            } catch (e) {
-                log(`Fallback volume set failed: ${e && e.message}`, 2);
-            }
+            applyFallbackVolume(element);
             log("Hook fallback applied (element.volume scaled)", 3);
         }
 
@@ -253,19 +318,19 @@ function init() {
     if (!document.body) return false;
     if (document.body.classList.contains("vc-init")) return true;
 
-    for (const el of document.querySelectorAll("audio, video")) connectOutput(el);
+    for (const el of document.querySelectorAll("audio, video")) registerMediaElement(el);
 
     new MutationObserver(mutations => {
         for (const m of mutations) {
             for (const n of m.addedNodes) {
                 if (n.nodeType === 1) {
-                    if (n.tagName === 'AUDIO' || n.tagName === 'VIDEO') connectOutput(n);
-                    else if (n.querySelectorAll) for (const el of n.querySelectorAll('audio, video')) connectOutput(el);
+                    if (n.tagName === 'AUDIO' || n.tagName === 'VIDEO') registerMediaElement(n);
+                    else if (n.querySelectorAll) for (const el of n.querySelectorAll('audio, video')) registerMediaElement(el);
 
                     // Also check for media elements inside shadow roots (YouTube may use shadow DOM-ish patterns)
                     try {
                         if (n.shadowRoot && n.shadowRoot.querySelectorAll) {
-                            for (const el of n.shadowRoot.querySelectorAll('audio, video')) connectOutput(el);
+                            for (const el of n.shadowRoot.querySelectorAll('audio, video')) registerMediaElement(el);
                         }
                     } catch (e) {}
                 }
@@ -282,7 +347,7 @@ function initWhenReady() {
         init();
         try {
             for (const el of document.querySelectorAll('audio, video')) {
-                connectOutput(el);
+                registerMediaElement(el);
             }
         } catch (e) {
             if (tc.settings.debugMode) log(`re-hook existing elements failed: ${e.message}`, 3);
@@ -390,7 +455,7 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
                     // Ensure audio nodes exist for any existing media elements
                     try {
                         init();
-                        for (const el of document.querySelectorAll('audio, video')) connectOutput(el);
+                        for (const el of document.querySelectorAll('audio, video')) registerMediaElement(el);
                     } catch (e) {
                         if (tc.settings.debugMode) log(`re-hook after siteSettings failed: ${e.message}`, 3);
                     }

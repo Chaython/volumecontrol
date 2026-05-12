@@ -15,6 +15,8 @@
     const graphs = new WeakMap();
     const contexts = new Set();
     const vcNodes = new WeakSet();
+    const destinationConnections = new Set();
+    const howlerRoutes = new WeakMap();
     const mediaElements = new Set();
     const mediaState = new WeakMap();
     const mediaRoutes = new WeakMap();
@@ -80,6 +82,59 @@
         if (outputIndex === undefined) return nativeConnect.call(source, destination);
         if (inputIndex === undefined) return nativeConnect.call(source, destination, outputIndex);
         return nativeConnect.call(source, destination, outputIndex, inputIndex);
+    }
+
+    function disconnectNative(source, destination, outputIndex, inputIndex) {
+        if (!nativeDisconnect) return;
+        if (destination === undefined) return nativeDisconnect.call(source);
+        if (outputIndex === undefined) return nativeDisconnect.call(source, destination);
+        if (inputIndex === undefined) return nativeDisconnect.call(source, destination, outputIndex);
+        return nativeDisconnect.call(source, destination, outputIndex, inputIndex);
+    }
+
+    function findDestinationConnection(source, destination, outputIndex, inputIndex) {
+        for (const entry of destinationConnections) {
+            if (
+                entry.source === source &&
+                entry.destination === destination &&
+                entry.outputIndex === outputIndex &&
+                entry.inputIndex === inputIndex
+            ) {
+                return entry;
+            }
+        }
+        return null;
+    }
+
+    function trackDestinationConnection(source, destination, outputIndex, inputIndex, routed) {
+        const existing = findDestinationConnection(source, destination, outputIndex, inputIndex);
+        if (existing) {
+            existing.routed = routed;
+            return existing;
+        }
+
+        const entry = {
+            source,
+            destination,
+            context: source.context || destination.context,
+            outputIndex,
+            inputIndex,
+            routed
+        };
+        destinationConnections.add(entry);
+        return entry;
+    }
+
+    function removeDestinationConnection(source, destination, outputIndex, inputIndex) {
+        const entry = findDestinationConnection(source, destination, outputIndex, inputIndex);
+        if (entry) destinationConnections.delete(entry);
+        return entry;
+    }
+
+    function removeDestinationConnectionsForSource(source) {
+        for (const entry of Array.from(destinationConnections)) {
+            if (entry.source === source) destinationConnections.delete(entry);
+        }
     }
 
     function resumeContext(context) {
@@ -215,6 +270,89 @@
         }
     }
 
+    function getMediaCaptureStream(element) {
+        const capture = element.captureStream || element.mozCaptureStream || element.mozCaptureStreamUntilEnded;
+        if (typeof capture !== "function") return null;
+
+        try {
+            const stream = capture.call(element);
+            if (!stream || typeof stream.getAudioTracks !== "function") return null;
+            if (!stream.getAudioTracks().length) return null;
+            return stream;
+        } catch (e) {
+            log(`media captureStream failed: ${e && e.message}`);
+            return null;
+        }
+    }
+
+    function getMediaSourceUrl(element) {
+        const directSrc = element.currentSrc || element.src;
+        if (directSrc) return directSrc;
+
+        try {
+            const source = element.querySelector && element.querySelector("source[src]");
+            return source ? source.src : "";
+        } catch (e) {
+            return "";
+        }
+    }
+
+    function canUseCaptureStreamRoute(context) {
+        if (getGainValue(state.dB) <= 1 || typeof context.createMediaStreamSource !== "function") {
+            return false;
+        }
+        return true;
+    }
+
+    function isLikelyCrossOriginMedia(element) {
+        const src = getMediaSourceUrl(element);
+        if (!src || element.crossOrigin) return false;
+
+        try {
+            const url = new URL(src, document.baseURI);
+            return url.protocol.indexOf("http") === 0 && url.origin !== window.location.origin;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function createCaptureStreamRouteSource(context, element) {
+        if (!canUseCaptureStreamRoute(context)) return null;
+        const stream = getMediaCaptureStream(element);
+        if (!stream) return null;
+
+        try {
+            return {
+                source: markNode(context.createMediaStreamSource(stream)),
+                kind: "captureStream",
+                stream
+            };
+        } catch (e) {
+            log(`createMediaStreamSource failed: ${e && e.message}`);
+            return null;
+        }
+    }
+
+    function createMediaRouteSource(context, element) {
+        if (isLikelyCrossOriginMedia(element)) {
+            const captureSource = createCaptureStreamRouteSource(context, element);
+            if (captureSource) return captureSource;
+            log(`skipping MediaElementAudioSource for cross-origin media: ${getMediaSourceUrl(element)}`);
+            return null;
+        }
+
+        try {
+            return {
+                source: markNode(context.createMediaElementSource(element)),
+                kind: "mediaElement"
+            };
+        } catch (e) {
+            log(`createMediaElementSource failed: ${e && e.message}`);
+        }
+
+        return createCaptureStreamRouteSource(context, element);
+    }
+
     function readNativeVolume(element) {
         try {
             if (nativeVolumeDescriptor && nativeVolumeDescriptor.get) {
@@ -257,8 +395,77 @@
         return state.enabled && (state.mono || getGainValue(state.dB) > 1);
     }
 
+    function pageAudioNeedsRoute() {
+        return state.enabled && (state.mono || Number(state.dB) !== 0);
+    }
+
+    function routeRecordedDestinationConnections() {
+        if (!pageAudioNeedsRoute()) return;
+
+        for (const entry of Array.from(destinationConnections)) {
+            if (entry.routed || !entry.source || !entry.destination) continue;
+
+            const graph = ensureGraph(entry.context);
+            if (!graph) continue;
+
+            try {
+                disconnectNative(entry.source, entry.destination, entry.outputIndex, entry.inputIndex);
+            } catch (e) {
+                log(`native destination disconnect failed: ${e && e.message}`);
+            }
+
+            try {
+                connectNative(entry.source, graph.gain, entry.outputIndex, 0);
+                entry.routed = true;
+            } catch (e) {
+                log(`recorded destination route failed: ${e && e.message}`);
+            }
+        }
+    }
+
+    function routeHowlerGlobal() {
+        if (!pageAudioNeedsRoute()) return;
+
+        const howler = window.Howler;
+        if (!howler || !howler.ctx || !howler.masterGain) return;
+
+        const masterGain = howler.masterGain;
+        if (howlerRoutes.has(masterGain)) return;
+
+        const existingRoute = findDestinationConnection(masterGain, howler.ctx.destination, undefined, undefined);
+        if (existingRoute && existingRoute.routed) {
+            howlerRoutes.set(masterGain, { context: howler.ctx, graph: graphs.get(howler.ctx) });
+            return;
+        }
+
+        const graph = ensureGraph(howler.ctx);
+        if (!graph) return;
+
+        try {
+            disconnectNative(masterGain, howler.ctx.destination);
+        } catch (e) {
+            log(`Howler master disconnect failed: ${e && e.message}`);
+        }
+
+        try {
+            connectNative(masterGain, graph.gain);
+            howlerRoutes.set(masterGain, { context: howler.ctx, graph });
+            trackDestinationConnection(masterGain, howler.ctx.destination, undefined, undefined, true);
+            log("Howler master gain routed");
+        } catch (e) {
+            log(`Howler master route failed: ${e && e.message}`);
+        }
+    }
+
+    function routeKnownAudioLibraries() {
+        routeHowlerGlobal();
+    }
+
     function wireMediaRoute(route) {
-        const targetGain = state.enabled ? getGainValue(state.dB) : 1.0;
+        const requestedGain = state.enabled ? getGainValue(state.dB) : 1.0;
+        const targetGain = route.sourceKind === "captureStream"
+            ? Math.max(0, requestedGain - 1)
+            : requestedGain;
 
         try {
             const now = route.context.currentTime;
@@ -276,6 +483,10 @@
         safeDisconnect(route.leftGain);
         safeDisconnect(route.rightGain);
         safeDisconnect(route.merger);
+
+        if (route.sourceKind === "captureStream" && targetGain <= 0) {
+            return;
+        }
 
         try {
             if (state.enabled && state.mono) {
@@ -304,7 +515,10 @@
         if (!context) return null;
 
         try {
-            const source = markNode(context.createMediaElementSource(element));
+            const routeSource = createMediaRouteSource(context, element);
+            if (!routeSource) return null;
+
+            const source = routeSource.source;
             const gain = markNode(context.createGain());
             const splitter = markNode(context.createChannelSplitter(2));
             const leftGain = markNode(context.createGain());
@@ -316,10 +530,20 @@
             rightGain.gain.value = 0.5;
             connectNative(source, gain);
 
-            const route = { context, source, gain, splitter, leftGain, rightGain, merger };
+            const route = {
+                context,
+                source,
+                gain,
+                splitter,
+                leftGain,
+                rightGain,
+                merger,
+                sourceKind: routeSource.kind,
+                stream: routeSource.stream || null
+            };
             mediaRoutes.set(element, route);
             wireMediaRoute(route);
-            log(`media route attached: ${element.currentSrc || element.src || element.tagName}`);
+            log(`media route attached (${route.sourceKind}): ${element.currentSrc || element.src || element.tagName}`);
             return route;
         } catch (e) {
             log(`media route failed: ${e && e.message}`);
@@ -340,8 +564,14 @@
         const route = shouldUseRoute ? (mediaRoutes.get(element) || ensureMediaRoute(element)) : null;
 
         if (route) {
-            setNativeVolume(element, entry.baseVolume);
+            const nativeVolume = route.sourceKind === "captureStream" && gain <= 1
+                ? Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)))
+                : entry.baseVolume;
+            setNativeVolume(element, nativeVolume);
             wireMediaRoute(route);
+            if (isMediaPlaying(element) && isAudibleMediaElement(element)) {
+                resumeContext(route.context);
+            }
             return;
         }
 
@@ -399,11 +629,15 @@
 
         AudioNodePrototype.connect = function patchedConnect(destination, outputIndex, inputIndex) {
             if (isContextDestination(destination) && !vcNodes.has(this)) {
-                const graph = ensureGraph(this.context || destination.context);
+                const context = this.context || destination.context;
+                const graph = (graphs.has(context) || pageAudioNeedsRoute()) ? ensureGraph(context) : null;
                 if (graph) {
+                    trackDestinationConnection(this, destination, outputIndex, inputIndex, true);
                     connectNative(this, graph.gain, outputIndex, 0);
                     return destination;
                 }
+
+                trackDestinationConnection(this, destination, outputIndex, inputIndex, false);
             }
 
             return nativeConnect.apply(this, arguments);
@@ -411,12 +645,16 @@
 
         if (nativeDisconnect) {
             AudioNodePrototype.disconnect = function patchedDisconnect(destination) {
+                if (arguments.length === 0 && !vcNodes.has(this)) {
+                    removeDestinationConnectionsForSource(this);
+                    return nativeDisconnect.apply(this, arguments);
+                }
+
                 if (isContextDestination(destination) && !vcNodes.has(this)) {
-                    const graph = graphs.get(this.context || destination.context);
-                    if (graph) {
-                        const args = Array.prototype.slice.call(arguments);
-                        args[0] = graph.gain;
-                        return nativeDisconnect.apply(this, args);
+                    const entry = removeDestinationConnection(this, destination, arguments[1], arguments[2]);
+                    if (entry && entry.routed) {
+                        const graph = graphs.get(entry.context);
+                        if (graph) return disconnectNative(this, graph.gain, entry.outputIndex, 0);
                     }
                 }
 
@@ -569,6 +807,8 @@
         state.mono = Boolean(data.mono);
         state.debugMode = Boolean(data.debugMode);
 
+        routeRecordedDestinationConnections();
+        routeKnownAudioLibraries();
         applyStateToGraphs();
         applyStateToMediaElements();
     }
@@ -589,6 +829,8 @@
     patchMediaPlayback();
     patchAudioConstructor();
     patchElementCreation();
+
+    setInterval(routeKnownAudioLibraries, 1000);
 
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", () => {

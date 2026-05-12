@@ -12,8 +12,11 @@ Newest update: Added Storage options, allowing the user to blacklist the extensi
 
 - Added Manifest V3 page-world audio integration for stricter CSP sites and app-style audio.
 - Improved detection for dynamically created audio/video and detached `Audio` elements.
-- Reduced Bluetooth idle popping by avoiding generic page-interaction AudioContext resumes.
+- Reduced Bluetooth idle popping by avoiding generic page-interaction resumes and lazy-loading audio hooks.
 - Improved remembered site settings on app-style pages and subdomains.
+- Restored boosting for app pages that create WebAudio connections before volume is adjusted.
+- Added a direct Howler master-gain route for sites that hide their audio graph internals.
+- Added a cross-origin media guard/fallback for app audio clips so boosted CDN audio keeps playing when browsers block routed gain.
 - Added automated Firefox and Chrome package builds with separate SVG/PNG manifest icons.
 - Build script now checks upstream `arrive.min.js` before every package build.
 - Build zips now use AMO-compatible forward-slash archive paths.
