@@ -18,7 +18,7 @@ Newest update: Added Storage options, allowing the user to blacklist the extensi
 - Added a direct Howler master-gain route for sites that hide their audio graph internals.
 - Added a cross-origin media guard/fallback for app audio clips so boosted CDN audio keeps playing when browsers block routed gain.
 - Added automated Firefox and Chrome package builds with separate SVG/PNG manifest icons.
-- Build script now checks upstream `arrive.min.js` before every package build.
+- Removed an unused third-party DOM watcher dependency from the extension package.
 - Build zips now use AMO-compatible forward-slash archive paths.
 - Updated project license notice to include Chaython Meredith.
 
@@ -53,4 +53,4 @@ Create Firefox and Chrome zip packages:
 .\scripts\build.ps1
 ```
 
-The script checks `lib/arrive.min.js` against upstream GitHub on every run, then writes clean packages to `dist/`, using `ico.svg` for Firefox and `chrome.png` for Chrome. The bundled zips exclude repo files and `README.md`.
+The script writes clean packages to `dist/`, using `ico.svg` for Firefox and `chrome.png` for Chrome. The bundled zips exclude repo files and `README.md`.

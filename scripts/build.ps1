@@ -84,43 +84,6 @@ function New-ExtensionZip {
     }
 }
 
-function Update-Arrive {
-    $sourceUrl = "https://raw.githubusercontent.com/uzairfarooq/arrive/refs/heads/master/minified/arrive.min.js"
-    $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ("volumecontrol-arrive-" + [System.Guid]::NewGuid().ToString("N"))
-    $downloadPath = Join-Path $workDir "arrive.min.js"
-
-    New-Item -ItemType Directory -Path $workDir | Out-Null
-    try {
-        Write-Host "Checking arrive.min.js from upstream GitHub..."
-        Invoke-WebRequest -Uri $sourceUrl -OutFile $downloadPath -UseBasicParsing
-
-        $content = Get-Content -Raw -LiteralPath $downloadPath
-        if ($content.Length -lt 1000 -or $content -notmatch "MutationObserver") {
-            throw "Downloaded arrive.min.js did not look valid."
-        }
-
-        $targetPath = Assert-InRepo (Join-Path $RootPath "lib\arrive.min.js")
-        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-        $currentContent = if (Test-Path -LiteralPath $targetPath) {
-            Get-Content -Raw -LiteralPath $targetPath
-        } else {
-            ""
-        }
-
-        if ($content -ne $currentContent) {
-            [System.IO.File]::WriteAllText($targetPath, $content, $utf8NoBom)
-            Write-Host "Updated lib\arrive.min.js from $sourceUrl."
-        } else {
-            Write-Host "lib\arrive.min.js is already current."
-        }
-    }
-    finally {
-        if (Test-Path -LiteralPath $workDir) {
-            Remove-Item -LiteralPath $workDir -Recurse -Force
-        }
-    }
-}
-
 function Copy-ExtensionFiles {
     param([string]$PackageDir, [string]$IconFile)
 
@@ -134,7 +97,6 @@ function Copy-ExtensionFiles {
     }
 
     Copy-Item -LiteralPath (Join-Path $RootPath $IconFile) -Destination $PackageDir
-    Copy-Item -LiteralPath (Join-Path $RootPath "lib") -Destination (Join-Path $PackageDir "lib") -Recurse
 }
 
 function New-ManifestVariant {
@@ -190,9 +152,7 @@ function Write-Package {
 
 Push-Location $RootPath
 try {
-    Update-Arrive
-
-    foreach ($requiredFile in @("manifest.json", "lib\arrive.min.js", "ico.svg", "chrome.png")) {
+    foreach ($requiredFile in @("manifest.json", "ico.svg", "chrome.png")) {
         if (-not (Test-Path -LiteralPath (Join-Path $RootPath $requiredFile))) {
             throw "Required file is missing: $requiredFile"
         }

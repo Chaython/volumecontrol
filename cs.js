@@ -320,24 +320,6 @@ function init() {
 
     for (const el of document.querySelectorAll("audio, video")) registerMediaElement(el);
 
-    new MutationObserver(mutations => {
-        for (const m of mutations) {
-            for (const n of m.addedNodes) {
-                if (n.nodeType === 1) {
-                    if (n.tagName === 'AUDIO' || n.tagName === 'VIDEO') registerMediaElement(n);
-                    else if (n.querySelectorAll) for (const el of n.querySelectorAll('audio, video')) registerMediaElement(el);
-
-                    // Also check for media elements inside shadow roots (YouTube may use shadow DOM-ish patterns)
-                    try {
-                        if (n.shadowRoot && n.shadowRoot.querySelectorAll) {
-                            for (const el of n.shadowRoot.querySelectorAll('audio, video')) registerMediaElement(el);
-                        }
-                    } catch (e) {}
-                }
-            }
-        }
-    }).observe(document.body, { childList: true, subtree: true });
-
     document.body.classList.add("vc-init");
     return true;
 } 

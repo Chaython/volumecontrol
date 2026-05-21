@@ -777,24 +777,6 @@
         }
     }
 
-    function installMediaObserver() {
-        if (!window.MutationObserver || !document.documentElement) return;
-
-        try {
-            const observer = new MutationObserver(mutations => {
-                for (const mutation of mutations) {
-                    for (const node of mutation.addedNodes) {
-                        if (isMediaElement(node)) registerMediaElement(node);
-                        else if (node && node.querySelectorAll) scanMediaElements(node);
-                    }
-                }
-            });
-            observer.observe(document.documentElement, { childList: true, subtree: true });
-        } catch (e) {
-            log(`media observer failed: ${e && e.message}`);
-        }
-    }
-
     function handleBridgeMessage(event) {
         if (event.source !== window) return;
 
@@ -835,11 +817,9 @@
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", () => {
             scanMediaElements(document);
-            installMediaObserver();
         }, { once: true });
     } else {
         scanMediaElements(document);
-        installMediaObserver();
     }
 
     window.addEventListener("message", handleBridgeMessage);

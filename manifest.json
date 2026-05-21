@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Volume Control",
-  "version": "6",
+  "version": "6.1",
   "description": "Adds a volume control for the current site, that can also boost the volume beyond the normal range.",
   "homepage_url": "https://github.com/Chaython/volumecontrol",
   "icons": {
@@ -42,7 +42,6 @@
         "file:///*"
       ],
       "js": [
-        "lib/arrive.min.js",
         "cs.js"
       ],
       "run_at": "document_start",
