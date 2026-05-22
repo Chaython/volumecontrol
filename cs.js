@@ -4,7 +4,7 @@ const PAGE_BRIDGE_TARGET = "volume-control-page-audio";
 const MIN_DB = -32;
 const MAX_DB = 32;
 const PAGE_BRIDGE_RESYNC_MS = 5000;
-const BOOST_LIMIT_NOTE = "Boost is unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
+const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
 let pageBridgeResyncInterval = null;
 
 const tc = {

@@ -18,7 +18,7 @@ Settings can be remembered per site, and you can exclude sites where you do not 
 
 - Volume Control cannot run on browser system pages such as `chrome://`, `edge://`, `about:`, extension pages, or other protected browser UI.
 - DRM-protected or otherwise restricted media may block volume boosting, mono routing, or audio graph access.
-- Some cross-origin media can only use fallback volume control when browser security rules prevent WebAudio routing.
+- Some cross-origin media can only use fallback volume control when browser security rules prevent WebAudio routing. In that fallback mode, volume can still be lowered, but boosting and mono may be unavailable.
 - Sites with unusual, heavily customized, or late-changing WebAudio graphs may not be fully controllable in every playback path.
 
 ## Hotkeys

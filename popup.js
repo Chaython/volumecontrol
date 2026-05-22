@@ -1,7 +1,7 @@
 const browserApi = (typeof browser !== 'undefined') ? browser : (typeof chrome !== 'undefined' ? chrome : null);
 const MIN_DB = -32;
 const MAX_DB = 32;
-const BOOST_LIMIT_NOTE = "Boost is unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
+const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
 const cached = {
   slider: null,
   volumeText: null,
