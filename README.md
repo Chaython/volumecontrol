@@ -6,13 +6,39 @@
 </p>
 
 ***
-Newest update: Added Storage options, allowing the user to blacklist the extension from running on sites where the extension breaks functionality.
+
+
+## Description
+
+Volume Control adds a simple per-site volume control to your browser. It can lower volume, boost HTML5 audio and video above the normal browser limit, and optionally play stereo audio as mono. The extension is useful for quiet videos, uneven site volume, embedded players, and pages that do not provide enough audio control on their own.
+
+Settings can be remembered per site, and you can exclude sites where you do not want the extension to run. Volume Control supports HTML5 video and audio only; it does not support Flash.
+
+## Privacy Policy
+
+Volume Control does not collect, transmit, sell, share, or store any personal information outside your browser.
+
+The extension does not use analytics, telemetry, tracking pixels, remote logging, accounts, advertising IDs, or any external server for data collection. Your volume settings, mono setting, excluded sites, remembered sites, whitelist or blacklist mode, and debug preference are stored only in your browser's local extension storage.
+
+The extension reads page audio/video elements locally in your browser only so it can apply the volume and mono settings you choose. This processing happens on your device. No browsing history, page content, audio content, media titles, URLs, or settings are sent to the developer or to any third party.
+
+## Permissions
+
+Volume Control asks for the browser permissions needed to control audio reliably across modern websites:
+
+- `storage`: Saves your volume settings, mono setting, remembered site settings, exclusion list, whitelist/blacklist mode, and debug preference locally in your browser.
+- `activeTab`: Lets the popup identify and update the current tab after you interact with the extension, without requesting broader tab access.
+- `<all_urls>` host permission: Allows the content scripts to run on websites where audio or video may exist. This is needed because the extension has to access HTML5 media elements and WebAudio connections inside the page to change their volume.
+- `all_frames` content script access: Lets the extension work with audio/video inside embedded frames, such as video players, social embeds, and media hosted from another domain.
+- `file:///*` content script match: Allows the extension to work on local media files when the browser permits extension access to file URLs.
+
+The broad site access permission is for local audio control only. It is not used to collect data, monitor browsing, inject ads, or communicate page information to any server.
 
 ## Version 6.1 Patch Notes
-- Remove the uneeded JS library
-- Be less agressive and dispose the session on stop; to help with the audio session wasting bluetooth power and keeping the system awake....
+- Removed the unused JS library.
+- Be less aggressive and dispose the audio session on stop to help prevent audio sessions from wasting Bluetooth power or keeping the system awake.
 
-Version 6 Patch Notes
+## Version 6 Patch Notes
 - Added Manifest V3 page-world audio integration for stricter CSP sites and app-style audio.
 - Improved detection for dynamically created audio/video and detached `Audio` elements.
 - Reduced Bluetooth idle popping by avoiding generic page-interaction resumes and lazy-loading audio hooks.
@@ -25,10 +51,9 @@ Version 6 Patch Notes
 - Build zips now use AMO-compatible forward-slash archive paths.
 - Updated project license notice to include Chaython Meredith.
 
-Planned features: Added to chrome extension store,
+Planned features: Added to Chrome Web Store.
 
 
-⚠ Important: To add functionality to more websites, the permission "all_urls" was necessary, however with the recent update to manifest v3, it's optional. If the extension can't access audio on a certain site do the following: Right click the extension, click "manage extension", click the permission tab, allow "Access your data for all websites". This is a necessary permission to access iframes. The extension is open source and fully adheres to this repository. There's no form of analytics in this extension. So don't be afraid of the permissions.
 
 <img width="472" height="182" alt="firefox_sqvsowk1NI" src="https://github.com/user-attachments/assets/7790e01c-ccb5-41c1-b24c-0ac4123b35ab" />
 
