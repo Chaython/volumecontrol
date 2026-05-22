@@ -14,6 +14,13 @@ Volume Control adds a simple per-site volume control to your browser. It can low
 
 Settings can be remembered per site, and you can exclude sites where you do not want the extension to run. Volume Control supports HTML5 video and audio only; it does not support Flash.
 
+## Known Limitations
+
+- Volume Control cannot run on browser system pages such as `chrome://`, `edge://`, `about:`, extension pages, or other protected browser UI.
+- DRM-protected or otherwise restricted media may block volume boosting, mono routing, or audio graph access.
+- Some cross-origin media can only use fallback volume control when browser security rules prevent WebAudio routing.
+- Sites with unusual, heavily customized, or late-changing WebAudio graphs may not be fully controllable in every playback path.
+
 ## Hotkeys
 
 - `Alt+Shift+Up`: Increase volume by 1 dB.
@@ -38,11 +45,12 @@ Volume Control asks for the browser permissions needed to control audio reliably
 
 - `storage`: Saves your volume settings, mono setting, remembered site settings, exclusion list, whitelist/blacklist mode, and debug preference locally in your browser.
 - `activeTab`: Lets the popup identify and update the current tab after you interact with the extension, without requesting broader tab access.
-- `<all_urls>` host permission: Allows the content scripts to run on websites where audio or video may exist. This is needed because the extension has to access HTML5 media elements and WebAudio connections inside the page to change their volume.
-- `all_frames` content script access: Lets the extension work with audio/video inside embedded frames, such as video players, social embeds, and media hosted from another domain.
+- `<all_urls>` host permission: Allows the content scripts to run on websites where audio or video may exist. This is needed because users can play HTML5 media on almost any site, and the extension has to access page-local media elements and WebAudio connections to change their volume.
+- `document_start` content script timing: Installs the page audio hooks before sites create `Audio`, `AudioContext`, media elements, or WebAudio destination connections. Loading later can miss audio graphs that are created during early page startup.
+- `all_frames` content script access: Lets the extension work with audio/video inside embedded frames, such as video players, social embeds, and media hosted from another domain. Without frame access, only top-level page media would be controllable.
 - `file:///*` content script match: Allows the extension to work on local media files when the browser permits extension access to file URLs.
 
-The broad site access permission is for local audio control only. It is not used to collect data, monitor browsing, inject ads, or communicate page information to any server.
+AMO/Chrome Web Store review note: the broad host access, early `document_start` injection, and `all_frames` access are used only to detect and route page-local HTML5 media and WebAudio before playback begins. Volume Control does not collect browsing history, inspect page content for analytics, inject ads, or send page URLs, media metadata, audio content, or settings to any server.
 
 ## Version 6.2 Patch Notes
 - Added browser hotkeys for volume up, volume down, reset, and mono toggle.
