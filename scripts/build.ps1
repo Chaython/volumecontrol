@@ -113,9 +113,28 @@ function New-ManifestVariant {
         if ($manifest.PSObject.Properties.Name -contains "browser_specific_settings") {
             $manifest.PSObject.Properties.Remove("browser_specific_settings")
         }
+        if ($manifest.PSObject.Properties.Name -contains "background" -and
+            $manifest.background.PSObject.Properties.Name -contains "scripts") {
+            $manifest.background.PSObject.Properties.Remove("scripts")
+        }
     }
     else {
         $manifest.icons = [ordered]@{ "96" = $IconFile }
+        if ($manifest.PSObject.Properties.Name -contains "background") {
+            $backgroundScript = "background.js"
+            if ($manifest.background.PSObject.Properties.Name -contains "service_worker") {
+                $backgroundScript = $manifest.background.service_worker
+                $manifest.background.PSObject.Properties.Remove("service_worker")
+            }
+            if (-not ($manifest.background.PSObject.Properties.Name -contains "scripts")) {
+                $manifest.background | Add-Member -NotePropertyName "scripts" -NotePropertyValue @($backgroundScript)
+            }
+        }
+        else {
+            $manifest | Add-Member -NotePropertyName "background" -NotePropertyValue ([ordered]@{
+                scripts = @("background.js")
+            })
+        }
     }
 
     $manifest.action.default_icon = $IconFile

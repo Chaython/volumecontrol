@@ -68,6 +68,10 @@ function tabsSendMessage(tabId, message) {
   return callApi(browserApi.tabs.sendMessage.bind(browserApi.tabs), [tabId, message]);
 }
 
+function runtimeSendMessage(message) {
+  return callApi(browserApi.runtime.sendMessage.bind(browserApi.runtime), [message]);
+}
+
 function tabsReload(tabId) {
   return callApi(browserApi.tabs.reload.bind(browserApi.tabs), [tabId]).then(() => undefined);
 }
@@ -323,7 +327,7 @@ async function saveSiteSettings(tab) {
     }
 } 
 
-async function setVolume(dB, tab) {
+async function setVolume(dB, tab, options = {}) {
   const normalizedDb = normalizeDb(dB);
   const slider = cached.slider || document.querySelector("#volume-slider");
   const text = cached.volumeText || document.querySelector("#volume-text");
@@ -331,7 +335,17 @@ async function setVolume(dB, tab) {
   if (text) text.value = formatValue(normalizedDb);
 
   if (tab) {
-      tabsSendMessage(tab.id, { command: "setVolume", dB: normalizedDb }).catch(handleError);
+      tabsSendMessage(tab.id, {
+          command: "setVolume",
+          dB: normalizedDb
+      }).catch(handleError);
+      if (options.showFeedback !== false) {
+          runtimeSendMessage({
+              command: "showNativeVolumeFeedback",
+              tabId: tab.id,
+              dB: normalizedDb
+          }).catch(() => {});
+      }
       await saveSiteSettings(tab);
   }
 }

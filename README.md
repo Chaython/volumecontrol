@@ -14,6 +14,16 @@ Volume Control adds a simple per-site volume control to your browser. It can low
 
 Settings can be remembered per site, and you can exclude sites where you do not want the extension to run. Volume Control supports HTML5 video and audio only; it does not support Flash.
 
+## Hotkeys
+
+- `Alt+Shift+Up`: Increase volume by 1 dB.
+- `Alt+Shift+Down`: Decrease volume by 1 dB.
+- `Alt+Shift+0`: Reset volume to 0 dB.
+- `Alt+Shift+M`: Toggle mono audio.
+
+Browser shortcut settings can be used to remap or disable these defaults.
+Pin the extension icon to the toolbar to see native badge feedback while adjusting volume.
+
 ## Privacy Policy
 
 Volume Control does not collect, transmit, sell, share, or store any personal information outside your browser.
@@ -33,6 +43,11 @@ Volume Control asks for the browser permissions needed to control audio reliably
 - `file:///*` content script match: Allows the extension to work on local media files when the browser permits extension access to file URLs.
 
 The broad site access permission is for local audio control only. It is not used to collect data, monitor browsing, inject ads, or communicate page information to any server.
+
+## Version 6.2 Patch Notes
+- Added browser hotkeys for volume up, volume down, reset, and mono toggle.
+- Added native toolbar-badge volume feedback when volume is adjusted from hotkeys or popup controls.
+- Hotkey changes update remembered settings when the current site is already remembered.
 
 ## Version 6.1 Patch Notes
 - Removed the unused JS library.

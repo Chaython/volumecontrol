@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Volume Control",
-  "version": "6.1",
+  "version": "6.2",
   "description": "Adds a volume control for the current site, that can also boost the volume beyond the normal range.",
   "homepage_url": "https://github.com/Chaython/volumecontrol",
   "icons": {
@@ -18,6 +18,9 @@
     "default_icon": "ico.svg",
     "default_title": "Volume Control",
     "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
@@ -57,6 +60,30 @@
   "commands": {
     "_execute_action": {
       "description": "Open volume control"
+    },
+    "volume-up": {
+      "suggested_key": {
+        "default": "Alt+Shift+Up"
+      },
+      "description": "Increase volume by 1 dB"
+    },
+    "volume-down": {
+      "suggested_key": {
+        "default": "Alt+Shift+Down"
+      },
+      "description": "Decrease volume by 1 dB"
+    },
+    "volume-reset": {
+      "suggested_key": {
+        "default": "Alt+Shift+0"
+      },
+      "description": "Reset volume to 0 dB"
+    },
+    "toggle-mono": {
+      "suggested_key": {
+        "default": "Alt+Shift+M"
+      },
+      "description": "Toggle mono audio"
     }
   },
   "browser_specific_settings": {

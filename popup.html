@@ -14,15 +14,15 @@
     </div>
     
     <div class="top-controls">
-      <input type="range" id="volume-slider" value="0" min="-32" max="32" step="1" aria-label="Volume control">
+      <input type="range" id="volume-slider" value="0" min="-32" max="32" step="1" aria-label="Volume control" aria-keyshortcuts="Alt+Shift+ArrowUp Alt+Shift+ArrowDown Alt+Shift+0" title="Alt+Shift+Up / Alt+Shift+Down / Alt+Shift+0">
       <input type="text" id="volume-text" value="0 dB" aria-label="Volume in decibels">
     </div>
 
     <div class="bot-controls"> 
       <div class="left">
-          <label class="switch-container" for="mono-checkbox" title="Toggle Mono Audio">
+          <label class="switch-container" for="mono-checkbox" title="Toggle Mono Audio (Alt+Shift+M)">
               <div class="switch">
-                  <input type="checkbox" id="mono-checkbox">
+                  <input type="checkbox" id="mono-checkbox" aria-keyshortcuts="Alt+Shift+M">
                   <span class="slider"></span>
               </div>
               <span class="label-text">Mono</span>
