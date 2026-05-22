@@ -5,6 +5,12 @@ const MIN_DB = -32;
 const MAX_DB = 32;
 const PAGE_BRIDGE_RESYNC_MS = 5000;
 const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
+const BOOST_LIMIT_NOTES = {
+    "cross-origin": "Limited by cross-origin media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
+    "restricted": "Limited by DRM-protected or otherwise restricted media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
+    "route-failed": "Limited because the page blocked or already owns the audio route. Fallback volume control can still lower volume, but boosting and mono may be unavailable.",
+    "fallback": BOOST_LIMIT_NOTE
+};
 let pageBridgeResyncInterval = null;
 
 const tc = {
@@ -139,29 +145,53 @@ function isLikelyCrossOriginMedia(element) {
     }
 }
 
-function isBoostLimitedMediaElement(element) {
-    if (!element || element.dataset.vcHooked === "true") return false;
+function isLikelyRestrictedMedia(element) {
+    if (!element) return false;
+
+    try {
+        if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
+        if (element.mediaKeys) return true;
+        if (element.webkitKeys) return true;
+    } catch (e) {
+        return false;
+    }
+
+    return false;
+}
+
+function getBoostLimitReason(element) {
+    if (!element || element.dataset.vcHooked === "true") return "";
+
+    if (isLikelyRestrictedMedia(element)) return "restricted";
 
     const fallbackReason = element.dataset.vcFallbackReason;
-    if (fallbackReason === "cross-origin" || fallbackReason === "route-failed") return true;
+    if (fallbackReason) return fallbackReason;
 
-    return isLikelyCrossOriginMedia(element);
+    if (isLikelyCrossOriginMedia(element)) return "cross-origin";
+
+    return "";
 }
 
 function getBoostLimitInfo() {
-    if (tc.vars.isBlocked) return { boostLimited: false, maxDb: MAX_DB, note: "" };
+    if (tc.vars.isBlocked) return { boostLimited: false, maxDb: MAX_DB, reason: "", note: "" };
 
     try {
         for (const el of document.querySelectorAll('audio, video')) {
-            if (isBoostLimitedMediaElement(el)) {
-                return { boostLimited: true, maxDb: 0, note: BOOST_LIMIT_NOTE };
+            const reason = getBoostLimitReason(el);
+            if (reason) {
+                return {
+                    boostLimited: true,
+                    maxDb: 0,
+                    reason,
+                    note: BOOST_LIMIT_NOTES[reason] || BOOST_LIMIT_NOTES.fallback
+                };
             }
         }
     } catch (e) {
         if (tc.settings.debugMode) log(`boost limit check failed: ${e.message}`, 3);
     }
 
-    return { boostLimited: false, maxDb: MAX_DB, note: "" };
+    return { boostLimited: false, maxDb: MAX_DB, reason: "", note: "" };
 }
 
 function normalizeDbForCurrentMedia(value) {
@@ -178,6 +208,7 @@ function getAudioControlState() {
         mono: tc.vars.mono,
         boostLimited: limit.boostLimited,
         maxDb: limit.maxDb,
+        limitationReason: limit.reason,
         limitation: limit.note
     };
 }
@@ -193,6 +224,7 @@ function enforceBoostLimit(options = {}) {
 
 function applyFallbackVolume(element, reason = "") {
     const gain = getGainValue(tc.vars.dB);
+    const limitReason = isLikelyRestrictedMedia(element) ? "restricted" : reason;
 
     if (element.dataset.vcFallback !== 'true') {
         try {
@@ -200,7 +232,7 @@ function applyFallbackVolume(element, reason = "") {
         } catch (e) {}
         element.dataset.vcFallback = 'true';
     }
-    if (reason) element.dataset.vcFallbackReason = reason;
+    if (limitReason) element.dataset.vcFallbackReason = limitReason;
 
     try {
         const baseVolume = element.__vc_originalVolume !== undefined
@@ -357,6 +389,9 @@ function registerMediaElement(element) {
     if (!element || element.dataset.vcWatched === "true" || element.dataset.vcHooked === "true") return;
 
     element.dataset.vcWatched = "true";
+    element.addEventListener('encrypted', () => {
+        element.dataset.vcRestrictedMedia = "true";
+    }, { passive: true });
 
     const hookIfPlaying = () => {
         if (tc.vars.isBlocked || !isMediaPlaying(element) || !isAudibleMediaElement(element)) {
@@ -472,6 +507,7 @@ function connectOutput(element) {
                 } catch (e) {}
                 delete element.__vc_originalVolume;
                 delete element.dataset.vcFallback;
+                delete element.dataset.vcFallbackReason;
             }
 
             applyState();
