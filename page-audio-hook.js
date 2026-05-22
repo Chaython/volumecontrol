@@ -2,6 +2,8 @@
     const HOOK_KEY = "__volumeControlPageAudioHook";
     const BRIDGE_SOURCE = "volume-control-extension";
     const BRIDGE_TARGET = "volume-control-page-audio";
+    const MIN_DB = -32;
+    const MAX_DB = 32;
 
     if (window[HOOK_KEY] && window[HOOK_KEY].installed) return;
 
@@ -35,9 +37,14 @@
         if (state.debugMode) console.log(`[VolumeControl/PageAudio] ${msg}`);
     }
 
+    function normalizeDb(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return 0;
+        return Math.max(MIN_DB, Math.min(MAX_DB, Math.round(n)));
+    }
+
     function getGainValue(dB) {
-        const n = Number(dB);
-        if (Number.isNaN(n)) return 1.0;
+        const n = normalizeDb(dB);
         return Math.pow(10, n / 20);
     }
 
@@ -858,7 +865,7 @@
         if (data.command !== "setState") return;
 
         state.enabled = data.enabled !== false;
-        state.dB = Number(data.dB) || 0;
+        state.dB = normalizeDb(data.dB);
         state.mono = Boolean(data.mono);
         state.debugMode = Boolean(data.debugMode);
 

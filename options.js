@@ -1,8 +1,60 @@
 const browserApi = (typeof browser !== 'undefined') ? browser : (typeof chrome !== 'undefined' ? chrome : null);
+const MIN_DB = -32;
+const MAX_DB = 32;
+
+function normalizeDb(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(MIN_DB, Math.min(MAX_DB, Math.round(n)));
+}
+
+function normalizeDomainInput(value) {
+    if (!value) return "";
+    let domain = String(value).trim().toLowerCase();
+    domain = domain.replace(/^(https?|ftp):\/\/(www\.)?/, '');
+    domain = domain.split('/')[0].split(':')[0];
+    return domain;
+}
+
+function getRuntimeLastError() {
+    return browserApi && browserApi.runtime ? browserApi.runtime.lastError : null;
+}
+
+function callApi(method, args = []) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (error, value) => {
+            if (settled) return;
+            settled = true;
+            if (error) reject(error);
+            else resolve(value);
+        };
+        const callback = (value) => {
+            finish(getRuntimeLastError(), value);
+        };
+
+        try {
+            const result = method(...args, callback);
+            if (result && typeof result.then === 'function') {
+                result.then((value) => finish(null, value), (error) => finish(error));
+            }
+        } catch (callbackError) {
+            try {
+                const result = method(...args);
+                if (result && typeof result.then === 'function') {
+                    result.then((value) => finish(null, value), (error) => finish(error));
+                } else {
+                    finish(null, result);
+                }
+            } catch (promiseError) {
+                finish(promiseError || callbackError);
+            }
+        }
+    });
+}
 
 function formatDb(v) {
-    const n = Number(v);
-    if (Number.isNaN(n)) return '';
+    const n = normalizeDb(v);
     return `${n >= 0 ? '+' : ''}${n} dB`;
 }
 
@@ -12,29 +64,11 @@ let memoryListRenderTimeout = null;
 let fqdnListRenderTimeout = null;
 
 function storageGet(keys) {
-    return new Promise((resolve, reject) => {
-        try {
-            browserApi.storage.local.get(keys, (res) => {
-                if (browserApi.runtime.lastError) reject(browserApi.runtime.lastError);
-                else resolve(res);
-            });
-        } catch (e) {
-            reject(e);
-        }
-    });
+    return callApi(browserApi.storage.local.get.bind(browserApi.storage.local), [keys]);
 }
 
 function storageSet(obj) {
-    return new Promise((resolve, reject) => {
-        try {
-            browserApi.storage.local.set(obj, () => {
-                if (browserApi.runtime.lastError) reject(browserApi.runtime.lastError);
-                else resolve();
-            });
-        } catch (e) {
-            reject(e);
-        }
-    });
+    return callApi(browserApi.storage.local.set.bind(browserApi.storage.local), [obj]).then(() => undefined);
 }
 
 
@@ -51,7 +85,7 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
 
     // Commit rename on blur or Enter
     const commitRename = async () => {
-        const newName = (info.value || '').trim();
+        const newName = normalizeDomainInput(info.value);
         if (!newName) {
             alert('Site cannot be empty.');
             info.value = domain;
@@ -87,26 +121,26 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
     settingGroup.appendChild(volInput);
 
     // Initialize formatted value (shows e.g. '+3 dB') and store numeric separately
-    const initialVol = (settings && settings.volume !== undefined) ? Number(settings.volume) || 0 : 0;
+    const initialVol = (settings && settings.volume !== undefined) ? normalizeDb(settings.volume) : 0;
     volInput.value = formatDb(initialVol);
     volInput.dataset.numericValue = String(initialVol);
 
     // When focusing, show only the numeric part so user can edit
     volInput.addEventListener('focus', () => {
-        volInput.value = String(parseInt(volInput.dataset.numericValue, 10) || 0);
+        volInput.value = String(normalizeDb(volInput.dataset.numericValue));
         volInput.select();
     });
 
     // Keep numericValue up-to-date while typing
     volInput.addEventListener('input', () => {
-        const parsed = parseInt(volInput.value, 10);
-        if (!Number.isNaN(parsed)) volInput.dataset.numericValue = String(parsed);
+        const parsed = Number(volInput.value);
+        if (Number.isFinite(parsed)) volInput.dataset.numericValue = String(normalizeDb(parsed));
     });
 
     // On blur/change, format back to '# dB' and commit
     const commitVol = () => {
-        const v = parseInt(volInput.value, 10);
-        const numeric = Number.isNaN(v) ? (Number(volInput.dataset.numericValue) || 0) : v;
+        const v = Number(volInput.value);
+        const numeric = Number.isFinite(v) ? normalizeDb(v) : normalizeDb(volInput.dataset.numericValue);
         volInput.dataset.numericValue = String(numeric);
         volInput.value = formatDb(numeric);
         onUpdate(domain, { volume: numeric, mono: Boolean(monoCheckbox.checked) });
@@ -127,7 +161,7 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
     monoLabel.appendChild(monoText);
 
     monoCheckbox.addEventListener('change', () => {
-        onUpdate(domain, { volume: parseInt(volInput.value, 10) || 0, mono: Boolean(monoCheckbox.checked) });
+        onUpdate(domain, { volume: normalizeDb(volInput.dataset.numericValue), mono: Boolean(monoCheckbox.checked) });
     });
 
     settingGroup.appendChild(monoLabel);
@@ -179,10 +213,10 @@ async function renderMemoryList() {
                 delete settings[domain];
                 await storageSet({ siteSettings: settings });
             }, async (domain, newVal) => {
-                settings[domain] = { volume: Number(newVal.volume) || 0, mono: !!newVal.mono };
+                settings[domain] = { volume: normalizeDb(newVal.volume), mono: !!newVal.mono };
                 await storageSet({ siteSettings: settings });
             }, async (oldDomain, newDomain) => {
-                const nd = (newDomain || '').trim();
+                const nd = normalizeDomainInput(newDomain);
                 if (!nd) {
                     alert('Site cannot be empty.');
                     return;
@@ -344,7 +378,7 @@ async function initOptions() {
 
     if (addBtn && newFqdnInput) {
         addBtn.addEventListener('click', async () => {
-            const v = (newFqdnInput.value || '').trim();
+            const v = normalizeDomainInput(newFqdnInput.value);
             if (!v) return;
             const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false });
             if (data.whitelistMode) {
@@ -371,7 +405,7 @@ async function initOptions() {
     const newRememberedInput = document.getElementById('newRememberedSite');
     if (addRememberedBtn && newRememberedInput) {
         addRememberedBtn.addEventListener('click', async () => {
-            const v = (newRememberedInput.value || '').trim();
+            const v = normalizeDomainInput(newRememberedInput.value);
             if (!v) return;
             const data = await storageGet({ siteSettings: {} });
             const settings = data.siteSettings || {};

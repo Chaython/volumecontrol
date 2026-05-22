@@ -1,6 +1,10 @@
 const browserAPI = (typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null));
 const PAGE_BRIDGE_SOURCE = "volume-control-extension";
 const PAGE_BRIDGE_TARGET = "volume-control-page-audio";
+const MIN_DB = -32;
+const MAX_DB = 32;
+const PAGE_BRIDGE_RESYNC_MS = 5000;
+let pageBridgeResyncInterval = null;
 
 const tc = {
   settings: {
@@ -23,6 +27,53 @@ function log(msg, level = 4) {
   if (tc.settings.logLevel >= level) console.log(`[VolumeControl] ${logTypes[level-2]}: ${msg}`);
 }
 
+function normalizeDb(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(MIN_DB, Math.min(MAX_DB, Math.round(n)));
+}
+
+function getRuntimeLastError() {
+    return browserAPI && browserAPI.runtime ? browserAPI.runtime.lastError : null;
+}
+
+function callApi(method, args = []) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (error, value) => {
+            if (settled) return;
+            settled = true;
+            if (error) reject(error);
+            else resolve(value);
+        };
+        const callback = (value) => {
+            finish(getRuntimeLastError(), value);
+        };
+
+        try {
+            const result = method(...args, callback);
+            if (result && typeof result.then === 'function') {
+                result.then((value) => finish(null, value), (error) => finish(error));
+            }
+        } catch (callbackError) {
+            try {
+                const result = method(...args);
+                if (result && typeof result.then === 'function') {
+                    result.then((value) => finish(null, value), (error) => finish(error));
+                } else {
+                    finish(null, result);
+                }
+            } catch (promiseError) {
+                finish(promiseError || callbackError);
+            }
+        }
+    });
+}
+
+function storageGet(keys) {
+    return callApi(browserAPI.storage.local.get.bind(browserAPI.storage.local), [keys]);
+}
+
 if (browserAPI) {
     browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (tc.vars.isBlocked) return;
@@ -31,7 +82,7 @@ if (browserAPI) {
                 sendResponse({ status: "active" });
                 break;
             case "setVolume":
-                tc.vars.dB = msg.dB;
+                tc.vars.dB = normalizeDb(msg.dB);
                 applyState();
                 sendResponse({});
                 break;
@@ -52,8 +103,7 @@ if (browserAPI) {
 }
 
 function getGainValue(dB) {
-    const n = Number(dB);
-    if (Number.isNaN(n)) return 1.0;
+    const n = normalizeDb(dB);
     return Math.pow(10, n / 20);
 }
 
@@ -127,7 +177,7 @@ function syncPageAudioHook() {
             target: PAGE_BRIDGE_TARGET,
             command: "setState",
             enabled: !tc.vars.isBlocked,
-            dB: tc.vars.isBlocked ? 0 : tc.vars.dB,
+            dB: tc.vars.isBlocked ? 0 : normalizeDb(tc.vars.dB),
             mono: !tc.vars.isBlocked && tc.vars.mono,
             debugMode: tc.settings.debugMode
         }, "*");
@@ -216,6 +266,11 @@ function isAudibleMediaElement(element) {
     } catch (e) {
         return true;
     }
+}
+
+function ensurePageBridgeResync() {
+    if (pageBridgeResyncInterval !== null) return;
+    pageBridgeResyncInterval = setInterval(syncPageAudioHook, PAGE_BRIDGE_RESYNC_MS);
 }
 
 function suspendAudioContextIfIdle() {
@@ -416,20 +471,33 @@ function extractRootDomain(url) {
     return domain.toLowerCase();
 } 
 
+function normalizeSavedDomain(value) {
+    if (!value) return "";
+    let domain = String(value).trim().toLowerCase();
+    domain = domain.replace(/^(https?|ftp):\/\/(www\.)?/, '');
+    domain = domain.split('/')[0].split(':')[0];
+    return domain;
+}
+
+function domainMatchesSaved(domain, savedDomain) {
+    const saved = normalizeSavedDomain(savedDomain);
+    return Boolean(domain && saved && (domain === saved || domain.endsWith(`.${saved}`)));
+}
+
 function getSiteSettingsKey(siteSettings, domain) {
     if (!siteSettings || !domain) return null;
     if (siteSettings[domain]) return domain;
 
     return Object.keys(siteSettings)
-        .filter(savedDomain => domain === savedDomain || domain.endsWith(`.${savedDomain}`))
+        .filter(savedDomain => domainMatchesSaved(domain, savedDomain))
         .sort((a, b) => b.length - a.length)[0] || null;
 }
 
-function start() {
+async function start() {
     if (!browserAPI) return;
 
-    browserAPI.storage.local.get({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false }, (data) => {
-        if (browserAPI.runtime.lastError) return;
+    try {
+        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false });
 
         if (data.debugMode !== undefined) tc.settings.debugMode = data.debugMode;
 
@@ -447,7 +515,7 @@ function start() {
             if (tc.settings.debugMode) log(`start(): remembered samples=[${remembered.slice(0,5).join(',')}]`, 4);
             if (!getSiteSettingsKey(data.siteSettings || {}, currentDomain)) blocked = true;
         } else {
-            if (data.fqdns.some(d => currentDomain.includes(d))) blocked = true;
+            if ((data.fqdns || []).some(d => domainMatchesSaved(currentDomain, d))) blocked = true;
         }
 
         // Debug: log final decision
@@ -457,19 +525,23 @@ function start() {
         tc.vars.isBlocked = blocked;
         if (blocked) {
             applyState();
+            ensurePageBridgeResync();
             return;
         }
 
         const siteSettingsKey = getSiteSettingsKey(data.siteSettings, currentDomain);
         if (siteSettingsKey) {
             const s = data.siteSettings[siteSettingsKey];
-            if (s.volume !== undefined) tc.vars.dB = parseInt(s.volume, 10) || 0;
+            if (s.volume !== undefined) tc.vars.dB = normalizeDb(s.volume);
             if (s.mono !== undefined) tc.vars.mono = s.mono;
         }
 
         applyState();
+        ensurePageBridgeResync();
         initWhenReady();
-    });
+    } catch (e) {
+        if (tc.settings.debugMode) log(`start() storage read failed: ${e && e.message}`, 2);
+    }
 }
 
 start();
@@ -489,12 +561,11 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
         // If per-site settings changed, apply them if they affect this domain
         if (changes.siteSettings) {
             const currentDomain = extractRootDomain(window.location.href);
-            browserAPI.storage.local.get({ siteSettings: {} }, (data) => {
-                if (browserAPI.runtime && browserAPI.runtime.lastError) return;
+            storageGet({ siteSettings: {} }).then((data) => {
                 const siteSettingsKey = getSiteSettingsKey(data.siteSettings, currentDomain);
                 if (siteSettingsKey) {
                     const s = data.siteSettings[siteSettingsKey];
-                    if (s.volume !== undefined) tc.vars.dB = parseInt(s.volume, 10) || 0;
+                    if (s.volume !== undefined) tc.vars.dB = normalizeDb(s.volume);
                     if (s.mono !== undefined) tc.vars.mono = s.mono;
                     if (tc.settings.debugMode) log(`siteSettings updated for ${currentDomain} via ${siteSettingsKey}: dB=${tc.vars.dB}, mono=${tc.vars.mono}`, 4);
                     applyState();
@@ -508,6 +579,8 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
                 } else {
                     if (tc.settings.debugMode) log('siteSettings change did not affect this domain', 4);
                 }
+            }).catch((e) => {
+                if (tc.settings.debugMode) log(`siteSettings storage read failed: ${e && e.message}`, 2);
             });
         }
 
