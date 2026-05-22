@@ -1,18 +1,26 @@
 const browserApi = (typeof browser !== 'undefined') ? browser : (typeof chrome !== 'undefined' ? chrome : null);
 const MIN_DB = -32;
 const MAX_DB = 32;
+const BOOST_LIMIT_NOTE = "Boost is unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
 const cached = {
   slider: null,
   volumeText: null,
+  limitNote: null,
   monoCheckbox: null,
   rememberCheckbox: null,
-  enableCheckbox: null
+  enableCheckbox: null,
+  maxDb: MAX_DB,
+  boostLimited: false
 };
 
 function normalizeDb(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
   return Math.max(MIN_DB, Math.min(MAX_DB, Math.round(n)));
+}
+
+function normalizeControlDb(value) {
+  return Math.min(normalizeDb(value), cached.maxDb);
 }
 
 function getRuntimeLastError() {
@@ -291,6 +299,53 @@ function formatValue(dB) {
   return `${n >= 0 ? '+' : ''}${n} dB`;
 }
 
+function setDisplayedVolume(dB) {
+  const normalizedDb = normalizeControlDb(dB);
+  const slider = cached.slider || document.querySelector("#volume-slider");
+  const text = cached.volumeText || document.querySelector("#volume-text");
+
+  if (slider) slider.value = String(normalizedDb);
+  if (text) text.value = formatValue(normalizedDb);
+
+  return normalizedDb;
+}
+
+function applyAudioControlState(state = {}) {
+  const maxDb = Number.isFinite(Number(state.maxDb)) ? normalizeDb(state.maxDb) : MAX_DB;
+
+  cached.maxDb = Math.min(MAX_DB, Math.max(MIN_DB, maxDb));
+  cached.boostLimited = Boolean(state.boostLimited) || cached.maxDb <= 0;
+
+  const slider = cached.slider || document.querySelector("#volume-slider");
+  const note = cached.limitNote || document.querySelector("#volume-limit-note");
+
+  if (slider) {
+    slider.max = String(cached.maxDb);
+    slider.style.setProperty("--vc-range-steps", String(Math.max(1, cached.maxDb - MIN_DB)));
+    if (normalizeDb(slider.value) > cached.maxDb) setDisplayedVolume(cached.maxDb);
+  }
+
+  if (note) {
+    note.textContent = state.limitation || BOOST_LIMIT_NOTE;
+    note.classList.toggle("hidden", !cached.boostLimited);
+  }
+}
+
+async function refreshAudioControlState(tab) {
+    if (!tab || tab.id === undefined) return null;
+
+    const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }).catch(handleError);
+    const state = response && response.response ? response.response : null;
+
+    if (state) {
+        applyAudioControlState(state);
+        if (state.volume !== undefined) setDisplayedVolume(state.volume);
+        if (state.mono !== undefined && cached.monoCheckbox) cached.monoCheckbox.checked = Boolean(state.mono);
+    }
+
+    return state;
+}
+
 async function saveSiteSettings(tab) {
     try {
         const rememberCheckbox = document.getElementById("remember-checkbox");
@@ -306,7 +361,7 @@ async function saveSiteSettings(tab) {
         data.siteSettings = data.siteSettings || {};
         const settingsKey = getSiteSettingsKey(data.siteSettings, domain) || domain;
         data.siteSettings[settingsKey] = {
-            volume: normalizeDb(volumeSlider?.value),
+            volume: normalizeControlDb(volumeSlider?.value),
             mono: Boolean(monoCheckbox?.checked)
         };
         await storageSet({ siteSettings: data.siteSettings });
@@ -328,17 +383,21 @@ async function saveSiteSettings(tab) {
 } 
 
 async function setVolume(dB, tab, options = {}) {
-  const normalizedDb = normalizeDb(dB);
-  const slider = cached.slider || document.querySelector("#volume-slider");
-  const text = cached.volumeText || document.querySelector("#volume-text");
-  if (slider) slider.value = String(normalizedDb);
-  if (text) text.value = formatValue(normalizedDb);
+  let normalizedDb = setDisplayedVolume(dB);
 
   if (tab) {
-      tabsSendMessage(tab.id, {
+      const response = await tabsSendMessage(tab.id, {
           command: "setVolume",
           dB: normalizedDb
       }).catch(handleError);
+
+      if (response && response.response) {
+          applyAudioControlState(response.response);
+          if (response.response.volume !== undefined) {
+              normalizedDb = setDisplayedVolume(response.response.volume);
+          }
+      }
+
       if (options.showFeedback !== false) {
           runtimeSendMessage({
               command: "showNativeVolumeFeedback",
@@ -410,18 +469,22 @@ async function initializeControls(tab) {
 
     const volumeSlider = document.querySelector("#volume-slider");
     const volumeText = document.querySelector("#volume-text");
+    const limitNote = document.querySelector("#volume-limit-note");
     const monoCheckbox = document.querySelector("#mono-checkbox");
     const rememberCheckbox = document.querySelector("#remember-checkbox");
 
     cached.slider = volumeSlider;
     cached.volumeText = volumeText;
+    cached.limitNote = limitNote;
     cached.monoCheckbox = monoCheckbox;
     cached.rememberCheckbox = rememberCheckbox;
 
+    applyAudioControlState({ maxDb: MAX_DB, boostLimited: false, limitation: "" });
+
     if (volumeSlider) {
       volumeSlider.addEventListener("input", () => {
-          if (cached.volumeText) cached.volumeText.value = formatValue(volumeSlider.value);
-          setVolume(volumeSlider.value, tab);
+          const normalizedDb = setDisplayedVolume(volumeSlider.value);
+          setVolume(normalizedDb, tab);
       });
     }
     
@@ -439,16 +502,16 @@ async function initializeControls(tab) {
     if (!domain) return;
 
     try {
+        const audioState = await refreshAudioControlState(tab);
         const data = await storageGet({ siteSettings: {} });
         const settingsKey = getSiteSettingsKey(data.siteSettings || {}, domain);
         const saved = settingsKey ? data.siteSettings[settingsKey] : null;
         if (saved) {
             if (rememberCheckbox) rememberCheckbox.checked = true;
-            if (saved.volume !== undefined) setVolume(saved.volume, null);
             if (saved.mono !== undefined && monoCheckbox) monoCheckbox.checked = saved.mono;
-            tabsSendMessage(tab.id, { command: "setVolume", dB: normalizeDb(saved.volume) }).catch(handleError);
+            if (saved.volume !== undefined) await setVolume(saved.volume, tab, { showFeedback: false });
             tabsSendMessage(tab.id, { command: "setMono", mono: Boolean(saved.mono) }).catch(handleError);
-        } else {
+        } else if (!audioState) {
             tabsSendMessage(tab.id, { command: "getVolume" }).then((response) => {
                 if (response && response.response !== undefined) setVolume(response.response, null);
             }).catch(handleError);

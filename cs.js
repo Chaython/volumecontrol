@@ -4,6 +4,7 @@ const PAGE_BRIDGE_TARGET = "volume-control-page-audio";
 const MIN_DB = -32;
 const MAX_DB = 32;
 const PAGE_BRIDGE_RESYNC_MS = 5000;
+const BOOST_LIMIT_NOTE = "Boost is unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
 let pageBridgeResyncInterval = null;
 
 const tc = {
@@ -82,12 +83,15 @@ if (browserAPI) {
                 sendResponse({ status: "active" });
                 break;
             case "setVolume":
-                tc.vars.dB = normalizeDb(msg.dB);
+                tc.vars.dB = normalizeDbForCurrentMedia(msg.dB);
                 applyState();
-                sendResponse({});
+                sendResponse({ response: getAudioControlState() });
                 break;
             case "getVolume":
-                sendResponse({ response: tc.vars.dB });
+                sendResponse({ response: getAudioControlState().volume });
+                break;
+            case "getAudioControlState":
+                sendResponse({ response: getAudioControlState() });
                 break;
             case "setMono":
                 tc.vars.mono = msg.mono;
@@ -135,7 +139,59 @@ function isLikelyCrossOriginMedia(element) {
     }
 }
 
-function applyFallbackVolume(element) {
+function isBoostLimitedMediaElement(element) {
+    if (!element || element.dataset.vcHooked === "true") return false;
+
+    const fallbackReason = element.dataset.vcFallbackReason;
+    if (fallbackReason === "cross-origin" || fallbackReason === "route-failed") return true;
+
+    return isLikelyCrossOriginMedia(element);
+}
+
+function getBoostLimitInfo() {
+    if (tc.vars.isBlocked) return { boostLimited: false, maxDb: MAX_DB, note: "" };
+
+    try {
+        for (const el of document.querySelectorAll('audio, video')) {
+            if (isBoostLimitedMediaElement(el)) {
+                return { boostLimited: true, maxDb: 0, note: BOOST_LIMIT_NOTE };
+            }
+        }
+    } catch (e) {
+        if (tc.settings.debugMode) log(`boost limit check failed: ${e.message}`, 3);
+    }
+
+    return { boostLimited: false, maxDb: MAX_DB, note: "" };
+}
+
+function normalizeDbForCurrentMedia(value) {
+    const normalized = normalizeDb(value);
+    const limit = getBoostLimitInfo();
+    return Math.min(normalized, limit.maxDb);
+}
+
+function getAudioControlState() {
+    enforceBoostLimit({ sync: true });
+    const limit = getBoostLimitInfo();
+    return {
+        volume: Math.min(normalizeDb(tc.vars.dB), limit.maxDb),
+        mono: tc.vars.mono,
+        boostLimited: limit.boostLimited,
+        maxDb: limit.maxDb,
+        limitation: limit.note
+    };
+}
+
+function enforceBoostLimit(options = {}) {
+    const clamped = normalizeDbForCurrentMedia(tc.vars.dB);
+    if (clamped === tc.vars.dB) return false;
+
+    tc.vars.dB = clamped;
+    if (options.sync) syncPageAudioHook();
+    return true;
+}
+
+function applyFallbackVolume(element, reason = "") {
     const gain = getGainValue(tc.vars.dB);
 
     if (element.dataset.vcFallback !== 'true') {
@@ -144,6 +200,7 @@ function applyFallbackVolume(element) {
         } catch (e) {}
         element.dataset.vcFallback = 'true';
     }
+    if (reason) element.dataset.vcFallbackReason = reason;
 
     try {
         const baseVolume = element.__vc_originalVolume !== undefined
@@ -168,6 +225,7 @@ function clearFallbackVolume(element) {
 
     delete element.__vc_originalVolume;
     delete element.dataset.vcFallback;
+    delete element.dataset.vcFallbackReason;
 }
 
 function syncPageAudioHook() {
@@ -187,6 +245,7 @@ function syncPageAudioHook() {
 }
 
 function applyState() {
+    enforceBoostLimit();
     syncPageAudioHook();
 
     const audioCtx = tc.vars.audioCtx;
@@ -344,7 +403,7 @@ function connectOutput(element) {
     }
 
     if (isLikelyCrossOriginMedia(element)) {
-        applyFallbackVolume(element);
+        applyFallbackVolume(element, "cross-origin");
         log(`Skipped WebAudio hook for cross-origin media: ${getMediaSourceUrl(element)}`, 3);
         return;
     }
@@ -423,12 +482,13 @@ function connectOutput(element) {
             log("Hook Success!", 4);
         } else {
             // Fallback: if we can't create an audio node, adjust element.volume directly so user notices changes
-            applyFallbackVolume(element);
+            applyFallbackVolume(element, "route-failed");
             log("Hook fallback applied (element.volume scaled)", 3);
         }
 
     } catch (e) {
         log(`connectOutput outer failure: ${e && e.message}`, 1);
+        applyFallbackVolume(element, "route-failed");
         if (tc.settings.debugMode) element.style.border = "5px solid red";
     }
 }

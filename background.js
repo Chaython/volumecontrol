@@ -151,12 +151,25 @@ async function getDomainState(tab) {
 }
 
 async function getContentState(tab) {
+    const controlResponse = await tabsSendMessage(tab.id, { command: "getAudioControlState" }).catch(() => null);
+    if (controlResponse && controlResponse.response) {
+        const state = controlResponse.response;
+        return {
+            volume: state.volume !== undefined ? normalizeDb(state.volume) : null,
+            mono: state.mono !== undefined ? Boolean(state.mono) : null,
+            maxDb: state.maxDb !== undefined ? normalizeDb(state.maxDb) : MAX_DB,
+            boostLimited: Boolean(state.boostLimited)
+        };
+    }
+
     const volumeResponse = await tabsSendMessage(tab.id, { command: "getVolume" }).catch(() => null);
     const monoResponse = await tabsSendMessage(tab.id, { command: "getMono" }).catch(() => null);
 
     return {
         volume: volumeResponse && volumeResponse.response !== undefined ? normalizeDb(volumeResponse.response) : null,
-        mono: monoResponse && monoResponse.response !== undefined ? Boolean(monoResponse.response) : null
+        mono: monoResponse && monoResponse.response !== undefined ? Boolean(monoResponse.response) : null,
+        maxDb: MAX_DB,
+        boostLimited: false
     };
 }
 
@@ -183,10 +196,14 @@ async function getFallbackState(domainState) {
 }
 
 async function setVolume(tab, domainState, dB) {
-    const volume = normalizeDb(dB);
-    await tabsSendMessage(tab.id, { command: "setVolume", dB: volume }).catch(handleError);
-    await showNativeVolumeFeedback(tab.id, volume);
-    await saveRememberedSettings(domainState, { volume });
+    const requestedVolume = normalizeDb(dB);
+    const response = await tabsSendMessage(tab.id, { command: "setVolume", dB: requestedVolume }).catch(handleError);
+    const appliedVolume = response && response.response && response.response.volume !== undefined
+        ? normalizeDb(response.response.volume)
+        : requestedVolume;
+
+    await showNativeVolumeFeedback(tab.id, appliedVolume);
+    await saveRememberedSettings(domainState, { volume: appliedVolume });
 }
 
 async function setMono(tab, domainState, mono) {

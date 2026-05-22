@@ -14,7 +14,10 @@
     </div>
     
     <div class="top-controls">
-      <input type="range" id="volume-slider" value="0" min="-32" max="32" step="1" aria-label="Volume control" aria-keyshortcuts="Alt+Shift+ArrowUp Alt+Shift+ArrowDown Alt+Shift+0" title="Alt+Shift+Up / Alt+Shift+Down / Alt+Shift+0">
+      <input type="range" id="volume-slider" value="0" min="-32" max="32" step="1" aria-label="Volume control" aria-describedby="volume-limit-note" aria-keyshortcuts="Alt+Shift+ArrowUp Alt+Shift+ArrowDown Alt+Shift+0" title="Alt+Shift+Up / Alt+Shift+Down / Alt+Shift+0">
+      <p id="volume-limit-note" class="volume-limit-note hidden" role="status">
+        Boost is unavailable on this media because the browser only allows fallback volume control. You can still lower volume.
+      </p>
       <input type="text" id="volume-text" value="0 dB" aria-label="Volume in decibels">
     </div>
 
