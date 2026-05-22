@@ -2,6 +2,7 @@
     const HOOK_KEY = "__volumeControlPageAudioHook";
     const BRIDGE_SOURCE = "volume-control-extension";
     const BRIDGE_TARGET = "volume-control-page-audio";
+    const MEDIA_MANAGED_ATTR = "vcPageAudioManaged";
     const MIN_DB = -32;
     const MAX_DB = 32;
 
@@ -201,29 +202,11 @@
         route.outputConnected = false;
     }
 
-    function stopMediaRouteStream(route) {
-        if (!route || !route.stream || typeof route.stream.getTracks !== "function") return;
-
-        try {
-            for (const track of route.stream.getTracks()) {
-                if (track && typeof track.stop === "function") track.stop();
-            }
-        } catch (e) {
-            log(`media stream stop failed: ${e && e.message}`);
-        }
-    }
-
     function releaseMediaRoute(element) {
         const route = mediaRoutes.get(element);
         if (!route) return;
 
         disconnectMediaRouteOutput(route);
-
-        if (route.sourceKind === "captureStream") {
-            safeDisconnect(route.source);
-            stopMediaRouteStream(route);
-            mediaRoutes.delete(element);
-        }
 
         try {
             setNativeVolume(element, getMediaState(element).baseVolume);
@@ -327,21 +310,6 @@
         }
     }
 
-    function getMediaCaptureStream(element) {
-        const capture = element.captureStream || element.mozCaptureStream || element.mozCaptureStreamUntilEnded;
-        if (typeof capture !== "function") return null;
-
-        try {
-            const stream = capture.call(element);
-            if (!stream || typeof stream.getAudioTracks !== "function") return null;
-            if (!stream.getAudioTracks().length) return null;
-            return stream;
-        } catch (e) {
-            log(`media captureStream failed: ${e && e.message}`);
-            return null;
-        }
-    }
-
     function getMediaSourceUrl(element) {
         const directSrc = element.currentSrc || element.src;
         if (directSrc) return directSrc;
@@ -352,13 +320,6 @@
         } catch (e) {
             return "";
         }
-    }
-
-    function canUseCaptureStreamRoute(context) {
-        if (getGainValue(state.dB) <= 1 || typeof context.createMediaStreamSource !== "function") {
-            return false;
-        }
-        return true;
     }
 
     function isLikelyCrossOriginMedia(element) {
@@ -373,27 +334,9 @@
         }
     }
 
-    function createCaptureStreamRouteSource(context, element) {
-        if (!canUseCaptureStreamRoute(context)) return null;
-        const stream = getMediaCaptureStream(element);
-        if (!stream) return null;
-
-        try {
-            return {
-                source: markNode(context.createMediaStreamSource(stream)),
-                kind: "captureStream",
-                stream
-            };
-        } catch (e) {
-            log(`createMediaStreamSource failed: ${e && e.message}`);
-            return null;
-        }
-    }
-
     function createMediaRouteSource(context, element) {
+        // captureStream() adds a delayed parallel copy, so blocked media falls back to native volume.
         if (isLikelyCrossOriginMedia(element)) {
-            const captureSource = createCaptureStreamRouteSource(context, element);
-            if (captureSource) return captureSource;
             log(`skipping MediaElementAudioSource for cross-origin media: ${getMediaSourceUrl(element)}`);
             return null;
         }
@@ -407,7 +350,7 @@
             log(`createMediaElementSource failed: ${e && e.message}`);
         }
 
-        return createCaptureStreamRouteSource(context, element);
+        return null;
     }
 
     function readNativeVolume(element) {
@@ -521,10 +464,7 @@
     }
 
     function wireMediaRoute(route) {
-        const requestedGain = state.enabled ? getGainValue(state.dB) : 1.0;
-        const targetGain = route.sourceKind === "captureStream"
-            ? Math.max(0, requestedGain - 1)
-            : requestedGain;
+        const targetGain = state.enabled ? getGainValue(state.dB) : 1.0;
 
         try {
             const now = route.context.currentTime;
@@ -538,10 +478,6 @@
         }
 
         disconnectMediaRouteOutput(route);
-
-        if (route.sourceKind === "captureStream" && targetGain <= 0) {
-            return;
-        }
 
         try {
             if (state.enabled && state.mono) {
@@ -595,7 +531,6 @@
                 rightGain,
                 merger,
                 sourceKind: routeSource.kind,
-                stream: routeSource.stream || null,
                 outputConnected: false
             };
             mediaRoutes.set(element, route);
@@ -620,7 +555,7 @@
         if (!playing || !audible) {
             if (existingRoute) disconnectMediaRouteOutput(existingRoute);
 
-            const nativeVolume = existingRoute && existingRoute.sourceKind !== "captureStream"
+            const nativeVolume = existingRoute
                 ? entry.baseVolume
                 : Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)));
             setNativeVolume(element, nativeVolume);
@@ -632,10 +567,7 @@
             : null);
 
         if (route) {
-            const nativeVolume = route.sourceKind === "captureStream" && gain <= 1
-                ? Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)))
-                : entry.baseVolume;
-            setNativeVolume(element, nativeVolume);
+            setNativeVolume(element, entry.baseVolume);
             wireMediaRoute(route);
             if (route.outputConnected) resumeContext(route.context);
             else setTimeout(suspendMediaContextIfIdle, 250);
@@ -654,6 +586,12 @@
 
     function registerMediaElement(element, options = {}) {
         if (!isMediaElement(element)) return element;
+
+        try {
+            if (element.dataset) element.dataset[MEDIA_MANAGED_ATTR] = "true";
+        } catch (e) {
+            log(`media marker failed: ${e && e.message}`);
+        }
 
         mediaElements.add(element);
         const entry = getMediaState(element);

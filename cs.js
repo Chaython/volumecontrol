@@ -1,6 +1,7 @@
 const browserAPI = (typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null));
 const PAGE_BRIDGE_SOURCE = "volume-control-extension";
 const PAGE_BRIDGE_TARGET = "volume-control-page-audio";
+const PAGE_AUDIO_MANAGED_ATTR = "vcPageAudioManaged";
 const MIN_DB = -32;
 const MAX_DB = 32;
 const PAGE_BRIDGE_RESYNC_MS = 5000;
@@ -159,15 +160,26 @@ function isLikelyRestrictedMedia(element) {
     return false;
 }
 
+function isPageAudioManaged(element) {
+    try {
+        return Boolean(element && element.dataset && element.dataset[PAGE_AUDIO_MANAGED_ATTR] === "true");
+    } catch (e) {
+        return false;
+    }
+}
+
 function getBoostLimitReason(element) {
     if (!element || element.dataset.vcHooked === "true") return "";
 
     if (isLikelyRestrictedMedia(element)) return "restricted";
 
+    const crossOrigin = isLikelyCrossOriginMedia(element);
+    if (isPageAudioManaged(element)) return crossOrigin ? "cross-origin" : "";
+
     const fallbackReason = element.dataset.vcFallbackReason;
     if (fallbackReason) return fallbackReason;
 
-    if (isLikelyCrossOriginMedia(element)) return "cross-origin";
+    if (crossOrigin) return "cross-origin";
 
     return "";
 }
@@ -312,6 +324,11 @@ function applyState() {
         const routeNeeded = needsAudioRoute();
         const gain = getGainValue(tc.vars.dB);
         for (const el of document.querySelectorAll('audio, video')) {
+            if (isPageAudioManaged(el)) {
+                if (el.dataset.vcFallback === 'true') clearFallbackVolume(el);
+                continue;
+            }
+
             if (el.dataset.vcHooked === "true") {
                 if (routeNeeded && isMediaPlaying(el) && tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
                     tc.vars.audioCtx.resume().then(applyState);
@@ -386,7 +403,7 @@ function suspendAudioContextIfIdle() {
 }
 
 function registerMediaElement(element) {
-    if (!element || element.dataset.vcWatched === "true" || element.dataset.vcHooked === "true") return;
+    if (!element || isPageAudioManaged(element) || element.dataset.vcWatched === "true" || element.dataset.vcHooked === "true") return;
 
     element.dataset.vcWatched = "true";
     element.addEventListener('encrypted', () => {
@@ -394,6 +411,11 @@ function registerMediaElement(element) {
     }, { passive: true });
 
     const hookIfPlaying = () => {
+        if (isPageAudioManaged(element)) {
+            if (element.dataset.vcFallback === 'true') clearFallbackVolume(element);
+            return;
+        }
+
         if (tc.vars.isBlocked || !isMediaPlaying(element) || !isAudibleMediaElement(element)) {
             setTimeout(suspendAudioContextIfIdle, 250);
             return;
@@ -419,6 +441,11 @@ function registerMediaElement(element) {
 }
 
 function connectOutput(element) {
+    if (isPageAudioManaged(element)) {
+        if (element.dataset.vcFallback === "true") clearFallbackVolume(element);
+        return;
+    }
+
     if (element.dataset.vcHooked === "true") {
         if (tc.vars.mediaElements) tc.vars.mediaElements.add(element);
         if (isMediaPlaying(element) && tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
