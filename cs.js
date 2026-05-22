@@ -57,6 +57,10 @@ function getGainValue(dB) {
     return Math.pow(10, n / 20);
 }
 
+function needsAudioRoute() {
+    return !tc.vars.isBlocked && (tc.vars.mono || getGainValue(tc.vars.dB) > 1);
+}
+
 function getMediaSourceUrl(element) {
     const directSrc = element.currentSrc || element.src;
     if (directSrc) return directSrc;
@@ -101,6 +105,19 @@ function applyFallbackVolume(element) {
     } catch (e) {
         log(`Fallback volume set failed: ${e && e.message}`, 2);
     }
+}
+
+function clearFallbackVolume(element) {
+    if (!element || element.dataset.vcFallback !== 'true') return;
+
+    try {
+        if (element.__vc_originalVolume !== undefined) {
+            element.volume = element.__vc_originalVolume;
+        }
+    } catch (e) {}
+
+    delete element.__vc_originalVolume;
+    delete element.dataset.vcFallback;
 }
 
 function syncPageAudioHook() {
@@ -149,16 +166,34 @@ function applyState() {
         }
     }
 
-    // Also update any fallback elements where we couldn't hook into WebAudio
+    // Also update media elements that are using direct volume scaling.
     try {
+        const routeNeeded = needsAudioRoute();
+        const gain = getGainValue(tc.vars.dB);
         for (const el of document.querySelectorAll('audio, video')) {
-            if (el.dataset.vcFallback === 'true') {
+            if (el.dataset.vcHooked === "true") {
+                if (routeNeeded && isMediaPlaying(el) && tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
+                    tc.vars.audioCtx.resume().then(applyState);
+                }
+                continue;
+            }
+
+            if (!routeNeeded && !tc.vars.isBlocked && gain < 1) {
                 applyFallbackVolume(el);
+            } else if (el.dataset.vcFallback === 'true') {
+                if (gain === 1 && !tc.vars.mono) clearFallbackVolume(el);
+                else applyFallbackVolume(el);
+            }
+
+            if (routeNeeded && isMediaPlaying(el) && isAudibleMediaElement(el)) {
+                connectOutput(el);
             }
         }
     } catch (e) {
         if (tc.settings.debugMode) log(`applyState fallback loop failed: ${e.message}`, 3);
     }
+
+    if (!needsAudioRoute()) setTimeout(suspendAudioContextIfIdle, 250);
 }
 
 function createGainNode() {
@@ -183,26 +218,71 @@ function isAudibleMediaElement(element) {
     }
 }
 
+function suspendAudioContextIfIdle() {
+    if (!tc.vars.audioCtx || tc.vars.audioCtx.state !== 'running') return;
+
+    let isPlaying = false;
+    for (const el of tc.vars.mediaElements || []) {
+        // Clean up elements that have been removed from the DOM.
+        if (!el.isConnected) {
+            tc.vars.mediaElements.delete(el);
+            continue;
+        }
+        if (isMediaPlaying(el) && isAudibleMediaElement(el)) {
+            isPlaying = true;
+            break;
+        }
+    }
+
+    if (!isPlaying) {
+        tc.vars.audioCtx.suspend();
+    }
+}
+
 function registerMediaElement(element) {
     if (!element || element.dataset.vcWatched === "true" || element.dataset.vcHooked === "true") return;
 
     element.dataset.vcWatched = "true";
 
     const hookIfPlaying = () => {
-        if (!tc.vars.isBlocked && isMediaPlaying(element) && isAudibleMediaElement(element)) {
+        if (tc.vars.isBlocked || !isMediaPlaying(element) || !isAudibleMediaElement(element)) {
+            setTimeout(suspendAudioContextIfIdle, 250);
+            return;
+        }
+
+        if (needsAudioRoute()) {
             connectOutput(element);
+        } else if (getGainValue(tc.vars.dB) < 1 || element.dataset.vcFallback === 'true') {
+            applyFallbackVolume(element);
+        } else {
+            clearFallbackVolume(element);
         }
     };
 
     element.addEventListener('play', hookIfPlaying, { passive: true });
     element.addEventListener('playing', hookIfPlaying, { passive: true });
     element.addEventListener('volumechange', hookIfPlaying, { passive: true });
+    element.addEventListener('pause', () => setTimeout(suspendAudioContextIfIdle, 250), { passive: true });
+    element.addEventListener('ended', () => setTimeout(suspendAudioContextIfIdle, 250), { passive: true });
+    element.addEventListener('emptied', () => setTimeout(suspendAudioContextIfIdle, 250), { passive: true });
 
     hookIfPlaying();
 }
 
 function connectOutput(element) {
-    if (element.dataset.vcHooked === "true") return;
+    if (element.dataset.vcHooked === "true") {
+        if (tc.vars.mediaElements) tc.vars.mediaElements.add(element);
+        if (isMediaPlaying(element) && tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
+            tc.vars.audioCtx.resume().then(applyState);
+        }
+        return;
+    }
+    if (!needsAudioRoute()) {
+        if (getGainValue(tc.vars.dB) < 1) applyFallbackVolume(element);
+        else clearFallbackVolume(element);
+        registerMediaElement(element);
+        return;
+    }
     if (!isMediaPlaying(element) || !isAudibleMediaElement(element)) {
         registerMediaElement(element);
         return;
@@ -263,26 +343,10 @@ function connectOutput(element) {
             });
 
             // Suspend the AudioContext when media stops to release the Bluetooth lock
-            const checkSuspend = () => {
-                let isPlaying = false;
-                for (const el of tc.vars.mediaElements) {
-                    // Clean up elements that have been removed from the DOM (prevents memory leaks)
-                    if (!el.isConnected) {
-                        tc.vars.mediaElements.delete(el);
-                        continue;
-                    }
-                    if (!el.paused && !el.ended) {
-                        isPlaying = true;
-                        break;
-                    }
-                }
-                
-                if (!isPlaying && tc.vars.audioCtx && tc.vars.audioCtx.state === 'running') {
-                    tc.vars.audioCtx.suspend();
-                }
-            };
+            const checkSuspend = () => setTimeout(suspendAudioContextIfIdle, 250);
 
             // Attach listeners for any event that stops playback
+            element.addEventListener('volumechange', checkSuspend);
             element.addEventListener('pause', checkSuspend);
             element.addEventListener('ended', checkSuspend);
             element.addEventListener('emptied', checkSuspend);

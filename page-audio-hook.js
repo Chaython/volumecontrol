@@ -160,10 +160,18 @@
     function suspendMediaContextIfIdle() {
         if (!mediaAudioContext || mediaAudioContext.state !== "running") return;
 
+        let hasActiveRoute = false;
         for (const element of Array.from(mediaElements)) {
-            if (mediaRoutes.has(element) && isMediaPlaying(element) && isAudibleMediaElement(element)) {
-                return;
+            const route = mediaRoutes.get(element);
+            if (route && route.outputConnected && isMediaPlaying(element) && isAudibleMediaElement(element)) {
+                hasActiveRoute = true;
+                break;
             }
+        }
+        if (hasActiveRoute) return;
+
+        for (const element of Array.from(mediaElements)) {
+            disconnectMediaRouteOutput(mediaRoutes.get(element));
         }
 
         try {
@@ -172,6 +180,48 @@
             }
         } catch (e) {
             log(`media context suspend failed: ${e && e.message}`);
+        }
+    }
+
+    function disconnectMediaRouteOutput(route) {
+        if (!route) return;
+
+        safeDisconnect(route.gain);
+        safeDisconnect(route.splitter);
+        safeDisconnect(route.leftGain);
+        safeDisconnect(route.rightGain);
+        safeDisconnect(route.merger);
+        route.outputConnected = false;
+    }
+
+    function stopMediaRouteStream(route) {
+        if (!route || !route.stream || typeof route.stream.getTracks !== "function") return;
+
+        try {
+            for (const track of route.stream.getTracks()) {
+                if (track && typeof track.stop === "function") track.stop();
+            }
+        } catch (e) {
+            log(`media stream stop failed: ${e && e.message}`);
+        }
+    }
+
+    function releaseMediaRoute(element) {
+        const route = mediaRoutes.get(element);
+        if (!route) return;
+
+        disconnectMediaRouteOutput(route);
+
+        if (route.sourceKind === "captureStream") {
+            safeDisconnect(route.source);
+            stopMediaRouteStream(route);
+            mediaRoutes.delete(element);
+        }
+
+        try {
+            setNativeVolume(element, getMediaState(element).baseVolume);
+        } catch (e) {
+            log(`media release volume restore failed: ${e && e.message}`);
         }
     }
 
@@ -367,6 +417,7 @@
     function setNativeVolume(element, value) {
         const entry = getMediaState(element);
         entry.applyingVolume = true;
+        entry.ignoreVolumeEventsUntil = Date.now() + 100;
         try {
             if (nativeVolumeDescriptor && nativeVolumeDescriptor.set) {
                 nativeVolumeDescriptor.set.call(element, value);
@@ -384,6 +435,7 @@
             entry = {
                 baseVolume: readNativeVolume(element),
                 applyingVolume: false,
+                ignoreVolumeEventsUntil: 0,
                 listenersInstalled: false
             };
             mediaState.set(element, entry);
@@ -478,11 +530,7 @@
             log(`media gain update failed: ${e && e.message}`);
         }
 
-        safeDisconnect(route.gain);
-        safeDisconnect(route.splitter);
-        safeDisconnect(route.leftGain);
-        safeDisconnect(route.rightGain);
-        safeDisconnect(route.merger);
+        disconnectMediaRouteOutput(route);
 
         if (route.sourceKind === "captureStream" && targetGain <= 0) {
             return;
@@ -502,6 +550,7 @@
             } else {
                 connectNative(route.gain, route.context.destination);
             }
+            route.outputConnected = true;
         } catch (e) {
             log(`media graph wire failed: ${e && e.message}`);
         }
@@ -539,7 +588,8 @@
                 rightGain,
                 merger,
                 sourceKind: routeSource.kind,
-                stream: routeSource.stream || null
+                stream: routeSource.stream || null,
+                outputConnected: false
             };
             mediaRoutes.set(element, route);
             wireMediaRoute(route);
@@ -556,12 +606,23 @@
 
         const entry = getMediaState(element);
         const gain = state.enabled ? getGainValue(state.dB) : 1.0;
-        const shouldUseRoute = Boolean(
-            mediaRoutes.has(element) ||
-            options.forceRoute ||
-            isMediaPlaying(element)
-        );
-        const route = shouldUseRoute ? (mediaRoutes.get(element) || ensureMediaRoute(element)) : null;
+        const existingRoute = mediaRoutes.get(element);
+        const playing = isMediaPlaying(element);
+        const audible = isAudibleMediaElement(element);
+
+        if (!playing || !audible) {
+            if (existingRoute) disconnectMediaRouteOutput(existingRoute);
+
+            const nativeVolume = existingRoute && existingRoute.sourceKind !== "captureStream"
+                ? entry.baseVolume
+                : Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)));
+            setNativeVolume(element, nativeVolume);
+            return;
+        }
+
+        const route = existingRoute || (options.forceRoute || mediaNeedsAudioRoute()
+            ? ensureMediaRoute(element)
+            : null);
 
         if (route) {
             const nativeVolume = route.sourceKind === "captureStream" && gain <= 1
@@ -569,9 +630,8 @@
                 : entry.baseVolume;
             setNativeVolume(element, nativeVolume);
             wireMediaRoute(route);
-            if (isMediaPlaying(element) && isAudibleMediaElement(element)) {
-                resumeContext(route.context);
-            }
+            if (route.outputConnected) resumeContext(route.context);
+            else setTimeout(suspendMediaContextIfIdle, 250);
             return;
         }
 
@@ -592,17 +652,31 @@
         const entry = getMediaState(element);
         if (!entry.listenersInstalled && typeof element.addEventListener === "function") {
             const applyOnPlay = () => {
+                mediaElements.add(element);
                 applyMediaElementState(element, { forceRoute: true });
-                resumeContext(mediaAudioContext);
             };
-            const suspendWhenIdle = () => setTimeout(suspendMediaContextIfIdle, 250);
+            const suspendWhenIdle = () => {
+                if (!isMediaPlaying(element)) {
+                    disconnectMediaRouteOutput(mediaRoutes.get(element));
+                }
+                setTimeout(suspendMediaContextIfIdle, 250);
+            };
+            const applyOnVolumeChange = () => {
+                const currentEntry = getMediaState(element);
+                if (currentEntry.ignoreVolumeEventsUntil > Date.now()) return;
+
+                applyMediaElementState(element);
+                setTimeout(suspendMediaContextIfIdle, 250);
+            };
             const release = () => {
+                releaseMediaRoute(element);
                 mediaElements.delete(element);
-                suspendWhenIdle();
+                setTimeout(suspendMediaContextIfIdle, 250);
             };
 
             element.addEventListener("play", applyOnPlay, { passive: true });
             element.addEventListener("playing", applyOnPlay, { passive: true });
+            element.addEventListener("volumechange", applyOnVolumeChange, { passive: true });
             element.addEventListener("pause", suspendWhenIdle, { passive: true });
             element.addEventListener("ended", release, { passive: true });
             element.addEventListener("emptied", release, { passive: true });
@@ -711,7 +785,6 @@
 
         window.HTMLMediaElement.prototype.play = function patchedPlay() {
             registerMediaElement(this, { forceRoute: true });
-            resumeContext(mediaAudioContext);
             return nativePlay.apply(this, arguments);
         };
 
