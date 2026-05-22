@@ -8,8 +8,11 @@
 ***
 Newest update: Added Storage options, allowing the user to blacklist the extension from running on sites where the extension breaks functionality.
 
-## Version 6 Patch Notes
+## Version 6.1 Patch Notes
+- Remove the uneeded JS library
+- Be less agressive and dispose the session on stop; to help with the audio session wasting bluetooth power and keeping the system awake....
 
+Version 6 Patch Notes
 - Added Manifest V3 page-world audio integration for stricter CSP sites and app-style audio.
 - Improved detection for dynamically created audio/video and detached `Audio` elements.
 - Reduced Bluetooth idle popping by avoiding generic page-interaction resumes and lazy-loading audio hooks.
@@ -36,7 +39,12 @@ Planned features: Added to chrome extension store,
 Supports HTML5 video and audio only (no Flash).
 
 ***
+## Usage statistics
+Firefox:
 <img width="1088" height="1280" alt="image" src="https://github.com/user-attachments/assets/fc489b2d-ae2c-40c6-8e25-9fe37bda8d16" />
+Edge:
+<img width="1566" height="1029" alt="image" src="https://github.com/user-attachments/assets/5257e49b-eb1e-49c9-95e9-4664a5dff7ca" />
+
 
 
 Other Useful Extensions: 
