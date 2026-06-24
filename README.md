@@ -52,6 +52,16 @@ Volume Control asks for the browser permissions needed to control audio reliably
 
 AMO/Chrome Web Store review note: the broad host access, early `document_start` injection, and `all_frames` access are used only to detect and route page-local HTML5 media and WebAudio before playback begins. Volume Control does not collect browsing history, inspect page content for analytics, inject ads, or send page URLs, media metadata, audio content, or settings to any server.
 
+## Version 6.3 Patch Notes
+- 📶 Bluetooth fixes (7 fixes) — context suspension/closing, unrouting at unity gain
+- 🔊 Volume spike fixes (6 fixes) — smooth ramps, skip redundant reconnects, transition ordering
+- 🛑 Critical regressions caught & fixed (2) — replay break, onstatechange crash
+- 🚀 New features (2) — heartbeat/graceful degradation, bridge version negotiation
+- ⚡ Performance (6) — debouncing, caching, WeakRef, skip-redundant-sync
+- 🔍 Robustness (5) — boost limit, race condition, callApi error handling
+- ♿ Accessibility (2) — focus management, ARIA live regions
+- 🧹 Code cleanup (12) — extracted helpers, removed duplicates, dead code removal
+
 ## Version 6.2 Patch Notes
 - Added browser hotkeys for volume up, volume down, reset, and mono toggle.
 - Added native toolbar-badge volume feedback when volume is adjusted from hotkeys or popup controls.
