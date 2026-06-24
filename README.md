@@ -27,6 +27,8 @@ Settings can be remembered per site, and you can exclude sites where you do not 
 - `Alt+Shift+Down`: Decrease volume by 1 dB.
 - `Alt+Shift+0`: Reset volume to 0 dB.
 - `Alt+Shift+M`: Toggle mono audio.
+- `Unassigned due to 4 hotkey limit, edit in firefox/chrome settings [chrome://extensions/shortcuts]`: Activate the extension 
+- `Unassigned due to 4 hotkey limit, edit in firefox/chrome settings [chrome://extensions/shortcuts]`: Toggle mute.
 
 Browser shortcut settings can be used to remap or disable these defaults.
 Pin the extension icon to the toolbar to see native badge feedback while adjusting volume.
