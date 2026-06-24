@@ -18,7 +18,18 @@
       <p id="volume-limit-note" class="volume-limit-note hidden" role="status">
         Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.
       </p>
-      <input type="text" id="volume-text" value="0 dB" aria-label="Volume in decibels">
+      <div class="volume-row">
+        <button id="mute-btn" class="mute-btn" title="Mute/Unmute" aria-label="Mute or unmute audio" aria-pressed="false">
+          <svg class="mute-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path class="speaker-shape" d="M3 9v6h4l5 5V4L7 9H3z"/>
+            <path class="wave-shape" d="M14 8a5 5 0 0 1 0 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path class="wave-shape" d="M16.5 5.5a9 9 0 0 1 0 13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line class="mute-x" x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+          <span class="mute-label">Mute</span>
+        </button>
+        <input type="text" id="volume-text" value="0 dB" aria-label="Volume in decibels">
+      </div>
     </div>
 
     <div class="bot-controls"> 

@@ -31,6 +31,7 @@ const tc = {
   vars: {
     dB: 0,
     mono: false,
+    muted: false,
     audioCtx: undefined,
     gainNode: undefined,
     isBlocked: false,
@@ -75,13 +76,21 @@ if (browserAPI) {
             case "getMono":
                 sendResponse({ response: tc.vars.mono });
                 break;
+            case "setMute":
+                tc.vars.muted = Boolean(msg.muted);
+                applyState();
+                sendResponse({ response: getAudioControlState() });
+                break;
+            case "getMute":
+                sendResponse({ response: tc.vars.muted });
+                break;
         }
         return true;
     });
 }
 
 function needsAudioRoute() {
-    return !tc.vars.isBlocked && (tc.vars.mono || getGainValue(tc.vars.dB) > 1);
+    return !tc.vars.isBlocked && (tc.vars.muted || tc.vars.mono || getGainValue(tc.vars.dB) > 1);
 }
 
 function getMediaSourceUrl(element) {
@@ -239,6 +248,7 @@ function getAudioControlState() {
     return {
         volume: Math.min(normalizeDb(tc.vars.dB), limit.maxDb),
         mono: tc.vars.mono,
+        muted: Boolean(tc.vars.muted),
         boostLimited: limit.boostLimited,
         maxDb: limit.maxDb,
         limitationReason: limit.reason,
@@ -256,7 +266,7 @@ function enforceBoostLimit(options = {}) {
 }
 
 function applyFallbackVolume(element, reason = "") {
-    const gain = getGainValue(tc.vars.dB);
+    const gain = tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
     const limitReason = isLikelyRestrictedMedia(element) ? "restricted" : reason;
 
     try {
@@ -320,6 +330,7 @@ function syncPageAudioHook() {
         enabled: !tc.vars.isBlocked,
         dB: tc.vars.isBlocked ? 0 : normalizeDb(tc.vars.dB),
         mono: !tc.vars.isBlocked && tc.vars.mono,
+        muted: !tc.vars.isBlocked && Boolean(tc.vars.muted),
         debugMode: tc.settings.debugMode
     };
 
@@ -328,6 +339,7 @@ function syncPageAudioHook() {
         lastSyncedPageAudioState.enabled === currentState.enabled &&
         lastSyncedPageAudioState.dB === currentState.dB &&
         lastSyncedPageAudioState.mono === currentState.mono &&
+        lastSyncedPageAudioState.muted === currentState.muted &&
         lastSyncedPageAudioState.debugMode === currentState.debugMode) {
         return;
     }
@@ -369,7 +381,7 @@ function applyState() {
     const audioCtx = tc.vars.audioCtx;
     const gainNode = tc.vars.gainNode;
     const isEnabled = !tc.vars.isBlocked;
-    const targetGain = isEnabled ? getGainValue(tc.vars.dB) : 1.0;
+    const targetGain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB)) : 1.0;
 
     if (gainNode && audioCtx) {
         const now = audioCtx.currentTime;
@@ -403,7 +415,7 @@ function applyState() {
     // scans on every state change. Clean up disconnected elements as we go.
     try {
         const routeNeeded = needsAudioRoute();
-        const gain = getGainValue(tc.vars.dB);
+        const gain = tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
         for (const el of Array.from(tc.vars.knownMediaElements || [])) {
             // Clean up elements that have been removed from the DOM.
             if (!el.isConnected) {

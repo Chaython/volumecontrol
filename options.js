@@ -83,7 +83,7 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
         const numeric = Number.isFinite(v) ? normalizeDb(v) : normalizeDb(volInput.dataset.numericValue);
         volInput.dataset.numericValue = String(numeric);
         volInput.value = formatDb(numeric);
-        onUpdate(domain, { volume: numeric, mono: Boolean(monoCheckbox.checked) });
+        onUpdate(domain, { volume: numeric, mono: Boolean(monoCheckbox.checked), muted: Boolean(muteCheckbox.checked) });
     };
 
     volInput.addEventListener('blur', commitVol);
@@ -101,10 +101,27 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
     monoLabel.appendChild(monoText);
 
     monoCheckbox.addEventListener('change', () => {
-        onUpdate(domain, { volume: normalizeDb(volInput.dataset.numericValue), mono: Boolean(monoCheckbox.checked) });
+        onUpdate(domain, { volume: normalizeDb(volInput.dataset.numericValue), mono: Boolean(monoCheckbox.checked), muted: Boolean(muteCheckbox.checked) });
     });
 
     settingGroup.appendChild(monoLabel);
+
+    // Mute checkbox
+    const muteLabel = document.createElement('label');
+    muteLabel.className = 'mono-label';
+    const muteCheckbox = document.createElement('input');
+    muteCheckbox.type = 'checkbox';
+    muteCheckbox.checked = Boolean(settings && settings.muted);
+    muteLabel.appendChild(muteCheckbox);
+    const muteText = document.createElement('span');
+    muteText.textContent = 'Mute';
+    muteLabel.appendChild(muteText);
+
+    muteCheckbox.addEventListener('change', () => {
+        onUpdate(domain, { volume: normalizeDb(volInput.dataset.numericValue), mono: Boolean(monoCheckbox.checked), muted: Boolean(muteCheckbox.checked) });
+    });
+
+    settingGroup.appendChild(muteLabel);
 
     controls.appendChild(settingGroup);
 
@@ -153,7 +170,7 @@ async function renderMemoryList() {
                 delete settings[domain];
                 await storageSet({ siteSettings: settings });
             }, async (domain, newVal) => {
-                settings[domain] = { volume: normalizeDb(newVal.volume), mono: !!newVal.mono };
+                settings[domain] = { volume: normalizeDb(newVal.volume), mono: !!newVal.mono, muted: !!newVal.muted };
                 await storageSet({ siteSettings: settings });
             }, async (oldDomain, newDomain) => {
                 const nd = normalizeDomainInput(newDomain);

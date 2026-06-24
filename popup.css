@@ -107,14 +107,14 @@ input:checked + .slider:before { transform: translateX(16px); }
 /* --- TEXT & CONTROLS --- */
 #volume-text {
     width: auto;
+    min-width: 60px;
     border: none;
     background-color: transparent;
     text-align: center;
     font-size: 18px;
-    display: block;
-    margin: 0 auto;
     font-weight: bold;
     color: #555;
+    flex-shrink: 0;
 }
 
 .volume-limit-note {
@@ -152,9 +152,91 @@ input:checked + .slider:before { transform: translateX(16px); }
 .top-controls {
     flex-direction: column;
     width: 100%;
-    padding: 0 15px; 
+    padding: 0 15px;
     box-sizing: border-box;
     margin-bottom: 15px;
+}
+
+/* --- VOLUME ROW (mute button left, dB text centered under slider) --- */
+.volume-row {
+    display: flex;
+    align-items: center;
+    position: relative;
+    width: 100%;
+    min-height: 28px;
+}
+
+/* dB text is absolutely centered over the full row width, matching the
+   slider above (which is also full-width). This keeps it in its original
+   default position regardless of the mute button on the left. */
+.volume-row #volume-text {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    /* Allow clicks to pass through to the mute button if they happen to overlap. */
+    pointer-events: none;
+}
+
+/* But re-enable pointer events when the text is focused/editable so the user
+   can still click into it to type a value. */
+.volume-row #volume-text:focus,
+.volume-row #volume-text:hover {
+    pointer-events: auto;
+}
+
+/* --- MUTE BUTTON --- */
+.mute-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 3px 10px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+    color: #333;
+    height: 28px;
+    flex-shrink: 0;
+    margin-left: 0;
+    margin-right: auto;
+    transition: background-color .2s, border-color .2s, color .2s;
+}
+
+.mute-btn:hover {
+    background-color: #f0f0f0;
+    border-color: #999;
+}
+
+.mute-icon {
+    flex-shrink: 0;
+    fill: currentColor;
+}
+
+/* Hide the sound waves and X line by default (unmuted state) */
+.mute-icon .wave-shape { display: block; }
+.mute-icon .mute-x { display: none; }
+
+/* Muted state: show X over speaker, hide sound waves */
+.mute-btn.muted .wave-shape { display: none; }
+.mute-btn.muted .mute-x { display: block; }
+.mute-btn.muted .speaker-shape { fill: currentColor; }
+
+.mute-btn.muted {
+    background-color: #c62828;
+    border-color: #c62828;
+    color: #fff;
+}
+
+.mute-btn.muted:hover {
+    background-color: #d32f2f;
+    border-color: #d32f2f;
+}
+
+.mute-btn:focus-visible {
+    outline: 2px solid #4CAF50;
+    outline-offset: 2px;
 }
 
 .bot-controls {
@@ -233,6 +315,24 @@ input:checked + .slider:before { transform: translateX(16px); }
     .label-text { color: #e8eaed; }
     .settings { color: #e8eaed; }
     .settings:hover { color: #fff; }
+
+    .mute-btn {
+        border-color: #5f6368;
+        color: #e8eaed;
+    }
+    .mute-btn:hover {
+        background-color: #2d2e31;
+        border-color: #8ab4f8;
+    }
+    .mute-btn.muted {
+        background-color: #c62828;
+        border-color: #c62828;
+        color: #fff;
+    }
+    .mute-btn.muted:hover {
+        background-color: #d32f2f;
+        border-color: #d32f2f;
+    }
 }
 
 /* --- STATE CLASSES --- */

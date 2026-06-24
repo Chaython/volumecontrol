@@ -57,6 +57,7 @@ async function getContentState(tab) {
         return {
             volume: state.volume !== undefined ? normalizeDb(state.volume) : null,
             mono: state.mono !== undefined ? Boolean(state.mono) : null,
+            muted: state.muted !== undefined ? Boolean(state.muted) : null,
             maxDb: state.maxDb !== undefined ? normalizeDb(state.maxDb) : MAX_DB,
             boostLimited: Boolean(state.boostLimited)
         };
@@ -64,10 +65,12 @@ async function getContentState(tab) {
 
     const volumeResponse = await tabsSendMessage(tab.id, { command: "getVolume" }).catch(() => null);
     const monoResponse = await tabsSendMessage(tab.id, { command: "getMono" }).catch(() => null);
+    const muteResponse = await tabsSendMessage(tab.id, { command: "getMute" }).catch(() => null);
 
     return {
         volume: volumeResponse && volumeResponse.response !== undefined ? normalizeDb(volumeResponse.response) : null,
         mono: monoResponse && monoResponse.response !== undefined ? Boolean(monoResponse.response) : null,
+        muted: muteResponse && muteResponse.response !== undefined ? Boolean(muteResponse.response) : null,
         maxDb: MAX_DB,
         boostLimited: false
     };
@@ -77,10 +80,11 @@ async function saveRememberedSettings(domainState, updates) {
     if (!domainState || !domainState.settingsKey) return;
 
     const siteSettings = domainState.siteSettings || {};
-    const current = siteSettings[domainState.settingsKey] || { volume: 0, mono: false };
+    const current = siteSettings[domainState.settingsKey] || { volume: 0, mono: false, muted: false };
     siteSettings[domainState.settingsKey] = {
         volume: updates.volume !== undefined ? normalizeDb(updates.volume) : normalizeDb(current.volume),
-        mono: updates.mono !== undefined ? Boolean(updates.mono) : Boolean(current.mono)
+        mono: updates.mono !== undefined ? Boolean(updates.mono) : Boolean(current.mono),
+        muted: updates.muted !== undefined ? Boolean(updates.muted) : Boolean(current.muted)
     };
     await storageSet({ siteSettings });
 }
@@ -91,7 +95,8 @@ async function getFallbackState(domainState) {
     const saved = domainState.siteSettings[domainState.settingsKey] || {};
     return {
         volume: saved.volume !== undefined ? normalizeDb(saved.volume) : 0,
-        mono: Boolean(saved.mono)
+        mono: Boolean(saved.mono),
+        muted: Boolean(saved.muted)
     };
 }
 
@@ -112,6 +117,12 @@ async function setMono(tab, domainState, mono) {
     await saveRememberedSettings(domainState, { mono: enabled });
 }
 
+async function setMute(tab, domainState, muted) {
+    const enabled = Boolean(muted);
+    await tabsSendMessage(tab.id, { command: "setMute", muted: enabled }).catch(handleError);
+    await saveRememberedSettings(domainState, { muted: enabled });
+}
+
 async function handleCommand(command, commandTab) {
     const tab = await getActiveTab(commandTab);
     if (!tab || tab.id === undefined) return;
@@ -123,6 +134,7 @@ async function handleCommand(command, commandTab) {
     const fallbackState = await getFallbackState(domainState);
     const currentVolume = contentState.volume !== null ? contentState.volume : fallbackState.volume;
     const currentMono = contentState.mono !== null ? contentState.mono : fallbackState.mono;
+    const currentMuted = contentState.muted !== null ? contentState.muted : fallbackState.muted;
 
     switch (command) {
         case "volume-up":
@@ -136,6 +148,9 @@ async function handleCommand(command, commandTab) {
             break;
         case "toggle-mono":
             await setMono(tab, domainState, !currentMono);
+            break;
+        case "toggle-mute":
+            await setMute(tab, domainState, !currentMuted);
             break;
     }
 }

@@ -15,9 +15,15 @@
         enabled: true,
         dB: 0,
         mono: false,
+        muted: false,
         debugMode: false,
         extensionActive: true
     };
+    function effectiveGain() {
+        if (!state.extensionActive || !state.enabled || state.muted) return 0;
+        return getGainValue(state.dB);
+    }
+
     let lastHeartbeat = Date.now();
 
     const graphs = new WeakMap();
@@ -345,7 +351,7 @@
     }
 
     function setGainValue(graph) {
-        const targetGain = state.extensionActive && state.enabled ? getGainValue(state.dB) : 1.0;
+        const targetGain = effectiveGain();
         try {
             const now = graph.context.currentTime;
             if (graph.context.state === "running") {
@@ -545,11 +551,11 @@
     }
 
     function mediaNeedsAudioRoute() {
-        return state.extensionActive && state.enabled && (state.mono || getGainValue(state.dB) > 1);
+        return state.extensionActive && state.enabled && (state.muted || state.mono || getGainValue(state.dB) > 1);
     }
 
     function pageAudioNeedsRoute() {
-        return state.extensionActive && state.enabled && (state.mono || Number(state.dB) !== 0);
+        return state.extensionActive && state.enabled && (state.muted || state.mono || Number(state.dB) !== 0);
     }
 
     function routeRecordedDestinationConnections() {
@@ -691,7 +697,7 @@
     }
 
     function wireMediaRoute(route) {
-        const targetGain = state.extensionActive && state.enabled ? getGainValue(state.dB) : 1.0;
+        const targetGain = effectiveGain();
 
         try {
             const now = route.context.currentTime;
@@ -749,7 +755,7 @@
             rightGain.gain.value = 0.5;
             // Set the gain value BEFORE connecting the source so there is no
             // brief moment of full-volume (gain=1.0) audio at route creation.
-            gain.gain.value = state.enabled ? getGainValue(state.dB) : 1.0;
+            gain.gain.value = effectiveGain();
             connectNative(source, gain);
 
             const route = {
@@ -778,7 +784,7 @@
         if (!isMediaElement(element)) return;
 
         const entry = getMediaState(element);
-        const gain = state.enabled ? getGainValue(state.dB) : 1.0;
+        const gain = effectiveGain();
         const existingRoute = mediaRoutes.get(element);
         const playing = isMediaPlaying(element);
         const audible = isAudibleMediaElement(element);
@@ -1099,6 +1105,7 @@
         state.enabled = data.enabled !== false;
         state.dB = normalizeDb(data.dB);
         state.mono = Boolean(data.mono);
+        state.muted = Boolean(data.muted);
         state.debugMode = Boolean(data.debugMode);
 
         // Route or unroute depending on whether audio processing is needed.
@@ -1123,6 +1130,7 @@
         state.enabled = false;
         state.dB = 0;
         state.mono = false;
+        state.muted = false;
         state.extensionActive = false;
 
         unrouteDestinationConnections();

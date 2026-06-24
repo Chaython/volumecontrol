@@ -24,6 +24,7 @@ const cached = {
   monoCheckbox: null,
   rememberCheckbox: null,
   enableCheckbox: null,
+  muteBtn: null,
   maxDb: MAX_DB,
   boostLimited: false
 };
@@ -213,6 +214,17 @@ function setDisplayedVolume(dB) {
   return normalizedDb;
 }
 
+function applyMuteButtonState(muted) {
+  const btn = cached.muteBtn || document.querySelector("#mute-btn");
+  if (!btn) return;
+  const isMuted = Boolean(muted);
+  btn.classList.toggle("muted", isMuted);
+  btn.setAttribute("aria-pressed", String(isMuted));
+  const label = btn.querySelector(".mute-label");
+  if (label) label.textContent = isMuted ? "Unmute" : "Mute";
+  btn.title = isMuted ? "Unmute" : "Mute";
+}
+
 function applyAudioControlState(state = {}) {
   const maxDb = Number.isFinite(Number(state.maxDb)) ? normalizeDb(state.maxDb) : MAX_DB;
 
@@ -244,6 +256,7 @@ async function refreshAudioControlState(tab) {
         applyAudioControlState(state);
         if (state.volume !== undefined) setDisplayedVolume(state.volume);
         if (state.mono !== undefined && cached.monoCheckbox) cached.monoCheckbox.checked = Boolean(state.mono);
+        if (state.muted !== undefined) applyMuteButtonState(state.muted);
     }
 
     return state;
@@ -259,23 +272,26 @@ async function saveSiteSettings(tab) {
 
         const volumeSlider = cached.slider || document.getElementById("volume-slider");
         const monoCheckbox = cached.monoCheckbox || document.getElementById("mono-checkbox");
+        const muteBtn = cached.muteBtn || document.getElementById("mute-btn");
 
         const data = await storageGet({ siteSettings: {} });
         data.siteSettings = data.siteSettings || {};
         const settingsKey = getSiteSettingsKey(data.siteSettings, domain) || domain;
         data.siteSettings[settingsKey] = {
             volume: normalizeControlDb(volumeSlider?.value),
-            mono: Boolean(monoCheckbox?.checked)
+            mono: Boolean(monoCheckbox?.checked),
+            muted: Boolean(muteBtn && muteBtn.classList.contains("muted"))
         };
         await storageSet({ siteSettings: data.siteSettings });
 
-        // Notify the content script in this tab immediately so volume/mono are applied without waiting
+        // Notify the content script in this tab immediately so volume/mono/mute are applied without waiting
         if (tab && tab.id) {
             try {
                 tabsSendMessage(tab.id, { command: "setVolume", dB: data.siteSettings[settingsKey].volume }).catch(() => {
                     // It's possible the content script hasn't injected into the page yet; ignore harmless errors.
                 });
                 tabsSendMessage(tab.id, { command: "setMono", mono: Boolean(data.siteSettings[settingsKey].mono) }).catch(() => {});
+                tabsSendMessage(tab.id, { command: "setMute", muted: Boolean(data.siteSettings[settingsKey].muted) }).catch(() => {});
             } catch (e) {
                 // ignore messaging errors
             }
@@ -318,6 +334,13 @@ async function toggleMono(tab) {
       tabsSendMessage(tab.id, { command: "setMono", mono: monoCheckbox.checked }).catch(handleError);
       await saveSiteSettings(tab);
   }
+}
+
+async function toggleMute(tab, muted) {
+  if (!tab) return;
+  applyMuteButtonState(muted);
+  await tabsSendMessage(tab.id, { command: "setMute", muted }).catch(handleError);
+  await saveSiteSettings(tab);
 }
 
 async function toggleRemember(tab) {
@@ -405,6 +428,15 @@ async function initializeControls(tab) {
     cached.monoCheckbox = monoCheckbox;
     cached.rememberCheckbox = rememberCheckbox;
 
+    const muteBtn = document.querySelector("#mute-btn");
+    cached.muteBtn = muteBtn;
+    if (muteBtn) {
+        muteBtn.addEventListener("click", () => {
+            const nextMuted = !muteBtn.classList.contains("muted");
+            toggleMute(tab, nextMuted);
+        });
+    }
+
     applyAudioControlState({ maxDb: MAX_DB, boostLimited: false, limitation: "" });
 
     if (volumeSlider) {
@@ -457,8 +489,10 @@ async function initializeControls(tab) {
         if (saved) {
             if (rememberCheckbox) rememberCheckbox.checked = true;
             if (saved.mono !== undefined && monoCheckbox) monoCheckbox.checked = saved.mono;
+            if (saved.muted !== undefined) applyMuteButtonState(saved.muted);
             if (saved.volume !== undefined) await setVolume(saved.volume, tab, { showFeedback: false });
             tabsSendMessage(tab.id, { command: "setMono", mono: Boolean(saved.mono) }).catch(handleError);
+            tabsSendMessage(tab.id, { command: "setMute", muted: Boolean(saved.muted) }).catch(handleError);
         } else if (!audioState) {
             tabsSendMessage(tab.id, { command: "getVolume" }).then((response) => {
                 if (response && response.response !== undefined) setVolume(response.response, null);
@@ -467,6 +501,9 @@ async function initializeControls(tab) {
                 if (response && response.response !== undefined && monoCheckbox) {
                     monoCheckbox.checked = response.response;
                 }
+            }).catch(handleError);
+            tabsSendMessage(tab.id, { command: "getMute" }).then((response) => {
+                if (response && response.response !== undefined) applyMuteButtonState(response.response);
             }).catch(handleError);
         }
     } catch (e) {
