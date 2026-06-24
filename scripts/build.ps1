@@ -84,6 +84,43 @@ function New-ExtensionZip {
     }
 }
 
+function Optimize-SourceFile {
+    param([string]$FilePath)
+
+    $ext = [System.IO.Path]::GetExtension($FilePath).ToLower()
+    $content = Get-Content -Raw -LiteralPath $FilePath
+
+    if ($ext -eq ".js") {
+        # Regex matches Strings (Group 1), Block Comments (Group 2), Line Comments (Group 3)
+        # We replace Groups 2 and 3 with empty strings, and return Group 1 intact.
+        $pattern = '("(?:[^"\\]|\\.)*"|''(?:[^''\\]|\\.)*''|`(?:[^`\\]|\\.)*`)|(/\*[\s\S]*?\*/)|(//.*)'
+        $evaluator = [System.Text.RegularExpressions.MatchEvaluator] {
+            param([System.Text.RegularExpressions.Match]$m)
+            if ($m.Groups[2].Success -or $m.Groups[3].Success) {
+                return ""
+            }
+            return $m.Value
+        }
+        $content = [System.Text.RegularExpressions.Regex]::Replace($content, $pattern, $evaluator)
+        
+        # Remove empty lines
+        $content = [System.Text.RegularExpressions.Regex]::Replace($content, '(?m)^\s*\r?\n', '')
+    }
+    elseif ($ext -eq ".css") {
+        # Strip CSS block comments
+        $content = $content -replace '(?s)/\*.*?\*/', ''
+        $content = [System.Text.RegularExpressions.Regex]::Replace($content, '(?m)^\s*\r?\n', '')
+    }
+    elseif ($ext -eq ".html") {
+        # Strip HTML comments
+        $content = $content -replace '(?s)', ''
+        $content = [System.Text.RegularExpressions.Regex]::Replace($content, '(?m)^\s*\r?\n', '')
+    }
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($FilePath, $content, $utf8NoBom)
+}
+
 function Copy-ExtensionFiles {
     param([string]$PackageDir, [string]$IconFile)
 
@@ -93,7 +130,11 @@ function Copy-ExtensionFiles {
     }
 
     foreach ($file in $rootFiles) {
-        Copy-Item -LiteralPath $file.FullName -Destination $PackageDir
+        $destPath = Join-Path $PackageDir $file.Name
+        Copy-Item -LiteralPath $file.FullName -Destination $destPath
+        
+        # Minify Pass: Strip comments and empty lines
+        Optimize-SourceFile -FilePath $destPath
     }
 
     Copy-Item -LiteralPath (Join-Path $RootPath $IconFile) -Destination $PackageDir
@@ -135,8 +176,8 @@ function New-ManifestVariant {
         }
         else {
             $manifest | Add-Member -NotePropertyName "background" -NotePropertyValue ([ordered]@{
-                scripts = @("shared.js", "background.js")
-            })
+                    scripts = @("shared.js", "background.js")
+                })
         }
     }
 

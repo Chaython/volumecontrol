@@ -12,7 +12,8 @@ const {
   tabsReload,
   openOptionsPage,
   domainMatchesSaved,
-  getSiteSettingsKey
+  getSiteSettingsKey,
+  isHarmlessMessageError
 } = globalThis.VolumeControlShared;
 const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
 const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
@@ -196,15 +197,8 @@ async function toggleSitePermission(domain, shouldExclude, tabId) {
 } 
 
 function handleError(error) {
+  if (isHarmlessMessageError(error)) return;
   const msg = error.message || error;
-  if (typeof msg === 'string') {
-      if (msg.includes("Receiving end does not exist") ||
-          msg.includes("Could not establish connection") ||
-          msg.includes("message channel closed")
-      ) {
-          return;
-      }
-  }
   console.error(`Volume Control: Error: ${msg}`);
 }
 

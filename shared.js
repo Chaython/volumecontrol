@@ -150,6 +150,20 @@
         return RESTRICTED_PROTOCOLS.includes(protocol);
     }
 
+    // Returns true for messaging errors that are safe to ignore (content script
+    // not yet injected, tab navigated away, etc.). Used by background.js and
+    // popup.js to suppress noise from expected race conditions.
+    const HARMLESS_MESSAGE_ERRORS = [
+        "Receiving end does not exist",
+        "Could not establish connection",
+        "message channel closed"
+    ];
+    function isHarmlessMessageError(error) {
+        const msg = error && (error.message || error);
+        if (typeof msg !== 'string') return false;
+        return HARMLESS_MESSAGE_ERRORS.some(fragment => msg.includes(fragment));
+    }
+
     global.VolumeControlShared = {
         browserApi,
         MIN_DB,
@@ -172,10 +186,10 @@
         actionSetBadgeBackgroundColor,
         actionSetTitle,
         normalizeDomainInput,
-        normalizeSavedDomain: normalizeDomainInput,
         extractRootDomain,
         domainMatchesSaved,
         getSiteSettingsKey,
-        isRestrictedUrl
+        isRestrictedUrl,
+        isHarmlessMessageError
     };
 })(globalThis);

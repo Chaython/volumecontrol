@@ -35,9 +35,11 @@ const tc = {
     gainNode: undefined,
     isBlocked: false,
     pendingInit: false,
+    // Media elements successfully hooked into our AudioContext (source.connect'd).
     mediaElements: new Set(),
-    // All known media elements on the page (hooked or not). Populated by
-    // registerMediaElement and init. Used by applyState to avoid querySelectorAll.
+    // All known media elements on the page (hooked, fallback, or page-managed).
+    // Populated by registerMediaElement and init. Used by applyState to avoid
+    // querySelectorAll on every state change.
     knownMediaElements: new Set()
   }
 };
@@ -552,9 +554,10 @@ function registerMediaElement(element) {
     element.addEventListener('play', hookIfPlaying, { passive: true });
     element.addEventListener('playing', hookIfPlaying, { passive: true });
     element.addEventListener('volumechange', hookIfPlaying, { passive: true });
-    element.addEventListener('pause', () => setTimeout(suspendAudioContextIfIdle, 250), { passive: true });
-    element.addEventListener('ended', () => setTimeout(suspendAudioContextIfIdle, 250), { passive: true });
-    element.addEventListener('emptied', () => setTimeout(suspendAudioContextIfIdle, 250), { passive: true });
+    const scheduleSuspend = () => setTimeout(suspendAudioContextIfIdle, 250);
+    for (const evt of ['pause', 'ended', 'emptied']) {
+        element.addEventListener(evt, scheduleSuspend, { passive: true });
+    }
 
     hookIfPlaying();
 }
@@ -661,22 +664,12 @@ function connectOutput(element) {
 
             // Suspend the AudioContext when media stops to release the Bluetooth lock
             const checkSuspend = () => setTimeout(suspendAudioContextIfIdle, 250);
-
-            // Attach listeners for any event that stops playback
-            element.addEventListener('volumechange', checkSuspend);
-            element.addEventListener('pause', checkSuspend);
-            element.addEventListener('ended', checkSuspend);
-            element.addEventListener('emptied', checkSuspend);
+            for (const evt of ['volumechange', 'pause', 'ended', 'emptied']) {
+                element.addEventListener(evt, checkSuspend, { passive: true });
+            }
 
             // Remove any fallback adjustments we may have made earlier
-            if (element.dataset.vcFallback === 'true') {
-                try {
-                    if (element.__vc_originalVolume !== undefined) element.volume = element.__vc_originalVolume;
-                } catch (e) {}
-                delete element.__vc_originalVolume;
-                delete element.dataset.vcFallback;
-                delete element.dataset.vcFallbackReason;
-            }
+            clearFallbackVolume(element);
 
             applyState();
             checkSuspend();
@@ -813,7 +806,7 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
         // Previously this called start() AND a separate siteSettings handler,
         // causing double storage reads, double applyState() calls, and potential
         // race conditions if the two reads completed in different orders.
-        if (changes.whitelistMode || changes.fqdns || changes.whitelist || changes.siteSettings) {
+        if (changes.whitelistMode || changes.fqdns || changes.siteSettings) {
             start();
         }
 

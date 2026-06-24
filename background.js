@@ -18,7 +18,8 @@ const {
     extractRootDomain,
     domainMatchesSaved,
     getSiteSettingsKey,
-    isRestrictedUrl
+    isRestrictedUrl,
+    isHarmlessMessageError
 } = globalThis.VolumeControlShared;
 const HOTKEY_STEP_DB = 1;
 
@@ -140,15 +141,8 @@ async function handleCommand(command, commandTab) {
 }
 
 function handleError(error) {
+    if (isHarmlessMessageError(error)) return;
     const msg = error && (error.message || error);
-    if (typeof msg === 'string') {
-        if (msg.includes("Receiving end does not exist") ||
-            msg.includes("Could not establish connection") ||
-            msg.includes("message channel closed")
-        ) {
-            return;
-        }
-    }
     console.error(`Volume Control: Hotkey error: ${msg}`);
 }
 

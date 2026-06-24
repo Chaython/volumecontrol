@@ -107,13 +107,13 @@
 
     function makeNodeRef(node) {
         // Use WeakRef when available so GC'd nodes don't keep entries alive.
-        // Fall back to direct reference on older engines.
+        // Fall back to a deref-passthrough wrapper on older engines.
         return supportsWeakRef ? new WeakRef(node) : { deref: () => node };
     }
 
     function nodeFromRef(ref) {
-        if (!ref) return undefined;
-        return supportsWeakRef ? ref.deref() : ref.deref();
+        // Both WeakRef and the fallback wrapper expose .deref()
+        return ref ? ref.deref() : undefined;
     }
 
     function findDestinationConnection(source, destination, outputIndex, inputIndex) {
@@ -202,6 +202,31 @@
         return getMediaState(element).baseVolume > 0;
     }
 
+    // Returns true if any media element has an active (playing + audible + connected)
+    // route on the given context. If context is omitted, checks the mediaAudioContext.
+    function hasActiveMediaRoute(context) {
+        for (const element of mediaElements) {
+            const route = mediaRoutes.get(element);
+            if (route && route.outputConnected &&
+                (!context || route.context === context) &&
+                isMediaPlaying(element) && isAudibleMediaElement(element)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Disconnect the output side of all media routes on the given context.
+    // If context is omitted, disconnects all routes.
+    function disconnectAllMediaRouteOutputs(context) {
+        for (const element of Array.from(mediaElements)) {
+            const route = mediaRoutes.get(element);
+            if (route && (!context || route.context === context)) {
+                disconnectMediaRouteOutput(route);
+            }
+        }
+    }
+
     function suspendMediaContextIfIdle() {
         // Also suspend any idle page-level contexts we've routed through.
         suspendIdleContexts();
@@ -209,19 +234,9 @@
         if (!mediaAudioContext || mediaAudioContext.state === "closed") return;
         if (mediaAudioContext.state !== "running") return;
 
-        let hasActiveRoute = false;
-        for (const element of Array.from(mediaElements)) {
-            const route = mediaRoutes.get(element);
-            if (route && route.outputConnected && isMediaPlaying(element) && isAudibleMediaElement(element)) {
-                hasActiveRoute = true;
-                break;
-            }
-        }
-        if (hasActiveRoute) return;
+        if (hasActiveMediaRoute(mediaAudioContext)) return;
 
-        for (const element of Array.from(mediaElements)) {
-            disconnectMediaRouteOutput(mediaRoutes.get(element));
-        }
+        disconnectAllMediaRouteOutputs(mediaAudioContext);
 
         // Check if any media routes remain after disconnecting idle ones.
         let hasAnyRoute = false;
@@ -269,16 +284,7 @@
             if (ctx === mediaAudioContext) continue; // handled by suspendMediaContextIfIdle
 
             // Check if any media route on this context is still playing.
-            let mediaActive = false;
-            for (const element of mediaElements) {
-                const route = mediaRoutes.get(element);
-                if (route && route.context === ctx && route.outputConnected &&
-                    isMediaPlaying(element) && isAudibleMediaElement(element)) {
-                    mediaActive = true;
-                    break;
-                }
-            }
-            if (mediaActive) continue;
+            if (hasActiveMediaRoute(ctx)) continue;
 
             // Check if any destination connection on this context is still routed.
             // For page-owned audio (Howler, WebAudio apps), we conservatively assume
@@ -339,7 +345,7 @@
     }
 
     function setGainValue(graph) {
-        const targetGain = state.enabled ? getGainValue(state.dB) : 1.0;
+        const targetGain = state.extensionActive && state.enabled ? getGainValue(state.dB) : 1.0;
         try {
             const now = graph.context.currentTime;
             if (graph.context.state === "running") {
@@ -357,14 +363,31 @@
         }
     }
 
+    // Compute the current routing mode string from state. Used by wireGraph and
+    // wireMediaRoute to skip redundant disconnect/reconnect cycles.
+    function currentRoutingMode() {
+        const wantMono = state.extensionActive && state.enabled && state.mono;
+        return (state.extensionActive && state.enabled) ? (wantMono ? "mono" : "stereo") : "bypass";
+    }
+
+    // Connect a mono down-mix chain: gain → splitter → L/R gains → merger → destination.
+    // Used by wireGraph (page-level contexts) and wireMediaRoute (media element routes).
+    function connectMonoChain(gain, splitter, leftGain, rightGain, merger, destination) {
+        connectNative(gain, splitter);
+        connectNative(splitter, leftGain, 0);
+        connectNative(splitter, rightGain, 1);
+        connectNative(leftGain, merger, 0, 0);
+        connectNative(rightGain, merger, 0, 0);
+        connectNative(leftGain, merger, 0, 1);
+        connectNative(rightGain, merger, 0, 1);
+        connectNative(merger, destination);
+    }
+
     function wireGraph(graph) {
         setGainValue(graph);
 
         // Skip the disconnect/reconnect cycle if the routing mode hasn't changed.
-        // This prevents brief audio dropouts (perceived as spikes/clicks) when
-        // applyStateToGraphs is called on every state sync.
-        const wantMono = state.enabled && state.mono;
-        const wantMode = state.enabled ? (wantMono ? "mono" : "stereo") : "bypass";
+        const wantMode = currentRoutingMode();
         if (graph.currentMode === wantMode) return;
         graph.currentMode = wantMode;
 
@@ -375,16 +398,8 @@
         safeDisconnect(graph.merger);
 
         try {
-            if (state.enabled && state.mono) {
-                connectNative(graph.gain, graph.splitter);
-                connectNative(graph.splitter, graph.leftGain, 0);
-                connectNative(graph.splitter, graph.rightGain, 1);
-
-                connectNative(graph.leftGain, graph.merger, 0, 0);
-                connectNative(graph.rightGain, graph.merger, 0, 0);
-                connectNative(graph.leftGain, graph.merger, 0, 1);
-                connectNative(graph.rightGain, graph.merger, 0, 1);
-                connectNative(graph.merger, graph.context.destination);
+            if (state.extensionActive && state.enabled && state.mono) {
+                connectMonoChain(graph.gain, graph.splitter, graph.leftGain, graph.rightGain, graph.merger, graph.context.destination);
             } else {
                 connectNative(graph.gain, graph.context.destination);
             }
@@ -676,7 +691,7 @@
     }
 
     function wireMediaRoute(route) {
-        const targetGain = state.enabled ? getGainValue(state.dB) : 1.0;
+        const targetGain = state.extensionActive && state.enabled ? getGainValue(state.dB) : 1.0;
 
         try {
             const now = route.context.currentTime;
@@ -693,24 +708,15 @@
         }
 
         // Skip the disconnect/reconnect cycle if the routing mode hasn't changed.
-        const wantMono = state.enabled && state.mono;
-        const wantMode = state.enabled ? (wantMono ? "mono" : "stereo") : "bypass";
+        const wantMode = currentRoutingMode();
         if (route.currentMode === wantMode) return;
         route.currentMode = wantMode;
 
         disconnectMediaRouteOutput(route);
 
         try {
-            if (state.enabled && state.mono) {
-                connectNative(route.gain, route.splitter);
-                connectNative(route.splitter, route.leftGain, 0);
-                connectNative(route.splitter, route.rightGain, 1);
-
-                connectNative(route.leftGain, route.merger, 0, 0);
-                connectNative(route.rightGain, route.merger, 0, 0);
-                connectNative(route.leftGain, route.merger, 0, 1);
-                connectNative(route.rightGain, route.merger, 0, 1);
-                connectNative(route.merger, route.context.destination);
+            if (state.extensionActive && state.enabled && state.mono) {
+                connectMonoChain(route.gain, route.splitter, route.leftGain, route.rightGain, route.merger, route.context.destination);
             } else {
                 connectNative(route.gain, route.context.destination);
             }
@@ -1044,6 +1050,21 @@
         }
     }
 
+    // Post a message from the page hook back to the content script (reverse
+    // direction of the normal bridge flow).
+    function postToContentScript(command, extra = {}) {
+        try {
+            window.postMessage({
+                source: BRIDGE_TARGET,
+                target: BRIDGE_SOURCE,
+                command,
+                ...extra
+            }, "*");
+        } catch (e) {
+            log(`postToContentScript (${command}) failed: ${e && e.message}`);
+        }
+    }
+
     function handleBridgeMessage(event) {
         if (event.source !== window) return;
 
@@ -1061,15 +1082,7 @@
                 // Request a fresh state sync from the content script. Our state
                 // was reset to defaults by restoreNativeBehavior, and the content
                 // script's syncPageAudioHook would skip if it thinks nothing changed.
-                try {
-                    window.postMessage({
-                        source: BRIDGE_TARGET,
-                        target: BRIDGE_SOURCE,
-                        command: "requestState"
-                    }, "*");
-                } catch (e) {
-                    log(`requestState post failed: ${e && e.message}`);
-                }
+                postToContentScript("requestState");
             }
             return;
         }
