@@ -57,6 +57,20 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 # Changelog
 
 <details>
+
+<details>
+<summary><strong>Version 6.4 – Patch Notes</strong></summary>
+
+- New	Dedicated mute channel (independent of the volume slider)
+- New	Native element.muted for fallback-only media (Bluetooth-friendly)
+- New	"MUTE" browser-action badge
+- New	Muted-state slider dim + tooltip
+- New	Mute checkbox in Remembered Settings
+- Fixed	effectiveGain() regression that silenced audio when extension was disabled
+- Optimized	Skip redundant enforceBoostLimit in setMute response path
+
+</details>
+
 <summary><strong>Version 6.3 – Patch Notes</strong></summary>
 
 📶 **Bluetooth fixes (7)** — context suspension/closing, unrouting at unity gain  
