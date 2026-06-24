@@ -1,9 +1,16 @@
-const browserAPI = (typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null));
+const {
+    browserApi: browserAPI,
+    MAX_DB,
+    normalizeDb,
+    getGainValue,
+    storageGet,
+    domainMatchesSaved,
+    getSiteSettingsKey
+} = globalThis.VolumeControlShared;
+const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
 const PAGE_BRIDGE_SOURCE = "volume-control-extension";
 const PAGE_BRIDGE_TARGET = "volume-control-page-audio";
 const PAGE_AUDIO_MANAGED_ATTR = "vcPageAudioManaged";
-const MIN_DB = -32;
-const MAX_DB = 32;
 const PAGE_BRIDGE_RESYNC_MS = 5000;
 const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
 const BOOST_LIMIT_NOTES = {
@@ -35,53 +42,6 @@ function log(msg, level = 4) {
   if (tc.settings.logLevel >= level) console.log(`[VolumeControl] ${logTypes[level-2]}: ${msg}`);
 }
 
-function normalizeDb(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 0;
-    return Math.max(MIN_DB, Math.min(MAX_DB, Math.round(n)));
-}
-
-function getRuntimeLastError() {
-    return browserAPI && browserAPI.runtime ? browserAPI.runtime.lastError : null;
-}
-
-function callApi(method, args = []) {
-    return new Promise((resolve, reject) => {
-        let settled = false;
-        const finish = (error, value) => {
-            if (settled) return;
-            settled = true;
-            if (error) reject(error);
-            else resolve(value);
-        };
-        const callback = (value) => {
-            finish(getRuntimeLastError(), value);
-        };
-
-        try {
-            const result = method(...args, callback);
-            if (result && typeof result.then === 'function') {
-                result.then((value) => finish(null, value), (error) => finish(error));
-            }
-        } catch (callbackError) {
-            try {
-                const result = method(...args);
-                if (result && typeof result.then === 'function') {
-                    result.then((value) => finish(null, value), (error) => finish(error));
-                } else {
-                    finish(null, result);
-                }
-            } catch (promiseError) {
-                finish(promiseError || callbackError);
-            }
-        }
-    });
-}
-
-function storageGet(keys) {
-    return callApi(browserAPI.storage.local.get.bind(browserAPI.storage.local), [keys]);
-}
-
 if (browserAPI) {
     browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (tc.vars.isBlocked) return;
@@ -111,11 +71,6 @@ if (browserAPI) {
         }
         return true;
     });
-}
-
-function getGainValue(dB) {
-    const n = normalizeDb(dB);
-    return Math.pow(10, n / 20);
 }
 
 function needsAudioRoute() {
@@ -238,12 +193,28 @@ function applyFallbackVolume(element, reason = "") {
     const gain = getGainValue(tc.vars.dB);
     const limitReason = isLikelyRestrictedMedia(element) ? "restricted" : reason;
 
-    if (element.dataset.vcFallback !== 'true') {
-        try {
-            element.__vc_originalVolume = gain > 1 ? 1 : element.volume;
-        } catch (e) {}
+    try {
+        const currentVolume = (typeof element.volume === 'number') ? element.volume : 1;
+        if (element.dataset.vcFallback !== 'true') {
+            // First time applying fallback; capture original volume.
+            element.__vc_originalVolume = gain > 1 ? 1 : currentVolume;
+        } else {
+            // Already in fallback mode. If the page changed element.volume out
+            // from under us (e.g., the page's own volume slider), update
+            // __vc_originalVolume to reflect the page's intent. Without this,
+            // the captured original can become stale and cause a volume spike
+            // when the route is later established and volume is restored.
+            const origBase = element.__vc_originalVolume !== undefined
+                ? element.__vc_originalVolume
+                : (gain > 1 ? 1 : currentVolume);
+            const expectedScaled = Math.min(1, Math.max(0, origBase * Math.min(gain, 1)));
+            if (Math.abs(currentVolume - expectedScaled) > 0.05) {
+                // Page changed volume; treat current as the new "original".
+                element.__vc_originalVolume = gain > 1 ? 1 : currentVolume;
+            }
+        }
         element.dataset.vcFallback = 'true';
-    }
+    } catch (e) {}
     if (limitReason) element.dataset.vcFallbackReason = limitReason;
 
     try {
@@ -272,16 +243,36 @@ function clearFallbackVolume(element) {
     delete element.dataset.vcFallbackReason;
 }
 
+// Track the last state sent to the page-audio hook so we can skip redundant
+// postMessage calls. This prevents the 5-second resync interval and rapid
+// slider movements from triggering unnecessary applyStateToGraphs() /
+// applyStateToMediaElements() cycles on the page, which can cause audio dropouts.
+let lastSyncedPageAudioState = null;
+
 function syncPageAudioHook() {
+    const currentState = {
+        enabled: !tc.vars.isBlocked,
+        dB: tc.vars.isBlocked ? 0 : normalizeDb(tc.vars.dB),
+        mono: !tc.vars.isBlocked && tc.vars.mono,
+        debugMode: tc.settings.debugMode
+    };
+
+    // Skip if nothing changed since the last sync.
+    if (lastSyncedPageAudioState &&
+        lastSyncedPageAudioState.enabled === currentState.enabled &&
+        lastSyncedPageAudioState.dB === currentState.dB &&
+        lastSyncedPageAudioState.mono === currentState.mono &&
+        lastSyncedPageAudioState.debugMode === currentState.debugMode) {
+        return;
+    }
+    lastSyncedPageAudioState = currentState;
+
     try {
         window.postMessage({
             source: PAGE_BRIDGE_SOURCE,
             target: PAGE_BRIDGE_TARGET,
             command: "setState",
-            enabled: !tc.vars.isBlocked,
-            dB: tc.vars.isBlocked ? 0 : normalizeDb(tc.vars.dB),
-            mono: !tc.vars.isBlocked && tc.vars.mono,
-            debugMode: tc.settings.debugMode
+            ...currentState
         }, "*");
     } catch (e) {
         if (tc.settings.debugMode) log(`page audio sync failed: ${e.message}`, 3);
@@ -299,15 +290,20 @@ function applyState() {
 
     if (gainNode && audioCtx) {
         const now = audioCtx.currentTime;
-        gainNode.gain.value = targetGain;
 
         if (audioCtx.state === 'running') {
             try {
+                // Smooth ramp to avoid audible clicks/spikes when the user drags
+                // the slider rapidly. 15ms is short enough to feel responsive but
+                // long enough to prevent zipper noise.
                 gainNode.gain.cancelScheduledValues(now);
-                gainNode.gain.setValueAtTime(targetGain, now);
+                gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+                gainNode.gain.linearRampToValueAtTime(targetGain, now + 0.015);
             } catch (e) {
                 if (tc.settings.debugMode) log(`applyState schedule failed: ${e.message}`, 2);
             }
+        } else {
+            gainNode.gain.value = targetGain;
         }
 
         if (isEnabled && tc.vars.mono) {
@@ -351,7 +347,11 @@ function applyState() {
         if (tc.settings.debugMode) log(`applyState fallback loop failed: ${e.message}`, 3);
     }
 
-    if (!needsAudioRoute()) setTimeout(suspendAudioContextIfIdle, 250);
+    // Always schedule a suspend/close check, even when boost or mono is active.
+    // Previously this was gated on !needsAudioRoute(), which meant the context
+    // was never suspended while boost/mono was on — causing Bluetooth devices
+    // to stay active after playback paused.
+    setTimeout(suspendAudioContextIfIdle, 250);
 }
 
 function createGainNode() {
@@ -382,23 +382,38 @@ function ensurePageBridgeResync() {
 }
 
 function suspendAudioContextIfIdle() {
-    if (!tc.vars.audioCtx || tc.vars.audioCtx.state !== 'running') return;
+    if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') return;
+    if (tc.vars.audioCtx.state !== 'running') return;
 
     let isPlaying = false;
+    let hasHooked = false;
     for (const el of tc.vars.mediaElements || []) {
         // Clean up elements that have been removed from the DOM.
         if (!el.isConnected) {
             tc.vars.mediaElements.delete(el);
             continue;
         }
+        if (el.dataset.vcHooked === "true") hasHooked = true;
         if (isMediaPlaying(el) && isAudibleMediaElement(el)) {
             isPlaying = true;
             break;
         }
     }
 
-    if (!isPlaying) {
+    if (isPlaying) return;
+
+    if (!hasHooked) {
+        // No media is hooked into this context; close it to fully release the
+        // OS audio device handle (critical for Bluetooth devices that stay
+        // active while a running AudioContext holds the output stream open).
+        const ctx = tc.vars.audioCtx;
+        tc.vars.audioCtx = null;
+        tc.vars.gainNode = null;
+        ctx.close().catch(() => {});
+        if (tc.settings.debugMode) log("audio context closed (no hooked media) — device handle released", 3);
+    } else {
         tc.vars.audioCtx.suspend();
+        if (tc.settings.debugMode) log("audio context suspended (media paused)", 4);
     }
 }
 
@@ -588,33 +603,8 @@ function initWhenReady() {
 }
 
 function extractRootDomain(url) {
-    if (!url) return "";
-    let domain = url.replace(/^(https?|ftp):\/\/(www\.)?/, '');
-    domain = domain.split('/')[0].split(':')[0];
-    return domain.toLowerCase();
+    return sharedExtractRootDomain(url, { fileValue: "file" });
 } 
-
-function normalizeSavedDomain(value) {
-    if (!value) return "";
-    let domain = String(value).trim().toLowerCase();
-    domain = domain.replace(/^(https?|ftp):\/\/(www\.)?/, '');
-    domain = domain.split('/')[0].split(':')[0];
-    return domain;
-}
-
-function domainMatchesSaved(domain, savedDomain) {
-    const saved = normalizeSavedDomain(savedDomain);
-    return Boolean(domain && saved && (domain === saved || domain.endsWith(`.${saved}`)));
-}
-
-function getSiteSettingsKey(siteSettings, domain) {
-    if (!siteSettings || !domain) return null;
-    if (siteSettings[domain]) return domain;
-
-    return Object.keys(siteSettings)
-        .filter(savedDomain => domainMatchesSaved(domain, savedDomain))
-        .sort((a, b) => b.length - a.length)[0] || null;
-}
 
 async function start() {
     if (!browserAPI) return;

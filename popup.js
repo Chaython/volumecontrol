@@ -1,6 +1,20 @@
-const browserApi = (typeof browser !== 'undefined') ? browser : (typeof chrome !== 'undefined' ? chrome : null);
-const MIN_DB = -32;
-const MAX_DB = 32;
+const {
+  browserApi,
+  MIN_DB,
+  MAX_DB,
+  normalizeDb,
+  formatDb,
+  storageGet,
+  storageSet,
+  tabsQuery,
+  tabsSendMessage,
+  runtimeSendMessage,
+  tabsReload,
+  openOptionsPage,
+  domainMatchesSaved,
+  getSiteSettingsKey
+} = globalThis.VolumeControlShared;
+const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
 const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
 const cached = {
   slider: null,
@@ -13,112 +27,12 @@ const cached = {
   boostLimited: false
 };
 
-function normalizeDb(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(MIN_DB, Math.min(MAX_DB, Math.round(n)));
-}
-
 function normalizeControlDb(value) {
   return Math.min(normalizeDb(value), cached.maxDb);
 }
 
-function getRuntimeLastError() {
-  return browserApi && browserApi.runtime ? browserApi.runtime.lastError : null;
-}
-
-function callApi(method, args = []) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (error, value) => {
-      if (settled) return;
-      settled = true;
-      if (error) reject(error);
-      else resolve(value);
-    };
-    const callback = (value) => {
-      finish(getRuntimeLastError(), value);
-    };
-
-    try {
-      const result = method(...args, callback);
-      if (result && typeof result.then === 'function') {
-        result.then((value) => finish(null, value), (error) => finish(error));
-      }
-    } catch (callbackError) {
-      try {
-        const result = method(...args);
-        if (result && typeof result.then === 'function') {
-          result.then((value) => finish(null, value), (error) => finish(error));
-        } else {
-          finish(null, result);
-        }
-      } catch (promiseError) {
-        finish(promiseError || callbackError);
-      }
-    }
-  });
-}
-
-function storageGet(keys) {
-  return callApi(browserApi.storage.local.get.bind(browserApi.storage.local), [keys]);
-}
-
-function storageSet(obj) {
-  return callApi(browserApi.storage.local.set.bind(browserApi.storage.local), [obj]).then(() => undefined);
-} 
-
-function tabsQuery(queryInfo) {
-  return callApi(browserApi.tabs.query.bind(browserApi.tabs), [queryInfo]);
-}
-
-function tabsSendMessage(tabId, message) {
-  return callApi(browserApi.tabs.sendMessage.bind(browserApi.tabs), [tabId, message]);
-}
-
-function runtimeSendMessage(message) {
-  return callApi(browserApi.runtime.sendMessage.bind(browserApi.runtime), [message]);
-}
-
-function tabsReload(tabId) {
-  return callApi(browserApi.tabs.reload.bind(browserApi.tabs), [tabId]).then(() => undefined);
-}
-
-function openOptionsPage() {
-  return callApi(browserApi.runtime.openOptionsPage.bind(browserApi.runtime)).then(() => undefined);
-}
-
 function extractRootDomain(url) {
-    if (!url) return null;
-    if (url.startsWith('file:')) return 'Local File';
-    if (url.startsWith('chrome') || url.startsWith('edge') || url.startsWith('about') || url.startsWith('extension')) return null;
-
-    let domain = url.replace(/^(https?|ftp):\/\/(www\.)?/, '');
-    domain = domain.split('/')[0];
-    domain = domain.split(':')[0];
-    return domain.toLowerCase();
-}
-
-function getSiteSettingsKey(siteSettings, domain) {
-    if (!siteSettings || !domain) return null;
-    if (siteSettings[domain]) return domain;
-
-    return Object.keys(siteSettings)
-        .filter(savedDomain => domainMatchesSaved(domain, savedDomain))
-        .sort((a, b) => b.length - a.length)[0] || null;
-}
-
-function normalizeSavedDomain(value) {
-    if (!value) return "";
-    let domain = String(value).trim().toLowerCase();
-    domain = domain.replace(/^(https?|ftp):\/\/(www\.)?/, '');
-    domain = domain.split('/')[0].split(':')[0];
-    return domain;
-}
-
-function domainMatchesSaved(domain, savedDomain) {
-    const saved = normalizeSavedDomain(savedDomain);
-    return Boolean(domain && saved && (domain === saved || domain.endsWith(`.${saved}`)));
+    return sharedExtractRootDomain(url, { nullForInvalid: true });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -294,18 +208,13 @@ function handleError(error) {
   console.error(`Volume Control: Error: ${msg}`);
 }
 
-function formatValue(dB) {
-  const n = normalizeDb(dB);
-  return `${n >= 0 ? '+' : ''}${n} dB`;
-}
-
 function setDisplayedVolume(dB) {
   const normalizedDb = normalizeControlDb(dB);
   const slider = cached.slider || document.querySelector("#volume-slider");
   const text = cached.volumeText || document.querySelector("#volume-text");
 
   if (slider) slider.value = String(normalizedDb);
-  if (text) text.value = formatValue(normalizedDb);
+  if (text) text.value = formatDb(normalizedDb);
 
   return normalizedDb;
 }

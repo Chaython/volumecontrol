@@ -1,127 +1,26 @@
-const browserApi = (typeof browser !== 'undefined') ? browser : (typeof chrome !== 'undefined' ? chrome : null);
-const MIN_DB = -32;
-const MAX_DB = 32;
+if (typeof importScripts === 'function' && typeof globalThis.VolumeControlShared === 'undefined') {
+    importScripts('shared.js');
+}
+
+const {
+    browserApi,
+    MAX_DB,
+    normalizeDb,
+    formatDb,
+    formatBadgeText,
+    storageGet,
+    storageSet,
+    tabsQuery,
+    tabsSendMessage,
+    actionSetBadgeText,
+    actionSetBadgeBackgroundColor,
+    actionSetTitle,
+    extractRootDomain,
+    domainMatchesSaved,
+    getSiteSettingsKey,
+    isRestrictedUrl
+} = globalThis.VolumeControlShared;
 const HOTKEY_STEP_DB = 1;
-
-function normalizeDb(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 0;
-    return Math.max(MIN_DB, Math.min(MAX_DB, Math.round(n)));
-}
-
-function formatDb(value) {
-    const n = normalizeDb(value);
-    return `${n >= 0 ? '+' : ''}${n} dB`;
-}
-
-function formatBadgeText(value) {
-    const n = normalizeDb(value);
-    return n > 0 ? `+${n}` : String(n);
-}
-
-function getRuntimeLastError() {
-    return browserApi && browserApi.runtime ? browserApi.runtime.lastError : null;
-}
-
-function callApi(method, args = []) {
-    return new Promise((resolve, reject) => {
-        let settled = false;
-        const finish = (error, value) => {
-            if (settled) return;
-            settled = true;
-            if (error) reject(error);
-            else resolve(value);
-        };
-        const callback = (value) => {
-            finish(getRuntimeLastError(), value);
-        };
-
-        try {
-            const result = method(...args, callback);
-            if (result && typeof result.then === 'function') {
-                result.then((value) => finish(null, value), (error) => finish(error));
-            }
-        } catch (callbackError) {
-            try {
-                const result = method(...args);
-                if (result && typeof result.then === 'function') {
-                    result.then((value) => finish(null, value), (error) => finish(error));
-                } else {
-                    finish(null, result);
-                }
-            } catch (promiseError) {
-                finish(promiseError || callbackError);
-            }
-        }
-    });
-}
-
-function storageGet(keys) {
-    return callApi(browserApi.storage.local.get.bind(browserApi.storage.local), [keys]);
-}
-
-function storageSet(obj) {
-    return callApi(browserApi.storage.local.set.bind(browserApi.storage.local), [obj]).then(() => undefined);
-}
-
-function tabsQuery(queryInfo) {
-    return callApi(browserApi.tabs.query.bind(browserApi.tabs), [queryInfo]);
-}
-
-function tabsSendMessage(tabId, message) {
-    return callApi(browserApi.tabs.sendMessage.bind(browserApi.tabs), [tabId, message]);
-}
-
-function actionSetBadgeText(details) {
-    return callApi(browserApi.action.setBadgeText.bind(browserApi.action), [details]).then(() => undefined);
-}
-
-function actionSetBadgeBackgroundColor(details) {
-    return callApi(browserApi.action.setBadgeBackgroundColor.bind(browserApi.action), [details]).then(() => undefined);
-}
-
-function actionSetTitle(details) {
-    return callApi(browserApi.action.setTitle.bind(browserApi.action), [details]).then(() => undefined);
-}
-
-function extractRootDomain(url) {
-    if (!url) return "";
-    if (url.startsWith('file:')) return 'Local File';
-    if (url.startsWith('chrome') || url.startsWith('edge') || url.startsWith('about') || url.startsWith('extension')) return "";
-
-    let domain = url.replace(/^(https?|ftp):\/\/(www\.)?/, '');
-    domain = domain.split('/')[0];
-    domain = domain.split(':')[0];
-    return domain.toLowerCase();
-}
-
-function normalizeSavedDomain(value) {
-    if (!value) return "";
-    let domain = String(value).trim().toLowerCase();
-    domain = domain.replace(/^(https?|ftp):\/\/(www\.)?/, '');
-    domain = domain.split('/')[0].split(':')[0];
-    return domain;
-}
-
-function domainMatchesSaved(domain, savedDomain) {
-    const saved = normalizeSavedDomain(savedDomain);
-    return Boolean(domain && saved && (domain === saved || domain.endsWith(`.${saved}`)));
-}
-
-function getSiteSettingsKey(siteSettings, domain) {
-    if (!siteSettings || !domain) return null;
-    if (siteSettings[domain]) return domain;
-
-    return Object.keys(siteSettings)
-        .filter(savedDomain => domainMatchesSaved(domain, savedDomain))
-        .sort((a, b) => b.length - a.length)[0] || null;
-}
-
-function isRestrictedUrl(url) {
-    if (!url) return false;
-    const protocol = url.split(':')[0];
-    return ['chrome', 'edge', 'about', 'extension', 'chrome-extension', 'moz-extension', 'view-source'].includes(protocol);
-}
 
 async function getActiveTab(commandTab) {
     if (commandTab && commandTab.id !== undefined) return commandTab;

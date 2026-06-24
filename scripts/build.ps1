@@ -127,12 +127,15 @@ function New-ManifestVariant {
                 $manifest.background.PSObject.Properties.Remove("service_worker")
             }
             if (-not ($manifest.background.PSObject.Properties.Name -contains "scripts")) {
-                $manifest.background | Add-Member -NotePropertyName "scripts" -NotePropertyValue @($backgroundScript)
+                $manifest.background | Add-Member -NotePropertyName "scripts" -NotePropertyValue @("shared.js", $backgroundScript)
+            }
+            elseif ($manifest.background.scripts -notcontains "shared.js") {
+                $manifest.background.scripts = @("shared.js") + @($manifest.background.scripts)
             }
         }
         else {
             $manifest | Add-Member -NotePropertyName "background" -NotePropertyValue ([ordered]@{
-                scripts = @("background.js")
+                scripts = @("shared.js", "background.js")
             })
         }
     }
