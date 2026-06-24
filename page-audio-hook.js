@@ -20,7 +20,10 @@
         extensionActive: true
     };
     function effectiveGain() {
-        if (!state.extensionActive || !state.enabled || state.muted) return 0;
+        // When the extension is inactive (disabled, blocked, or heartbeat lost),
+        // pass audio through at unity so page audio behaves natively.
+        if (!state.extensionActive || !state.enabled) return 1.0;
+        if (state.muted) return 0;
         return getGainValue(state.dB);
     }
 

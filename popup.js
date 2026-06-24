@@ -223,6 +223,15 @@ function applyMuteButtonState(muted) {
   const label = btn.querySelector(".mute-label");
   if (label) label.textContent = isMuted ? "Unmute" : "Mute";
   btn.title = isMuted ? "Unmute" : "Mute";
+
+  // Reflect muted state on the slider + popup container so users see why
+  // dragging the slider does not change audible volume.
+  const popupContent = document.querySelector("#popup-content");
+  if (popupContent) popupContent.classList.toggle("is-muted", isMuted);
+  const slider = cached.slider || document.querySelector("#volume-slider");
+  if (slider) {
+    slider.title = isMuted ? "Volume (muted) - click Unmute to hear audio" : "Alt+Shift+Up / Alt+Shift+Down / Alt+Shift+0";
+  }
 }
 
 function applyAudioControlState(state = {}) {
@@ -244,6 +253,11 @@ function applyAudioControlState(state = {}) {
     note.textContent = state.limitation || BOOST_LIMIT_NOTE;
     note.classList.toggle("hidden", !cached.boostLimited);
   }
+
+  // Keep the mute button in sync with the content script's actual state.
+  // This matters when a setVolume response carries a muted flag that was
+  // changed elsewhere (e.g. via the hotkey while the popup was open).
+  if (state.muted !== undefined) applyMuteButtonState(state.muted);
 }
 
 async function refreshAudioControlState(tab) {
@@ -318,10 +332,14 @@ async function setVolume(dB, tab, options = {}) {
       }
 
       if (options.showFeedback !== false) {
+          const muted = (response && response.response && response.response.muted !== undefined)
+              ? Boolean(response.response.muted)
+              : Boolean(cached.muteBtn && cached.muteBtn.classList.contains("muted"));
           runtimeSendMessage({
               command: "showNativeVolumeFeedback",
               tabId: tab.id,
-              dB: normalizedDb
+              dB: normalizedDb,
+              muted
           }).catch(() => {});
       }
       await saveSiteSettings(tab);
@@ -339,7 +357,15 @@ async function toggleMono(tab) {
 async function toggleMute(tab, muted) {
   if (!tab) return;
   applyMuteButtonState(muted);
-  await tabsSendMessage(tab.id, { command: "setMute", muted }).catch(handleError);
+  const response = await tabsSendMessage(tab.id, { command: "setMute", muted }).catch(handleError);
+  // Update the browser-action badge immediately so the icon reflects mute state.
+  const dB = Number(cached.slider && cached.slider.value) || 0;
+  runtimeSendMessage({
+      command: "showNativeVolumeFeedback",
+      tabId: tab.id,
+      dB,
+      muted
+  }).catch(() => {});
   await saveSiteSettings(tab);
 }
 

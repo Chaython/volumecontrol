@@ -119,7 +119,10 @@ async function setMono(tab, domainState, mono) {
 
 async function setMute(tab, domainState, muted) {
     const enabled = Boolean(muted);
-    await tabsSendMessage(tab.id, { command: "setMute", muted: enabled }).catch(handleError);
+    const response = await tabsSendMessage(tab.id, { command: "setMute", muted: enabled }).catch(handleError);
+    const dB = (response && response.response && response.response.volume !== undefined)
+        ? normalizeDb(response.response.volume) : 0;
+    await showNativeVolumeFeedback(tab.id, dB, enabled);
     await saveRememberedSettings(domainState, { muted: enabled });
 }
 
@@ -161,13 +164,21 @@ function handleError(error) {
     console.error(`Volume Control: Hotkey error: ${msg}`);
 }
 
-async function showNativeVolumeFeedback(tabId, dB) {
+async function showNativeVolumeFeedback(tabId, dB, muted) {
     if (!browserApi || !browserApi.action) return;
 
     const volume = normalizeDb(dB);
     const details = Number.isInteger(tabId) ? { tabId } : {};
-    const color = volume > 0 ? '#2e7d32' : (volume < 0 ? '#c62828' : '#5f6368');
 
+    if (muted) {
+        // Muted: red "MUTE" badge (Chrome truncates to 4 chars; "MUTE" fits).
+        await actionSetBadgeBackgroundColor({ ...details, color: '#c62828' }).catch(handleError);
+        await actionSetBadgeText({ ...details, text: 'MUTE' }).catch(handleError);
+        await actionSetTitle({ ...details, title: 'Volume Control (muted)' }).catch(handleError);
+        return;
+    }
+
+    const color = volume > 0 ? '#2e7d32' : (volume < 0 ? '#c62828' : '#5f6368');
     await actionSetBadgeBackgroundColor({ ...details, color }).catch(handleError);
     await actionSetBadgeText({ ...details, text: formatBadgeText(volume) }).catch(handleError);
     await actionSetTitle({ ...details, title: `Volume Control (${formatDb(volume)})` }).catch(handleError);
@@ -183,7 +194,7 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
     browserApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!message || message.command !== "showNativeVolumeFeedback") return false;
 
-        showNativeVolumeFeedback(message.tabId, message.dB)
+        showNativeVolumeFeedback(message.tabId, message.dB, message.muted)
             .then(() => sendResponse({}))
             .catch((error) => {
                 handleError(error);

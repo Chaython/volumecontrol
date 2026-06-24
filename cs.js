@@ -79,7 +79,23 @@ if (browserAPI) {
             case "setMute":
                 tc.vars.muted = Boolean(msg.muted);
                 applyState();
-                sendResponse({ response: getAudioControlState() });
+                // Build the response without re-running enforceBoostLimit;
+                // boost limit is unchanged by a mute toggle, and applyState()
+                // already synced the page-audio hook above.
+                {
+                    const limit = getBoostLimitInfo();
+                    sendResponse({
+                        response: {
+                            volume: Math.min(normalizeDb(tc.vars.dB), limit.maxDb),
+                            mono: tc.vars.mono,
+                            muted: Boolean(tc.vars.muted),
+                            boostLimited: limit.boostLimited,
+                            maxDb: limit.maxDb,
+                            limitationReason: limit.reason,
+                            limitation: limit.note
+                        }
+                    });
+                }
                 break;
             case "getMute":
                 sendResponse({ response: tc.vars.muted });
@@ -294,6 +310,18 @@ function applyFallbackVolume(element, reason = "") {
     if (limitReason) element.dataset.vcFallbackReason = limitReason;
 
     try {
+        // Native mute: when the extension is muted, set element.muted = true
+        // so the browser can release the OS audio device handle (important for
+        // Bluetooth headphones that stay active while a media element plays).
+        // We still restore __vc_originalVolume below so unmuting is clean.
+        if (tc.vars.muted) {
+            element.muted = true;
+            if (tc.settings.debugMode) element.style.border = "2px dashed #ffa500";
+            return;
+        }
+        // Unmute native property if we previously muted it.
+        if (element.muted) element.muted = false;
+
         const baseVolume = element.__vc_originalVolume !== undefined
             ? element.__vc_originalVolume
             : (gain > 1 ? 1 : element.volume);
@@ -312,6 +340,8 @@ function clearFallbackVolume(element) {
         if (element.__vc_originalVolume !== undefined) {
             element.volume = element.__vc_originalVolume;
         }
+        // Clear any native mute we applied while in fallback mode.
+        if (element.muted) element.muted = false;
     } catch (e) {}
 
     delete element.__vc_originalVolume;
@@ -434,10 +464,14 @@ function applyState() {
                 continue;
             }
 
-            if (!routeNeeded && !tc.vars.isBlocked && gain < 1) {
+            if (tc.vars.muted && !routeNeeded) {
+                // Muted but no WebAudio route (e.g. fallback-only media):
+                // apply native element.muted so the OS can release audio.
+                applyFallbackVolume(el);
+            } else if (!routeNeeded && !tc.vars.isBlocked && gain < 1) {
                 applyFallbackVolume(el);
             } else if (el.dataset.vcFallback === 'true') {
-                if (gain === 1 && !tc.vars.mono) clearFallbackVolume(el);
+                if (gain === 1 && !tc.vars.mono && !tc.vars.muted) clearFallbackVolume(el);
                 else applyFallbackVolume(el);
             }
 
