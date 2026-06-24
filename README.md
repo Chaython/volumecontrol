@@ -52,37 +52,62 @@ Volume Control asks for the browser permissions needed to control audio reliably
 
 AMO/Chrome Web Store review note: the broad host access, early `document_start` injection, and `all_frames` access are used only to detect and route page-local HTML5 media and WebAudio before playback begins. Volume Control does not collect browsing history, inspect page content for analytics, inject ads, or send page URLs, media metadata, audio content, or settings to any server.
 
-## Version 6.3 Patch Notes
-- 📶 Bluetooth fixes (7 fixes) — context suspension/closing, unrouting at unity gain
-- 🔊 Volume spike fixes (6 fixes) — smooth ramps, skip redundant reconnects, transition ordering
-- 🛑 Critical regressions caught & fixed (2) — replay break, onstatechange crash
-- 🚀 New features (2) — heartbeat/graceful degradation, bridge version negotiation
-- ⚡ Performance (6) — debouncing, caching, WeakRef, skip-redundant-sync
-- 🔍 Robustness (5) — boost limit, race condition, callApi error handling
-- ♿ Accessibility (2) — focus management, ARIA live regions
-- 🧹 Code cleanup (12) — extracted helpers, removed duplicates, dead code removal
+# Changelog
 
-## Version 6.2 Patch Notes
-- Added browser hotkeys for volume up, volume down, reset, and mono toggle.
-- Added native toolbar-badge volume feedback when volume is adjusted from hotkeys or popup controls.
-- Hotkey changes update remembered settings when the current site is already remembered.
+<details>
+<summary><strong>Version 6.3 – Patch Notes</strong></summary>
 
-## Version 6.1 Patch Notes
-- Removed the unused JS library.
-- Be less aggressive and dispose the audio session on stop to help prevent audio sessions from wasting Bluetooth power or keeping the system awake.
+📶 **Bluetooth fixes (7)** — context suspension/closing, unrouting at unity gain  
+🔊 **Volume spike fixes (6)** — smoother ramps, skip redundant reconnects, improved transition ordering  
+🛑 **Critical regressions fixed (2)** — replay break, `onstatechange` crash  
+🚀 **New features (2)** — heartbeat + graceful degradation, bridge version negotiation  
+⚡ **Performance (6)** — debouncing, caching, `WeakRef`, skip‑redundant‑sync  
+🔍 **Robustness (5)** — boost limit, race‑condition fixes, improved `callApi` error handling  
+♿ **Accessibility (2)** — focus management, ARIA live‑region updates  
+🧹 **Code cleanup (12)** — extracted helpers, removed duplicates, dead‑code removal  
 
-## Version 6 Patch Notes
-- Added Manifest V3 page-world audio integration for stricter CSP sites and app-style audio.
-- Improved detection for dynamically created audio/video and detached `Audio` elements.
-- Reduced Bluetooth idle popping by avoiding generic page-interaction resumes and lazy-loading audio hooks.
-- Improved remembered site settings on app-style pages and subdomains.
-- Restored boosting for app pages that create WebAudio connections before volume is adjusted.
-- Added a direct Howler master-gain route for sites that hide their audio graph internals.
-- Added a cross-origin media guard/fallback for app audio clips so boosted CDN audio keeps playing when browsers block routed gain.
-- Added automated Firefox and Chrome package builds with separate SVG/PNG manifest icons.
-- Removed an unused third-party DOM watcher dependency from the extension package.
-- Build zips now use AMO-compatible forward-slash archive paths.
-- Updated project license notice to include Chaython Meredith.
+</details>
+
+---
+
+<details>
+<summary><strong>Version 6.2 – Patch Notes</strong></summary>
+
+- Added browser hotkeys for volume up/down, reset, and mono toggle  
+- Added native toolbar‑badge volume feedback for hotkeys and popup adjustments  
+- Hotkey changes now update remembered settings when the current site is already remembered  
+
+</details>
+
+---
+
+<details>
+<summary><strong>Version 6.1 – Patch Notes</strong></summary>
+
+- Removed an unused JS library  
+- Reduced Bluetooth idle power usage by disposing audio sessions more cleanly on stop  
+
+</details>
+
+---
+
+<details>
+<summary><strong>Version 6.0 – Patch Notes</strong></summary>
+
+- Added Manifest V3 page‑world audio integration for stricter CSP sites and app‑style audio  
+- Improved detection for dynamic audio/video elements and detached `Audio` nodes  
+- Reduced Bluetooth idle popping by avoiding generic page‑interaction resumes and lazy‑loading audio hooks  
+- Improved remembered‑site settings on app‑style pages and subdomains  
+- Restored boosting for app pages that create WebAudio connections before volume is adjusted  
+- Added direct Howler master‑gain routing for sites that hide their audio graph internals  
+- Added cross‑origin media guard/fallback so boosted CDN audio keeps playing when browsers block routed gain  
+- Added automated Firefox + Chrome package builds with separate SVG/PNG manifest icons  
+- Removed an unused third‑party DOM watcher dependency  
+- Build zips now use AMO‑compatible forward‑slash archive paths  
+- Updated project license notice to include Chaython Meredith  
+
+</details>
+
 
 Planned features: Added to Chrome Web Store.
 
@@ -95,6 +120,82 @@ Planned features: Added to Chrome Web Store.
 
 
 Supports HTML5 video and audio only (no Flash).
+
+<details>
+<summary><h2>📁 File Descriptions</h2></summary>
+
+### Complete File Reference
+
+| File | World / Context | Has `window`? | Has `chrome.*`? | Can Patch Page JS? | Purpose | Why It Must Be Separate |
+|---|---|---|---|---|---|---|
+| `shared.js` | Loaded into multiple contexts (MAIN + ISOLATED) | ✅ | ✅ (guarded) | ❌ | Pure utility library — dB conversion, media element helpers, domain parsing, bridge constants, error helpers | The only file that can appear in multiple contexts; guards all `chrome.*` calls so it doesn't crash in MAIN world |
+| `page-audio-hook.js` | **MAIN world** content script | ✅ Page's `window` | ❌ | ✅ **Yes** | Patches `AudioNode.prototype.connect`, `HTMLMediaElement.prototype.volume`, `HTMLMediaElement.prototype.play`, `window.Audio`, `document.createElement` to insert gain nodes into the page's audio graph | **Must** run in MAIN world — prototype patches only affect code in the same JS realm; extension APIs are stripped from MAIN world for security |
+| `cs.js` | **ISOLATED world** content script | ✅ Clean `window` | ✅ | ❌ | Content script bridge — reads/writes `chrome.storage`, handles messages from popup/background, syncs state to `page-audio-hook.js` via `window.postMessage`, manages fallback volume for cross-origin/DRM media | **Must** run in ISOLATED world to access `chrome.storage` and `chrome.runtime` APIs; communicates with MAIN world via `postMessage` |
+| `background.js` | **Service worker** (background) | ❌ No DOM | ✅ | ❌ | Handles keyboard shortcuts (`Alt+Shift+Up`/`Down`/`0`/`M`), shows native volume feedback badge, manages per-site remembered settings | **Must** be a service worker — runs globally (not per-tab), has no DOM access, gets killed when idle; can't be merged with page-context scripts |
+| `popup.js` | **Popup page** (`popup.html`) | ✅ Own DOM | ✅ | ❌ | Popup UI logic — volume slider, mono toggle, remember-site checkbox, enable/disable switch, debounced storage writes, focus management for accessibility | Runs in `popup.html`'s isolated DOM; separate from options page because popup logic and options logic have no overlapping DOM concerns |
+| `options.js` | **Options page** (`options.html`) | ✅ Own DOM | ✅ | ❌ | Options UI logic — blocklist/whitelist management, remembered-sites editor, debug mode toggle, live storage sync | Runs in `options.html`'s isolated DOM; separate from popup because it manages different UI with different lifecycle (stays open vs. closes on action) |
+| `manifest.json` | Extension manifest | — | — | — | Declares permissions, content scripts (with world specification), background service worker, action popup, options page, keyboard commands, Firefox compatibility | Defines which scripts load in which world; the only place where the MAIN/ISOLATED split is configured |
+| `popup.html` | Popup document | ✅ | — | ❌ | Popup markup — volume slider, mono/remember/active toggles, settings button, exclusion message, error display | Required entry point for `browser.action.default_popup` |
+| `popup.css` | Popup styles | — | — | — | Popup styling — slider, switches, layout, dark mode support | Keeps presentation separate from popup logic |
+| `options.html` | Options document | ✅ | — | ❌ | Options markup — whitelist mode toggle, blocklist editor, remembered-sites editor, debug mode toggle | Required entry point for `options_ui.open_in_tab` |
+| `ico.svg` | Extension icon | — | — | — | Toolbar icon (96×96 SVG) | Referenced by `manifest.json` `icons` and `action.default_icon` |
+
+### The MAIN / ISOLATED World Wall
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Page's JavaScript (MAIN world)                     │
+│                                                     │
+│  page-audio-hook.js                                 │
+│  • Patches AudioNode.prototype.connect              │
+│  • Patches HTMLMediaElement.prototype.volume        │
+│  • Patches HTMLMediaElement.prototype.play          │
+│  • Has NO access to chrome.* APIs                   │
+│                                                     │
+└──────────────────┬──────────────────────────────────┘
+                   │
+                   │  window.postMessage (bridge)
+                   │
+┌──────────────────▼──────────────────────────────────┐
+│  Content Script (ISOLATED world)                    │
+│                                                     │
+│  cs.js                                              │
+│  • Reads/writes chrome.storage                      │
+│  • Handles messages from popup/background           │
+│  • Syncs state to page-audio-hook.js                │
+│  • CANNOT patch page prototypes                     │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
+
+**This split is non-negotiable.** Chrome's MV3 security model strips `chrome.*` from MAIN world scripts, and ISOLATED world scripts can't modify page prototypes. The two scripts communicate via `window.postMessage` — the only bridge between worlds.
+
+### Why `shared.js` Is Special
+
+`shared.js` is **not a context** — it's a library loaded *into* multiple contexts:
+
+```json
+// manifest.json — shared.js appears in BOTH content script entries
+{
+  "js": ["shared.js", "page-audio-hook.js"],  // MAIN world
+  "world": "MAIN"
+},
+{
+  "js": ["shared.js", "cs.js"]                // ISOLATED world (default)
+}
+```
+
+It guards all `chrome.*` calls with optional chaining (`if (!browserApi?.storage) return ...`) so it doesn't crash when loaded in MAIN world where `browser`/`chrome` are undefined.
+
+### Minimum File Count
+
+**5 execution contexts → 5 files** (background, page-audio-hook, cs, popup, options)
+**1 shared library → shared.js** (loaded into 3 of the 5 contexts)
+
+This is the minimum possible file count given the WebExtension API's security constraints.
+
+</details>
+
 
 ***
 ## Usage statistics
