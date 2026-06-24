@@ -28,6 +28,8 @@
         return browserApi && browserApi.runtime ? browserApi.runtime.lastError : null;
     }
 
+    const BRIDGE_VERSION = 1;
+
     function callApi(method, args = []) {
         return new Promise((resolve, reject) => {
             let settled = false;
@@ -46,16 +48,26 @@
                 if (result && typeof result.then === 'function') {
                     result.then((value) => finish(null, value), (error) => finish(error));
                 }
+                // Callback-style API: wait for callback to fire.
             } catch (callbackError) {
-                try {
-                    const result = method(...args);
-                    if (result && typeof result.then === 'function') {
-                        result.then((value) => finish(null, value), (error) => finish(error));
-                    } else {
-                        finish(null, result);
+                // Only retry without callback if the error specifically indicates
+                // an argument/callback mismatch. Other errors (e.g., permission
+                // denied) are propagated immediately to avoid duplicating side
+                // effects from a partially-executed first call.
+                const msg = callbackError && callbackError.message ? callbackError.message : String(callbackError);
+                if (/argument|callback|Incorrect number of arguments/i.test(msg)) {
+                    try {
+                        const result = method(...args);
+                        if (result && typeof result.then === 'function') {
+                            result.then((value) => finish(null, value), (error) => finish(error));
+                        } else {
+                            finish(null, result);
+                        }
+                    } catch (promiseError) {
+                        finish(promiseError || callbackError);
                     }
-                } catch (promiseError) {
-                    finish(promiseError || callbackError);
+                } else {
+                    finish(callbackError);
                 }
             }
         });
@@ -143,6 +155,7 @@
         MIN_DB,
         MAX_DB,
         RESTRICTED_PROTOCOLS,
+        BRIDGE_VERSION,
         normalizeDb,
         getGainValue,
         formatDb,

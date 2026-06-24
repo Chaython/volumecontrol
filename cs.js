@@ -5,13 +5,15 @@ const {
     getGainValue,
     storageGet,
     domainMatchesSaved,
-    getSiteSettingsKey
+    getSiteSettingsKey,
+    BRIDGE_VERSION
 } = globalThis.VolumeControlShared;
 const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
 const PAGE_BRIDGE_SOURCE = "volume-control-extension";
 const PAGE_BRIDGE_TARGET = "volume-control-page-audio";
 const PAGE_AUDIO_MANAGED_ATTR = "vcPageAudioManaged";
 const PAGE_BRIDGE_RESYNC_MS = 5000;
+const PAGE_BRIDGE_HEARTBEAT_MS = 3000;
 const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
 const BOOST_LIMIT_NOTES = {
     "cross-origin": "Limited by cross-origin media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
@@ -33,7 +35,10 @@ const tc = {
     gainNode: undefined,
     isBlocked: false,
     pendingInit: false,
-    mediaElements: new Set()
+    mediaElements: new Set(),
+    // All known media elements on the page (hooked or not). Populated by
+    // registerMediaElement and init. Used by applyState to avoid querySelectorAll.
+    knownMediaElements: new Set()
   }
 };
 
@@ -139,26 +144,85 @@ function getBoostLimitReason(element) {
     return "";
 }
 
+// Boost limit cache: avoid running querySelectorAll on every state change.
+// Invalidated by a MutationObserver when audio/video elements are added/removed,
+// and by a TTL to catch async state changes (e.g., mediaKeys being set).
+let boostLimitCache = null;
+let boostLimitCacheTime = 0;
+const BOOST_LIMIT_CACHE_TTL_MS = 1000;
+
+function invalidateBoostLimitCache() {
+    boostLimitCache = null;
+}
+
 function getBoostLimitInfo() {
     if (tc.vars.isBlocked) return { boostLimited: false, maxDb: MAX_DB, reason: "", note: "" };
 
+    // Return cached result if still fresh.
+    const now = Date.now();
+    if (boostLimitCache && now - boostLimitCacheTime < BOOST_LIMIT_CACHE_TTL_MS) {
+        return boostLimitCache;
+    }
+
+    let result = { boostLimited: false, maxDb: MAX_DB, reason: "", note: "" };
+
     try {
+        // Only check currently-playing elements. A paused or src-less element
+        // shouldn't prevent boost on other elements that are actually playing.
+        // If nothing is playing, don't restrict — the user might be about to
+        // play something, and we don't want to lock the slider based on stale state.
         for (const el of document.querySelectorAll('audio, video')) {
+            if (!isMediaPlaying(el) && !el.src && !el.currentSrc) continue;
             const reason = getBoostLimitReason(el);
             if (reason) {
-                return {
+                result = {
                     boostLimited: true,
                     maxDb: 0,
                     reason,
                     note: BOOST_LIMIT_NOTES[reason] || BOOST_LIMIT_NOTES.fallback
                 };
+                break;
             }
         }
     } catch (e) {
         if (tc.settings.debugMode) log(`boost limit check failed: ${e.message}`, 3);
     }
 
-    return { boostLimited: false, maxDb: MAX_DB, reason: "", note: "" };
+    boostLimitCache = result;
+    boostLimitCacheTime = now;
+    return result;
+}
+
+function setupBoostLimitObserver() {
+    // Invalidate the boost limit cache when audio/video elements are added or
+    // removed from the DOM, so the next call to getBoostLimitInfo recomputes.
+    if (typeof MutationObserver === 'undefined') return;
+    const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
+                if (node.nodeName === 'AUDIO' || node.nodeName === 'VIDEO' ||
+                    (node.querySelectorAll && node.querySelector('audio, video'))) {
+                    invalidateBoostLimitCache();
+                    return;
+                }
+            }
+            for (const node of mutation.removedNodes) {
+                if (node.nodeName === 'AUDIO' || node.nodeName === 'VIDEO' ||
+                    (node.querySelectorAll && node.querySelector('audio, video'))) {
+                    invalidateBoostLimitCache();
+                    return;
+                }
+            }
+        }
+    });
+    const startObserving = () => {
+        observer.observe(document.documentElement || document, { childList: true, subtree: true });
+    };
+    if (document.documentElement) {
+        startObserving();
+    } else {
+        document.addEventListener('DOMContentLoaded', startObserving, { once: true });
+    }
 }
 
 function normalizeDbForCurrentMedia(value) {
@@ -272,10 +336,27 @@ function syncPageAudioHook() {
             source: PAGE_BRIDGE_SOURCE,
             target: PAGE_BRIDGE_TARGET,
             command: "setState",
+            version: BRIDGE_VERSION,
             ...currentState
         }, "*");
     } catch (e) {
         if (tc.settings.debugMode) log(`page audio sync failed: ${e.message}`, 3);
+    }
+}
+
+function sendPageAudioHeartbeat() {
+    // Heartbeat so the page-audio hook knows the content script is still alive.
+    // If this stops (extension disabled/updated), the hook will restore native
+    // audio behavior.
+    try {
+        window.postMessage({
+            source: PAGE_BRIDGE_SOURCE,
+            target: PAGE_BRIDGE_TARGET,
+            command: "heartbeat",
+            version: BRIDGE_VERSION
+        }, "*");
+    } catch (e) {
+        // ignore
     }
 }
 
@@ -316,10 +397,17 @@ function applyState() {
     }
 
     // Also update media elements that are using direct volume scaling.
+    // Iterate knownMediaElements instead of querySelectorAll to avoid O(n) DOM
+    // scans on every state change. Clean up disconnected elements as we go.
     try {
         const routeNeeded = needsAudioRoute();
         const gain = getGainValue(tc.vars.dB);
-        for (const el of document.querySelectorAll('audio, video')) {
+        for (const el of Array.from(tc.vars.knownMediaElements || [])) {
+            // Clean up elements that have been removed from the DOM.
+            if (!el.isConnected) {
+                tc.vars.knownMediaElements.delete(el);
+                continue;
+            }
             if (isPageAudioManaged(el)) {
                 if (el.dataset.vcFallback === 'true') clearFallbackVolume(el);
                 continue;
@@ -376,9 +464,19 @@ function isAudibleMediaElement(element) {
     }
 }
 
+let pageBridgeHeartbeatInterval = null;
+
 function ensurePageBridgeResync() {
     if (pageBridgeResyncInterval !== null) return;
     pageBridgeResyncInterval = setInterval(syncPageAudioHook, PAGE_BRIDGE_RESYNC_MS);
+}
+
+function ensurePageBridgeHeartbeat() {
+    if (pageBridgeHeartbeatInterval !== null) return;
+    // Send an initial heartbeat immediately so the page hook doesn't think
+    // we've gone away during the gap between script load and first sync.
+    sendPageAudioHeartbeat();
+    pageBridgeHeartbeatInterval = setInterval(sendPageAudioHeartbeat, PAGE_BRIDGE_HEARTBEAT_MS);
 }
 
 function suspendAudioContextIfIdle() {
@@ -418,11 +516,17 @@ function suspendAudioContextIfIdle() {
 }
 
 function registerMediaElement(element) {
-    if (!element || isPageAudioManaged(element) || element.dataset.vcWatched === "true" || element.dataset.vcHooked === "true") return;
+    if (!element) return;
+    // Track all media elements (even page-managed ones) so applyState can
+    // iterate knownMediaElements instead of calling querySelectorAll.
+    if (tc.vars.knownMediaElements) tc.vars.knownMediaElements.add(element);
+    if (isPageAudioManaged(element) || element.dataset.vcWatched === "true" || element.dataset.vcHooked === "true") return;
 
     element.dataset.vcWatched = "true";
     element.addEventListener('encrypted', () => {
         element.dataset.vcRestrictedMedia = "true";
+        // Invalidate boost limit cache since this element just became restricted.
+        invalidateBoostLimitCache();
     }, { passive: true });
 
     const hookIfPlaying = () => {
@@ -488,6 +592,9 @@ function connectOutput(element) {
     if (!tc.vars.audioCtx) {
         tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         tc.vars.audioCtx.onstatechange = () => {
+            // Guard against null: suspendAudioContextIfIdle may close the context
+            // and null out tc.vars.audioCtx before this handler fires.
+            if (!tc.vars.audioCtx) return;
             if (tc.vars.audioCtx.state === 'running') applyState();
         };
     }
@@ -496,6 +603,15 @@ function connectOutput(element) {
 
     // Ensure the tracking set exists
     if (!tc.vars.mediaElements) tc.vars.mediaElements = new Set();
+
+    // Re-check immediately before createMediaElementSource to close the race
+    // window where page-audio-hook.js might have claimed the element between
+    // the top of connectOutput and here.
+    if (isPageAudioManaged(element)) {
+        applyFallbackVolume(element, "route-failed");
+        log("Skipped WebAudio hook (race): page-audio-hook took ownership", 3);
+        return;
+    }
 
     try {
         log(`Attempting hook: ${element.tagName} id=${element.id || ''} src=${element.currentSrc || element.src || ''}`, 4);
@@ -513,8 +629,18 @@ function connectOutput(element) {
             try {
                 source = tc.vars.audioCtx.createMediaElementSource(element);
             } catch (e) {
-                // createMediaElementSource can fail if the element is already connected elsewhere or due to browser restrictions
-                log(`createMediaElementSource failed: ${e && e.message}`, 2);
+                // createMediaElementSource can fail if the element is already
+                // connected elsewhere (e.g., page-audio-hook or the page itself
+                // already created a source for it) or due to browser restrictions.
+                const msg = e && e.message ? e.message : String(e);
+                if (/already|InvalidState|has a source|already connected/i.test(msg)) {
+                    // Mark as page-managed so we don't keep retrying.
+                    try { element.dataset[PAGE_AUDIO_MANAGED_ATTR] = "true"; } catch (_) {}
+                    applyFallbackVolume(element, "route-failed");
+                    log(`createMediaElementSource already in use: ${msg}`, 3);
+                    return;
+                }
+                log(`createMediaElementSource failed: ${msg}`, 2);
                 source = null;
             }
         }
@@ -639,6 +765,7 @@ async function start() {
         if (blocked) {
             applyState();
             ensurePageBridgeResync();
+            ensurePageBridgeHeartbeat();
             return;
         }
 
@@ -651,13 +778,29 @@ async function start() {
 
         applyState();
         ensurePageBridgeResync();
+        ensurePageBridgeHeartbeat();
         initWhenReady();
     } catch (e) {
         if (tc.settings.debugMode) log(`start() storage read failed: ${e && e.message}`, 2);
     }
 }
 
+setupBoostLimitObserver();
 start();
+
+// Listen for requests from the page-audio hook (e.g., when it reactivates
+// after a heartbeat timeout and needs the current state).
+window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const data = event.data;
+    if (!data || data.source !== PAGE_BRIDGE_TARGET || data.target !== PAGE_BRIDGE_SOURCE) return;
+    if (data.command !== "requestState") return;
+
+    // Reset the sync skip-cache so the next syncPageAudioHook actually sends
+    // the state, even if it hasn't changed from our perspective.
+    lastSyncedPageAudioState = null;
+    syncPageAudioHook();
+});
 
 // Keep content script state in sync when settings change in the extension UI
 if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
@@ -666,35 +809,12 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
 
         if (tc.settings.debugMode) log(`onChanged: keys=[${Object.keys(changes).join(',')}]`, 4);
 
-        // If whitelist/blacklist mode, lists, or remembered sites changed, re-evaluate whether this page should be blocked
+        // Re-evaluate blocking and apply site settings in a single pass.
+        // Previously this called start() AND a separate siteSettings handler,
+        // causing double storage reads, double applyState() calls, and potential
+        // race conditions if the two reads completed in different orders.
         if (changes.whitelistMode || changes.fqdns || changes.whitelist || changes.siteSettings) {
             start();
-        }
-
-        // If per-site settings changed, apply them if they affect this domain
-        if (changes.siteSettings) {
-            const currentDomain = extractRootDomain(window.location.href);
-            storageGet({ siteSettings: {} }).then((data) => {
-                const siteSettingsKey = getSiteSettingsKey(data.siteSettings, currentDomain);
-                if (siteSettingsKey) {
-                    const s = data.siteSettings[siteSettingsKey];
-                    if (s.volume !== undefined) tc.vars.dB = normalizeDb(s.volume);
-                    if (s.mono !== undefined) tc.vars.mono = s.mono;
-                    if (tc.settings.debugMode) log(`siteSettings updated for ${currentDomain} via ${siteSettingsKey}: dB=${tc.vars.dB}, mono=${tc.vars.mono}`, 4);
-                    applyState();
-                    // Ensure audio nodes exist for any existing media elements
-                    try {
-                        init();
-                        for (const el of document.querySelectorAll('audio, video')) registerMediaElement(el);
-                    } catch (e) {
-                        if (tc.settings.debugMode) log(`re-hook after siteSettings failed: ${e.message}`, 3);
-                    }
-                } else {
-                    if (tc.settings.debugMode) log('siteSettings change did not affect this domain', 4);
-                }
-            }).catch((e) => {
-                if (tc.settings.debugMode) log(`siteSettings storage read failed: ${e && e.message}`, 2);
-            });
         }
 
         // Update debug mode live
@@ -703,4 +823,4 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
             syncPageAudioHook();
         }
     });
-} 
+}

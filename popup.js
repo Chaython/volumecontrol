@@ -351,6 +351,7 @@ function showError(error) {
   const popupContent = document.querySelector("#popup-content");
   const errorContent = document.querySelector("#error-content");
   const exclusionMessage = document.querySelector(".exclusion-message");
+  const settingsBtn = document.querySelector("#settings");
   
   if (popupContent) popupContent.classList.add("hidden");
   if (errorContent) errorContent.classList.add("hidden");
@@ -358,17 +359,39 @@ function showError(error) {
 
   if (error.type === "exclusion") {
     if (popupContent) popupContent.classList.remove("hidden");
-    if (exclusionMessage) exclusionMessage.classList.remove("hidden");
+    if (exclusionMessage) {
+        exclusionMessage.classList.remove("hidden");
+        // Make the exclusion message a live region so screen readers announce it,
+        // and make it focusable so we can move focus to it.
+        exclusionMessage.setAttribute("role", "alert");
+        exclusionMessage.setAttribute("tabindex", "-1");
+    }
     
     const top = document.querySelector(".top-controls");
     const left = document.querySelector(".left");
     if(top) top.classList.add("hidden");
     if(left) left.classList.add("hidden"); 
     document.body.classList.add("excluded-site");
+    
+    // Move focus to the settings button (still visible) so keyboard users have
+    // an actionable element. Fall back to the exclusion message if the button
+    // is hidden.
+    if (settingsBtn && settingsBtn.offsetParent !== null) {
+        settingsBtn.focus();
+    } else if (exclusionMessage) {
+        exclusionMessage.focus();
+    }
   } else {
     if (errorContent) {
         errorContent.classList.remove("hidden");
-        errorContent.querySelector("p").textContent = error.message || "An error occurred";
+        const errorParagraph = errorContent.querySelector("p");
+        if (errorParagraph) {
+            errorParagraph.textContent = error.message || "An error occurred";
+            // Announce the error to assistive technology.
+            errorParagraph.setAttribute("role", "alert");
+            errorParagraph.setAttribute("tabindex", "-1");
+            errorParagraph.focus();
+        }
     }
   }
 }
@@ -391,9 +414,31 @@ async function initializeControls(tab) {
     applyAudioControlState({ maxDb: MAX_DB, boostLimited: false, limitation: "" });
 
     if (volumeSlider) {
+      // Debounce the storage write and background feedback so rapid slider
+      // dragging doesn't flood the content script with messages and trigger
+      // excessive storage.local.set calls. The UI updates immediately; only
+      // the downstream side effects are debounced.
+      let volumeCommitTimer = null;
+      let lastCommittedDb = null;
+      const commitVolume = (dB) => {
+          if (volumeCommitTimer) clearTimeout(volumeCommitTimer);
+          lastCommittedDb = dB;
+          volumeCommitTimer = setTimeout(() => {
+              volumeCommitTimer = null;
+              setVolume(lastCommittedDb, tab);
+          }, 40);
+      };
       volumeSlider.addEventListener("input", () => {
           const normalizedDb = setDisplayedVolume(volumeSlider.value);
-          setVolume(normalizedDb, tab);
+          commitVolume(normalizedDb);
+      });
+      // Commit immediately when the user releases the slider.
+      volumeSlider.addEventListener("change", () => {
+          if (volumeCommitTimer) {
+              clearTimeout(volumeCommitTimer);
+              volumeCommitTimer = null;
+          }
+          setVolume(setDisplayedVolume(volumeSlider.value), tab);
       });
     }
     
