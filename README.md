@@ -27,6 +27,8 @@ Settings can be remembered per site, and you can exclude sites where you do not 
 - `Alt+Shift+Down`: Decrease volume by 1 dB.
 - `Alt+Shift+0`: Reset volume to 0 dB.
 - `Alt+Shift+M`: Toggle mono audio.
+- `Unassigned due to 4 hotkey limit, edit in firefox/chrome settings [chrome://extensions/shortcuts]`: Activate the extension.
+- `Unassigned due to 4 hotkey limit, edit in firefox/chrome settings [chrome://extensions/shortcuts]`: Toggle mute.
 
 Browser shortcut settings can be used to remap or disable these defaults.
 Pin the extension icon to the toolbar to see native badge feedback while adjusting volume.
@@ -52,7 +54,29 @@ Volume Control asks for the browser permissions needed to control audio reliably
 
 AMO/Chrome Web Store review note: the broad host access, early `document_start` injection, and `all_frames` access are used only to detect and route page-local HTML5 media and WebAudio before playback begins. Volume Control does not collect browsing history, inspect page content for analytics, inject ads, or send page URLs, media metadata, audio content, or settings to any server.
 
+<img width="472" height="182" alt="firefox_sqvsowk1NI" src="https://github.com/user-attachments/assets/7790e01c-ccb5-41c1-b24c-0ac4123b35ab" />
+
+<img width="472" height="182" alt="firefox_6Jn4rh739p" src="https://github.com/user-attachments/assets/f366b636-ac39-4e23-b929-c6f29b34b8b9" />
+
+
 # Changelog
+
+---
+
+<details>
+<summary><strong>Version 6.4 – Patch Notes</strong></summary>
+
+- New	Dedicated mute channel (independent of the volume slider)
+- New	Native element.muted for fallback-only media (Bluetooth-friendly)
+- New	"MUTE" browser-action badge
+- New	Muted-state slider dim + tooltip
+- New	Mute checkbox in Remembered Settings
+- Fixed	effectiveGain() regression that silenced audio when extension was disabled
+- Optimized	Skip redundant enforceBoostLimit in setMute response path
+
+</details>
+
+---
 
 <details>
 <summary><strong>Version 6.3 – Patch Notes</strong></summary>
@@ -108,18 +132,9 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 </details>
 
+---
 
 Planned features: Added to Chrome Web Store.
-
-
-
-<img width="472" height="182" alt="firefox_sqvsowk1NI" src="https://github.com/user-attachments/assets/7790e01c-ccb5-41c1-b24c-0ac4123b35ab" />
-
-<img width="472" height="182" alt="firefox_6Jn4rh739p" src="https://github.com/user-attachments/assets/f366b636-ac39-4e23-b929-c6f29b34b8b9" />
-
-
-
-Supports HTML5 video and audio only (no Flash).
 
 <details>
 <summary><h2>📁 File Descriptions</h2></summary>
@@ -196,20 +211,6 @@ This is the minimum possible file count given the WebExtension API's security co
 
 </details>
 
-
-***
-## Usage statistics
-Firefox:
-<img width="1088" height="1280" alt="image" src="https://github.com/user-attachments/assets/fc489b2d-ae2c-40c6-8e25-9fe37bda8d16" />
-Edge:
-<img width="1566" height="1029" alt="image" src="https://github.com/user-attachments/assets/5257e49b-eb1e-49c9-95e9-4664a5dff7ca" />
-
-
-
-Other Useful Extensions: 
-https://github.com/Chaython/TogglePIP (Allow a site to run PIP consistently with an [Left Alt]+[P] toggle.)
-https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colors, search providers....)
-
 ***
 
 ## Build packages
@@ -221,3 +222,21 @@ Create Firefox and Chrome zip packages:
 ```
 
 The script writes clean packages to `dist/`, using `ico.svg` for Firefox and `chrome.png` for Chrome. The bundled zips exclude repo files and `README.md`.
+
+***
+
+<details>
+<summary><h2>Usage statistics</h2></summary>
+Firefox:
+<img width="1088" height="1280" alt="image" src="https://github.com/user-attachments/assets/fc489b2d-ae2c-40c6-8e25-9fe37bda8d16" />
+Edge:
+<img width="1566" height="1029" alt="image" src="https://github.com/user-attachments/assets/5257e49b-eb1e-49c9-95e9-4664a5dff7ca" />
+</details>
+
+***
+
+Other Useful Extensions: 
+https://github.com/Chaython/TogglePIP (Allow a site to run PIP consistently with an [Left Alt]+[P] toggle.)
+https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colors, search providers....)
+
+***
