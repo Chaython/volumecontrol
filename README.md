@@ -56,6 +56,8 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 # Changelog
 
+---
+
 <details>
 <summary><strong>Version 6.4 – Patch Notes</strong></summary>
 
