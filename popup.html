@@ -28,7 +28,10 @@
           </svg>
           <span class="mute-label">Mute</span>
         </button>
-        <input type="text" id="volume-text" value="0 dB" aria-label="Volume in decibels">
+        <span class="volume-display">
+          <input type="text" id="volume-text" value="0" inputmode="numeric" aria-label="Volume in decibels">
+          <span class="volume-unit" aria-hidden="true">dB</span>
+        </span>
       </div>
     </div>
 

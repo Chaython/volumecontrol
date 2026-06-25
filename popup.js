@@ -209,7 +209,7 @@ function setDisplayedVolume(dB) {
   const text = cached.volumeText || document.querySelector("#volume-text");
 
   if (slider) slider.value = String(normalizedDb);
-  if (text) text.value = formatDb(normalizedDb);
+  if (text) text.value = (normalizedDb >= 0 ? "+" : "") + normalizedDb;
 
   return normalizedDb;
 }
@@ -495,10 +495,30 @@ async function initializeControls(tab) {
     }
     
     if (volumeText) {
+      // Debounced live update as the user types -- no Enter required.
+      // The debounce lets the user finish typing multi-digit values
+      // (e.g. "-15") before we commit, avoiding partial-number jumps.
+      let textCommitTimer = null;
+      volumeText.addEventListener("input", () => {
+           const val = volumeText.value.match(/-?\d+/)?.[0];
+           if (val === undefined) return;          // ignore "-", "+", "", etc.
+           if (textCommitTimer) clearTimeout(textCommitTimer);
+           const parsed = Number(val);
+           textCommitTimer = setTimeout(() => {
+               textCommitTimer = null;
+               setVolume(normalizeDb(parsed), tab);
+           }, 300);
+      });
+      // Commit immediately on Enter so the user does not have to wait
+      // for the debounce, and reformat the field on blur.
       volumeText.addEventListener("change", () => {
+           if (textCommitTimer) { clearTimeout(textCommitTimer); textCommitTimer = null; }
            const val = volumeText.value.match(/-?\d+/)?.[0];
            if (val) setVolume(normalizeDb(val), tab);
       });
+      // Suppress the global keydown-to-slider-focus handler while the user
+      // is editing the dB field so arrow keys edit the number, not the slider.
+      volumeText.addEventListener("keydown", (e) => e.stopPropagation());
     }
 
     if (monoCheckbox) monoCheckbox.addEventListener("change", () => toggleMono(tab));

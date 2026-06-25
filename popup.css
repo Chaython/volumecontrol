@@ -106,14 +106,14 @@ input:checked + .slider:before { transform: translateX(16px); }
 
 /* --- TEXT & CONTROLS --- */
 #volume-text {
-    width: auto;
-    min-width: 60px;
+    width: 3.5ch;            /* ~4 characters: "-32" is the widest value */
     border: none;
     background-color: transparent;
-    text-align: center;
+    text-align: right;       /* number hugs the dB suffix */
     font-size: 18px;
     font-weight: bold;
     color: #555;
+    padding: 0;
     flex-shrink: 0;
 }
 
@@ -166,22 +166,24 @@ input:checked + .slider:before { transform: translateX(16px); }
     min-height: 28px;
 }
 
-/* dB text is absolutely centered over the full row width, matching the
-   slider above (which is also full-width). This keeps it in its original
-   default position regardless of the mute button on the left. */
-.volume-row #volume-text {
+/* dB display is absolutely centered over the full row width, matching the
+   slider above (which is also full-width). The wrapper holds the editable
+   number input + a static "dB" suffix so only the number is editable. */
+.volume-row .volume-display {
     position: absolute;
     left: 50%;
     transform: translateX(-50%);
-    /* Allow clicks to pass through to the mute button if they happen to overlap. */
-    pointer-events: none;
+    display: flex;
+    align-items: baseline;
+    z-index: 1;
 }
 
-/* But re-enable pointer events when the text is focused/editable so the user
-   can still click into it to type a value. */
-.volume-row #volume-text:focus,
-.volume-row #volume-text:hover {
-    pointer-events: auto;
+.volume-display .volume-unit {
+    font-size: 14px;
+    font-weight: normal;
+    color: #777;
+    margin-left: 2px;
+    user-select: none;
 }
 
 /* --- MUTE BUTTON --- */
@@ -311,6 +313,7 @@ input:checked + .slider:before { transform: translateX(16px); }
     .slider { background-color: #5f6368; }
     input:checked + .slider { background-color: #8ab4f8; }
     #volume-text { color: #e8eaed; }
+    .volume-display .volume-unit { color: #9aa0a6; }
     
     .label-text { color: #e8eaed; }
     .settings { color: #e8eaed; }
