@@ -57,8 +57,6 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 # Changelog
 
 <details>
-
-<details>
 <summary><strong>Version 6.4 – Patch Notes</strong></summary>
 
 - New	Dedicated mute channel (independent of the volume slider)
@@ -71,6 +69,9 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 </details>
 
+---
+
+<details>
 <summary><strong>Version 6.3 – Patch Notes</strong></summary>
 
 📶 **Bluetooth fixes (7)** — context suspension/closing, unrouting at unity gain  
