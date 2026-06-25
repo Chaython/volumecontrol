@@ -54,6 +54,11 @@ Volume Control asks for the browser permissions needed to control audio reliably
 
 AMO/Chrome Web Store review note: the broad host access, early `document_start` injection, and `all_frames` access are used only to detect and route page-local HTML5 media and WebAudio before playback begins. Volume Control does not collect browsing history, inspect page content for analytics, inject ads, or send page URLs, media metadata, audio content, or settings to any server.
 
+<img width="472" height="182" alt="firefox_sqvsowk1NI" src="https://github.com/user-attachments/assets/7790e01c-ccb5-41c1-b24c-0ac4123b35ab" />
+
+<img width="472" height="182" alt="firefox_6Jn4rh739p" src="https://github.com/user-attachments/assets/f366b636-ac39-4e23-b929-c6f29b34b8b9" />
+
+
 # Changelog
 
 ---
@@ -127,18 +132,9 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 </details>
 
+---
 
 Planned features: Added to Chrome Web Store.
-
-
-
-<img width="472" height="182" alt="firefox_sqvsowk1NI" src="https://github.com/user-attachments/assets/7790e01c-ccb5-41c1-b24c-0ac4123b35ab" />
-
-<img width="472" height="182" alt="firefox_6Jn4rh739p" src="https://github.com/user-attachments/assets/f366b636-ac39-4e23-b929-c6f29b34b8b9" />
-
-
-
-Supports HTML5 video and audio only (no Flash).
 
 <details>
 <summary><h2>📁 File Descriptions</h2></summary>
@@ -215,20 +211,6 @@ This is the minimum possible file count given the WebExtension API's security co
 
 </details>
 
-
-***
-## Usage statistics
-Firefox:
-<img width="1088" height="1280" alt="image" src="https://github.com/user-attachments/assets/fc489b2d-ae2c-40c6-8e25-9fe37bda8d16" />
-Edge:
-<img width="1566" height="1029" alt="image" src="https://github.com/user-attachments/assets/5257e49b-eb1e-49c9-95e9-4664a5dff7ca" />
-
-
-
-Other Useful Extensions: 
-https://github.com/Chaython/TogglePIP (Allow a site to run PIP consistently with an [Left Alt]+[P] toggle.)
-https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colors, search providers....)
-
 ***
 
 ## Build packages
@@ -240,3 +222,21 @@ Create Firefox and Chrome zip packages:
 ```
 
 The script writes clean packages to `dist/`, using `ico.svg` for Firefox and `chrome.png` for Chrome. The bundled zips exclude repo files and `README.md`.
+
+***
+
+<details>
+<summary><h2>Usage statistics</h2></summary>
+Firefox:
+<img width="1088" height="1280" alt="image" src="https://github.com/user-attachments/assets/fc489b2d-ae2c-40c6-8e25-9fe37bda8d16" />
+Edge:
+<img width="1566" height="1029" alt="image" src="https://github.com/user-attachments/assets/5257e49b-eb1e-49c9-95e9-4664a5dff7ca" />
+</details>
+
+***
+
+Other Useful Extensions: 
+https://github.com/Chaython/TogglePIP (Allow a site to run PIP consistently with an [Left Alt]+[P] toggle.)
+https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colors, search providers....)
+
+***
