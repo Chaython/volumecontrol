@@ -17,6 +17,7 @@ const {
 } = globalThis.VolumeControlShared;
 const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
 const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
+const WHEEL_STEP_DB = 1;  // volume change per wheel notch (matches hotkey step)
 const cached = {
   slider: null,
   volumeText: null,
@@ -25,6 +26,7 @@ const cached = {
   rememberCheckbox: null,
   enableCheckbox: null,
   muteBtn: null,
+  activeTab: null,
   maxDb: MAX_DB,
   boostLimited: false
 };
@@ -63,6 +65,29 @@ document.addEventListener('DOMContentLoaded', () => {
       slider.focus();
     }
   }, { once: true });
+
+  // Mouse wheel: change volume by WHEEL_STEP_DB per notch while the popup is open.
+  // Bound to document so it works anywhere in the popup. Skip when the user is
+  // editing the dB text field so wheel-scrolling inside the field doesn't fight
+  // with text selection.
+  document.addEventListener('wheel', (e) => {
+    const tab = cached.activeTab;
+    if (!tab) return;
+    if (document.activeElement && document.activeElement.id === 'volume-text') return;
+
+    // High-resolution trackpads fire many small wheel events; only treat
+    // notches (|deltaY| >= 15) as volume changes to avoid runaway adjustments.
+    if (Math.abs(e.deltaY) < 15) return;
+
+    const sliderEl = cached.slider;
+    const currentDb = sliderEl ? Number(sliderEl.value) : 0;
+    const direction = e.deltaY > 0 ? -1 : 1;
+    const nextDb = normalizeDb(currentDb + direction * WHEEL_STEP_DB);
+    if (nextDb === currentDb) return;
+
+    e.preventDefault();
+    setVolume(nextDb, tab);
+  }, { passive: false });
 
   listenForEvents();
 });
@@ -441,6 +466,7 @@ function showError(error) {
 
 async function initializeControls(tab) {
     if (!tab) return;
+    cached.activeTab = tab;
 
     const volumeSlider = document.querySelector("#volume-slider");
     const volumeText = document.querySelector("#volume-text");

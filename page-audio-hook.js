@@ -716,9 +716,12 @@
             log(`media gain update failed: ${e && e.message}`);
         }
 
-        // Skip the disconnect/reconnect cycle if the routing mode hasn't changed.
+        // Skip the disconnect/reconnect cycle if the routing mode hasn't changed
+        // AND the output is still connected. On resume from pause, the output
+        // was disconnected by disconnectMediaRouteOutput but currentMode was
+        // not cleared, so we must fall through and reconnect.
         const wantMode = currentRoutingMode();
-        if (route.currentMode === wantMode) return;
+        if (route.currentMode === wantMode && route.outputConnected) return;
         route.currentMode = wantMode;
 
         disconnectMediaRouteOutput(route);
@@ -817,6 +820,8 @@
             // causes an audible dip-then-snap spike.
             setNativeVolume(element, entry.baseVolume);
             wireMediaRoute(route);
+            // After wireMediaRoute, output should be reconnected. If the context
+            // was suspended (e.g. after pause), resume it so audio flows again.
             if (route.outputConnected) resumeContext(route.context);
             else setTimeout(suspendMediaContextIfIdle, 250);
             return;
