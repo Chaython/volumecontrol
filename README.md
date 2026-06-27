@@ -134,7 +134,7 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 ---
 
-Planned features: Added to Chrome Web Store.
+Planned features: Added to Chrome Web Store. [Looking for donations, to buy chrome store developer license](https://github.com/sponsors/Chaython)
 
 <details>
 <summary><h2>📁 File Descriptions</h2></summary>
