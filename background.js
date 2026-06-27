@@ -19,7 +19,7 @@ const {
     domainMatchesSaved,
     getSiteSettingsKey,
     isRestrictedUrl,
-    isHarmlessMessageError
+    handleError
 } = globalThis.VolumeControlShared;
 const HOTKEY_STEP_DB = 1;
 
@@ -156,12 +156,6 @@ async function handleCommand(command, commandTab) {
             await setMute(tab, domainState, !currentMuted);
             break;
     }
-}
-
-function handleError(error) {
-    if (isHarmlessMessageError(error)) return;
-    const msg = error && (error.message || error);
-    console.error(`Volume Control: Hotkey error: ${msg}`);
 }
 
 async function showNativeVolumeFeedback(tabId, dB, muted) {

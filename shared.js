@@ -164,6 +164,18 @@
         return HARMLESS_MESSAGE_ERRORS.some(fragment => msg.includes(fragment));
     }
 
+    const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
+
+    // Shared error handler: suppresses harmless messaging errors (content
+    // script not yet injected, tab navigated away, etc.) and logs the rest.
+    // Used by popup.js and background.js to avoid duplicating the same logic.
+    function handleError(error, context) {
+        if (isHarmlessMessageError(error)) return;
+        const msg = error && (error.message || error);
+        const prefix = context ? `Volume Control (${context})` : "Volume Control";
+        console.error(`${prefix}: ${msg}`);
+    }
+
     global.VolumeControlShared = {
         browserApi,
         MIN_DB,
@@ -190,6 +202,8 @@
         domainMatchesSaved,
         getSiteSettingsKey,
         isRestrictedUrl,
-        isHarmlessMessageError
+        isHarmlessMessageError,
+        BOOST_LIMIT_NOTE,
+        handleError
     };
 })(globalThis);

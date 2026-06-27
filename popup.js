@@ -13,10 +13,10 @@ const {
   openOptionsPage,
   domainMatchesSaved,
   getSiteSettingsKey,
-  isHarmlessMessageError
+  handleError,
+  BOOST_LIMIT_NOTE
 } = globalThis.VolumeControlShared;
 const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
-const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
 const WHEEL_STEP_DB = 1;  // volume change per wheel notch (matches hotkey step)
 const cached = {
   slider: null,
@@ -221,12 +221,6 @@ async function toggleSitePermission(domain, shouldExclude, tabId) {
         handleError(e);
     }
 } 
-
-function handleError(error) {
-  if (isHarmlessMessageError(error)) return;
-  const msg = error.message || error;
-  console.error(`Volume Control: Error: ${msg}`);
-}
 
 function setDisplayedVolume(dB) {
   const normalizedDb = normalizeControlDb(dB);

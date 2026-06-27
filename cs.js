@@ -6,7 +6,8 @@ const {
     storageGet,
     domainMatchesSaved,
     getSiteSettingsKey,
-    BRIDGE_VERSION
+    BRIDGE_VERSION,
+    BOOST_LIMIT_NOTE
 } = globalThis.VolumeControlShared;
 const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
 const PAGE_BRIDGE_SOURCE = "volume-control-extension";
@@ -14,7 +15,6 @@ const PAGE_BRIDGE_TARGET = "volume-control-page-audio";
 const PAGE_AUDIO_MANAGED_ATTR = "vcPageAudioManaged";
 const PAGE_BRIDGE_RESYNC_MS = 5000;
 const PAGE_BRIDGE_HEARTBEAT_MS = 3000;
-const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
 const BOOST_LIMIT_NOTES = {
     "cross-origin": "Limited by cross-origin media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
     "restricted": "Limited by DRM-protected or otherwise restricted media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
