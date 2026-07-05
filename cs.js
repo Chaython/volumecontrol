@@ -483,7 +483,7 @@ function applyState() {
         if (tc.settings.debugMode) log(`applyState fallback loop failed: ${e.message}`, 3);
     }
 
-    // Always schedule a suspend/close check, even when boost or mono is active.
+    // Always schedule a suspend check, even when boost or mono is active.
     // Previously this was gated on !needsAudioRoute(), which meant the context
     // was never suspended while boost/mono was on — causing Bluetooth devices
     // to stay active after playback paused.
@@ -548,18 +548,32 @@ function suspendAudioContextIfIdle() {
 
     if (isPlaying) return;
 
-    if (!hasHooked) {
-        // No media is hooked into this context; close it to fully release the
-        // OS audio device handle (critical for Bluetooth devices that stay
-        // active while a running AudioContext holds the output stream open).
-        const ctx = tc.vars.audioCtx;
-        tc.vars.audioCtx = null;
-        tc.vars.gainNode = null;
-        ctx.close().catch(() => {});
-        if (tc.settings.debugMode) log("audio context closed (no hooked media) — device handle released", 3);
-    } else {
+    // Suspend the context to release the OS audio device handle. Per the
+    // WebAudio spec, a suspended context releases the audio device in all
+    // major browsers (Chrome, Firefox, Safari), so suspend() is sufficient
+    // for Bluetooth idle without the irrecoverable state that close() creates.
+    //
+    // We deliberately do NOT close() even when no hooked media remains.
+    // close() would destroy any MediaElementSource routes still held, and
+    // those routes can only be created ONCE per element per context. If the
+    // page later re-adds a previously-hooked element (vcHooked still "true")
+    // and plays it, connectOutput's early return would skip source creation,
+    // and the element's audio would be piped to the dead source -> silence.
+    // suspend() preserves the routes so they can be rewired on resume.
+    //
+    // We also do NOT null tc.vars.audioCtx/gainNode: keeping the references
+    // alive lets already-hooked elements resume on the same context, and
+    // lets new elements reuse the suspended context instead of creating a
+    // wasteful new one.
+    try {
         tc.vars.audioCtx.suspend();
-        if (tc.settings.debugMode) log("audio context suspended (media paused)", 4);
+        if (tc.settings.debugMode) {
+            log(hasHooked
+                ? "audio context suspended (media paused) — device handle released"
+                : "audio context suspended (no hooked media) — device handle released", 4);
+        }
+    } catch (e) {
+        if (tc.settings.debugMode) log(`audio context suspend failed: ${e && e.message}`, 2);
     }
 }
 
@@ -638,11 +652,18 @@ function connectOutput(element) {
         return;
     }
 
-    if (!tc.vars.audioCtx) {
+    if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') {
+        // If the context was closed (e.g. the page itself called .close()
+        // on it, or a previous extension version closed it), create a fresh
+        // one. Note: any elements previously hooked on the old context have
+        // vcHooked="true" but their source is dead -- connectOutput's early
+        // return at the vcHooked check above means they cannot be re-hooked
+        // here (createMediaElementSource throws on second call). Those
+        // elements will fall back to native volume via applyFallbackVolume.
         tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         tc.vars.audioCtx.onstatechange = () => {
-            // Guard against null: suspendAudioContextIfIdle may close the context
-            // and null out tc.vars.audioCtx before this handler fires.
+            // Guard against null: the context may be suspended/closed and
+            // tc.vars.audioCtx may be reassigned before this handler fires.
             if (!tc.vars.audioCtx) return;
             if (tc.vars.audioCtx.state === 'running') applyState();
         };

@@ -24,8 +24,11 @@ const {
 const HOTKEY_STEP_DB = 1;
 
 async function getActiveTab(commandTab) {
-    if (commandTab && commandTab.id !== undefined) return commandTab;
-
+    // Always re-query instead of trusting the tab object passed by onCommand.
+    // Firefox (and some Chrome versions) may pass an incomplete tab (missing
+    // .url) without the full tabs permission. Re-querying with our existing
+    // host_permissions guarantees a complete tab object including url.
+    // The performance cost is negligible (one async tabs.query per hotkey press).
     const tabs = await tabsQuery({ active: true, currentWindow: true });
     return tabs && tabs[0] ? tabs[0] : null;
 }

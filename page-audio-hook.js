@@ -253,29 +253,33 @@
             if (mediaRoutes.has(element)) { hasAnyRoute = true; break; }
         }
 
-        // If no routes remain, close the context to fully release the OS audio
-        // device handle (critical for Bluetooth devices that stay active while
-        // a running AudioContext holds the output stream open).
-        if (!hasAnyRoute) {
-            try {
-                if (typeof mediaAudioContext.close === "function") {
-                    mediaAudioContext.close();
-                    mediaAudioContext = null;
-                    log("media context closed (no active routes) — device handle released");
-                } else if (typeof mediaAudioContext.suspend === "function") {
-                    mediaAudioContext.suspend();
-                }
-            } catch (e) {
-                log(`media context close failed: ${e && e.message}`);
+        // Suspend the context to release the OS audio device handle. This is
+        // critical for Bluetooth devices that stay active while a running
+        // AudioContext holds the output stream open. Per the WebAudio spec,
+        // a suspended context releases the audio device in all major browsers
+        // (Chrome, Firefox, Safari), so suspend() is sufficient for Bluetooth
+        // idle without the irrecoverable state that close() creates.
+        //
+        // We deliberately do NOT close() even when no routes remain. close()
+        // would destroy any MediaElementSource routes still held in mediaRoutes,
+        // and those routes can only be created ONCE per element per context.
+        // If the page later reuses the same <video> element (YouTube/Twitch
+        // auto-next, replay after ended, etc.), close() would permanently kill
+        // audio for that element until the page is reloaded. suspend() preserves
+        // the routes so they can be rewired on resume.
+        //
+        // hasAnyRoute is preserved here as documentation; suspend() works for
+        // both branches (with routes -> keep routes alive but idle; without
+        // routes -> just release the device handle).
+        try {
+            if (typeof mediaAudioContext.suspend === "function") {
+                mediaAudioContext.suspend();
+                log(hasAnyRoute
+                    ? "media context suspended (idle routes kept) — device handle released"
+                    : "media context suspended (no routes) — device handle released");
             }
-        } else {
-            try {
-                if (typeof mediaAudioContext.suspend === "function") {
-                    mediaAudioContext.suspend();
-                }
-            } catch (e) {
-                log(`media context suspend failed: ${e && e.message}`);
-            }
+        } catch (e) {
+            log(`media context suspend failed: ${e && e.message}`);
         }
     }
 
@@ -740,7 +744,20 @@
 
     function ensureMediaRoute(element) {
         if (!mediaNeedsAudioRoute() || !isAudibleMediaElement(element)) return null;
-        if (mediaRoutes.has(element)) return mediaRoutes.get(element);
+        if (mediaRoutes.has(element)) {
+            const existing = mediaRoutes.get(element);
+            // Defensive: if the route's context was closed out from under us
+            // (e.g. the page itself called .close() on it, or the tab was
+            // suspended by the OS and the context did not survive), we cannot
+            // recover via a new context -- createMediaElementSource() throws
+            // InvalidStateError when called twice on the same element. Log
+            // loudly so this is diagnosable; audio for this element will not
+            // play again until the page is reloaded.
+            if (existing && existing.context && existing.context.state === "closed") {
+                log(`media route context is closed -- element audio is dead until page reload: ${getMediaSourceUrl(element) || element.tagName}`);
+            }
+            return existing;
+        }
 
         const context = getMediaContext();
         if (!context) return null;
@@ -833,6 +850,14 @@
 
     function applyStateToMediaElements() {
         for (const element of Array.from(mediaElements)) {
+            // Clean up elements that have been removed from the DOM. The
+            // corresponding route in mediaRoutes (a WeakMap) and the entry in
+            // mediaState (also a WeakMap) will be GC'd along with the element
+            // once mediaElements (a strong Set) releases its reference.
+            if (!element.isConnected) {
+                mediaElements.delete(element);
+                continue;
+            }
             applyMediaElementState(element);
         }
     }
@@ -868,7 +893,20 @@
             };
             const release = () => {
                 releaseMediaRoute(element);
-                mediaElements.delete(element);
+                // Do NOT delete from mediaElements. The element is often reused
+                // for the next video (e.g. YouTube/Twitch auto-next loads the
+                // next source into the SAME <video> element). If we delete here,
+                // suspendMediaContextIfIdle's hasAnyRoute check (which iterates
+                // mediaElements) won't see the kept route, and it will close
+                // mediaAudioContext. Once closed, the route is permanently dead
+                // because createMediaElementSource() can only be called ONCE
+                // per element per context -- the next video would then play
+                // with NO audio because the element's output is piped into a
+                // closed context that can never be revived. Keep the element
+                // tracked here so the context stays alive (suspended, not
+                // closed) and the route can be rewired on replay. Elements
+                // that are actually removed from the DOM are cleaned up in
+                // applyStateToMediaElements().
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
 
@@ -1189,6 +1227,26 @@
     // the Set from growing unboundedly on pages that create many short-lived
     // audio nodes.
     setInterval(sweepDeadDestinationConnections, 30000);
+
+    // Periodically sweep media elements that have been removed from the DOM.
+    // applyStateToMediaElements also does this on state changes, but on pages
+    // that create many short-lived <audio>/<video> elements without triggering
+    // state changes (e.g. a soundboard that fires many SFX), mediaElements
+    // would otherwise accumulate disconnected elements forever -- and each one
+    // keeps its (kept-for-replay) route's mediaAudioContext alive.
+    setInterval(() => {
+        for (const element of Array.from(mediaElements)) {
+            if (!element.isConnected) {
+                mediaElements.delete(element);
+            }
+        }
+        // After cleaning up dead elements, also try to release the media
+        // context if no live elements remain. This mirrors what
+        // suspendMediaContextIfIdle does, but is gated on actual DOM
+        // presence rather than waiting for a media event that may never
+        // come (e.g. an element that was removed while paused).
+        setTimeout(suspendMediaContextIfIdle, 0);
+    }, 30000);
 
     // Heartbeat checker: if the content script hasn't pinged us recently,
     // assume the extension has been disabled/updated and restore native behavior.

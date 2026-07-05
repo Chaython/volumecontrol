@@ -281,6 +281,85 @@ input[type="checkbox"] {
     margin-bottom: 8px;
 }
 
+/* Keyboard Shortcuts section */
+
+button#openShortcutsPage {
+    padding: 8px 15px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    height: 36px;
+    box-sizing: border-box;
+}
+
+button#openShortcutsPage:hover {
+    background-color: #45a049;
+}
+
+.shortcut-entry {
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: #fff;
+}
+
+.shortcut-entry:last-child {
+    border-bottom: none;
+}
+
+.shortcut-entry:hover {
+    background-color: #f0f7ff;
+}
+
+.shortcut-name {
+    flex-grow: 1;
+    font-weight: 500;
+    font-size: 0.95em;
+}
+
+.shortcut-keys {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.keycap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 2px 6px;
+    background: #fff;
+    border: 1px solid #aaa;
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    font-size: 0.8em;
+    font-weight: 600;
+    color: #444;
+    box-shadow: 0 1px 0 #ddd;
+    line-height: 1;
+}
+
+.keycap-separator {
+    color: #888;
+    font-weight: bold;
+    font-size: 0.85em;
+    user-select: none;
+}
+
+.shortcut-unset {
+    color: #999;
+    font-style: italic;
+    font-size: 0.9em;
+}
+
 @media (prefers-color-scheme: dark) {
     body {
         background: #202124;
@@ -344,5 +423,29 @@ input[type="checkbox"] {
 
     .footer-link:hover {
         color: #aecbfa;
+    }
+
+    .shortcut-entry {
+        background: #202124;
+        border-color: #444;
+    }
+
+    .shortcut-entry:hover {
+        background: #333;
+    }
+
+    .keycap {
+        background: #333;
+        color: #e8eaed;
+        border-color: #666;
+        box-shadow: 0 1px 0 #000;
+    }
+
+    .keycap-separator {
+        color: #888;
+    }
+
+    .shortcut-unset {
+        color: #888;
     }
 }
