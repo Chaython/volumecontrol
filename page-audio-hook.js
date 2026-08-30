@@ -508,6 +508,9 @@
         try {
             if (element && element.dataset) element.dataset.vcRestrictedMedia = "true";
         } catch (e) {}
+        // The aggregate page restriction may have just appeared (this element
+        // is now DRM-restricted even if it is detached or in shadow DOM).
+        updatePageMediaRestriction();
     }
 
     function isRestrictedMediaElement(element) {
@@ -543,6 +546,49 @@
         if (!pageUsesEme()) return false;
         const src = getMediaSourceUrl(element);
         return Boolean(src) && src.indexOf("blob:") === 0;
+    }
+
+    // Aggregate, DOM-visible summary of every tracked media element's boost
+    // limitation (DRM-restricted or cross-origin). The ISOLATED-world content
+    // script derives its popup verdict from document.querySelectorAll, which
+    // can only see elements attached to this document's light DOM — it is
+    // blind to the detached players many sites use (treblo.com and suno.com
+    // create <audio> via createElement/new Audio and never append it) and to
+    // elements hidden inside shadow DOM. This hook tracks ALL of those
+    // (claimed at creation/first play/first volume write), so publishing the
+    // aggregate on the documentElement lets the content script's boost-limit
+    // verdict include them.
+    let lastPublishedPageRestriction = null;
+    function updatePageMediaRestriction() {
+        let restriction = "";
+        for (const element of mediaElements) {
+            // Mirror the content script's verdict gate: an element that is
+            // neither playing nor holding a source cannot limit boost.
+            if (!isMediaPlaying(element) && !getMediaSourceUrl(element)) continue;
+            if (isLikelyDrmMedia(element)) {
+                restriction = "restricted";
+                break; // most severe; no need to keep scanning
+            }
+            if (!restriction && isLikelyCrossOriginMedia(element)) {
+                restriction = "cross-origin";
+            }
+        }
+
+        if (restriction === lastPublishedPageRestriction) return;
+        lastPublishedPageRestriction = restriction;
+        try {
+            const ds = document.documentElement.dataset;
+            if (restriction) ds.vcPageMediaRestriction = restriction;
+            else delete ds.vcPageMediaRestriction;
+            log(`page media restriction: ${restriction || "none"}`);
+        } catch (e) {
+            log(`page media restriction publish failed: ${e && e.message}`);
+        }
+        // Tell the content script immediately: its boost-limit verdict caches
+        // for a second, and without this nudge a freshly-restricted page (DRM
+        // handshake completing, cross-origin src appearing) would keep serving
+        // the stale unrestricted verdict until the cache expires.
+        postToContentScript("pageRestrictionChanged", { restriction });
     }
 
     function patchEmeApi() {
@@ -602,6 +648,9 @@
                                 document.documentElement.dataset.vcPageUsesEme = "true";
                             } catch (e) {}
                             log("EME key system access granted — page flagged as using DRM");
+                            // The EME+blob heuristic in isLikelyDrmMedia may
+                            // now classify tracked elements as protected.
+                            updatePageMediaRestriction();
                         }, () => {});
                     } catch (e) {}
                     return result;
@@ -1010,6 +1059,7 @@
             }
             applyMediaElementState(element);
         }
+        updatePageMediaRestriction();
     }
 
     function registerMediaElement(element, options = {}) {
@@ -1022,6 +1072,7 @@
         }
 
         mediaElements.add(element);
+        updatePageMediaRestriction();
         const entry = getMediaState(element);
         if (!entry.listenersInstalled && typeof element.addEventListener === "function") {
             // DRM detection: the moment the pipeline reports encrypted init
@@ -1031,6 +1082,11 @@
                 markElementRestricted(element);
                 log("encrypted event: element marked DRM-restricted (WebAudio routing blocked)");
             }, { passive: true });
+            // Keep the aggregate page restriction fresh as this element's
+            // lifecycle (src assignment, play, pause, ended) progresses.
+            element.addEventListener("loadedmetadata", updatePageMediaRestriction, { passive: true });
+            element.addEventListener("play", updatePageMediaRestriction, { passive: true });
+            element.addEventListener("emptied", updatePageMediaRestriction, { passive: true });
             const applyOnPlay = () => {
                 mediaElements.add(element);
                 applyMediaElementState(element);
@@ -1394,6 +1450,13 @@
     // the Set from growing unboundedly on pages that create many short-lived
     // audio nodes.
     setInterval(sweepDeadDestinationConnections, 30000);
+
+    // Keep the published page-restriction aggregate fresh. Sources the
+    // aggregate depends on (element.src assignment, currentSrc resolution,
+    // setMediaKeys landing after claim time) are not all observable through
+    // events, so a cheap 1s recompute closes the gaps. mediaElements is
+    // tiny (a handful of entries on typical pages).
+    setInterval(updatePageMediaRestriction, 1000);
 
     // Periodically sweep media elements that have been removed from the DOM.
     // applyStateToMediaElements also does this on state changes, but on pages

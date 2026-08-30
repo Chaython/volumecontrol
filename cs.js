@@ -177,6 +177,39 @@ function isPageAudioManaged(element) {
     }
 }
 
+// The page-audio hook (MAIN world) tracks every media element it claims —
+// including ones this content script can never see with
+// document.querySelectorAll: detached players (treblo.com and suno.com
+// create <audio> via createElement/new Audio and never append it to the DOM)
+// and elements living inside shadow DOM. The hook publishes an aggregate
+// restriction verdict on the documentElement so this world's boost-limit
+// logic can include them. Values: "restricted" (DRM) or "cross-origin".
+function getHookPageRestriction() {
+    try {
+        const value = document.documentElement && document.documentElement.dataset.vcPageMediaRestriction;
+        if (value === "restricted" || value === "cross-origin") return value;
+    } catch (e) {}
+    return "";
+}
+
+// Severity ranking used when merging restriction verdicts from several
+// sources (document scan, hook aggregate, iframe reports). DRM restriction
+// outranks everything: routing such media is a one-way trip to silence.
+function reasonSeverity(reason) {
+    if (reason === "restricted") return 3;
+    if (reason === "cross-origin" || reason === "route-failed") return 2;
+    return reason ? 1 : 0;
+}
+
+function makeBoostLimitedResult(reason) {
+    return {
+        boostLimited: true,
+        maxDb: 0,
+        reason,
+        note: BOOST_LIMIT_NOTES[reason] || BOOST_LIMIT_NOTES.fallback
+    };
+}
+
 function getBoostLimitReason(element) {
     if (!element) return "";
 
@@ -230,12 +263,7 @@ function getBoostLimitInfo() {
             if (!isMediaPlaying(el) && !el.src && !el.currentSrc) continue;
             const reason = getBoostLimitReason(el);
             if (reason) {
-                result = {
-                    boostLimited: true,
-                    maxDb: 0,
-                    reason,
-                    note: BOOST_LIMIT_NOTES[reason] || BOOST_LIMIT_NOTES.fallback
-                };
+                result = makeBoostLimitedResult(reason);
                 break;
             }
         }
@@ -243,9 +271,111 @@ function getBoostLimitInfo() {
         if (tc.settings.debugMode) log(`boost limit check failed: ${e.message}`, 3);
     }
 
+    // Merge the hook's aggregate restriction. It covers media this scan can
+    // never see: detached players (never appended to the DOM) and shadow-DOM
+    // elements. Without this, sites like treblo.com silently cap boost at
+    // native volume (their cross-origin audio cannot be routed through
+    // WebAudio) while the popup advertises a full +32 dB range.
+    const hookRestriction = getHookPageRestriction();
+    if (reasonSeverity(hookRestriction) > reasonSeverity(result.reason)) {
+        result = makeBoostLimitedResult(hookRestriction);
+    }
+
+    // Merge verdicts reported by embedded iframes. Their media elements live
+    // in a different document; only their own content script instance can
+    // see them, and they report their verdict here (the top frame) so the
+    // popup — which queries only the top frame — aggregates the whole tab.
+    const frameLimit = getAggregatedFrameLimit();
+    if (frameLimit && reasonSeverity(frameLimit.reason) > reasonSeverity(result.reason)) {
+        result = makeBoostLimitedResult(frameLimit.reason);
+    }
+
     boostLimitCache = result;
     boostLimitCacheTime = now;
     return result;
+}
+
+// ----- Cross-frame boost-limit aggregation --------------------------------
+// Popup/background state queries are answered by the TOP frame only (since
+// v6.9: an unframed tabs.sendMessage resolves with whichever frame responds
+// first, which made the DRM/boost-limit note flicker on udio.com). But DRM or
+// cross-origin media often plays inside an embedded iframe (widget players,
+// embedded players) whose document the top frame cannot scan. Each frame's
+// content script therefore posts its verdict up to the top frame, and the top
+// frame merges the most restrictive live report into its own verdict. Reports
+// expire, so frames that go away relax the verdict deterministically — no
+// response races, no flicker.
+const FRAME_REPORT_TTL_MS = 2500;
+const frameLimitReports = new Map(); // source window -> { reason, ts }
+
+function isTopFrame() {
+    try {
+        return window.top === window;
+    } catch (e) {
+        return false;
+    }
+}
+
+function getAggregatedFrameLimit() {
+    if (!isTopFrame() || frameLimitReports.size === 0) return null;
+    const now = Date.now();
+    let best = null;
+    for (const [source, entry] of Array.from(frameLimitReports)) {
+        if (!source || now - entry.ts > FRAME_REPORT_TTL_MS) {
+            frameLimitReports.delete(source);
+            continue;
+        }
+        if (!best || reasonSeverity(entry.reason) > reasonSeverity(best.reason)) {
+            best = entry;
+        }
+    }
+    return best;
+}
+
+function handleFrameLimitReport(event) {
+    // Only the top frame aggregates. Reports come from child windows; a page
+    // script posting to its own window (source === window) is not a frame
+    // report and must not influence the verdict.
+    if (!isTopFrame() || !event.source || event.source === window) return;
+    const data = event.data;
+    if (!data || data.vcFrameBoostLimitVersion !== 1) return;
+    const report = data.vcFrameBoostLimit;
+    if (!report || typeof report.reason !== "string") return;
+
+    const reason = reasonSeverity(report.reason) > 0 ? report.reason : "";
+    const previous = frameLimitReports.get(event.source);
+    frameLimitReports.set(event.source, { reason, ts: Date.now() });
+    if (!previous || previous.reason !== reason) {
+        invalidateBoostLimitCache();
+    }
+}
+
+window.addEventListener("message", handleFrameLimitReport);
+
+// Non-top frames report their verdict to the top frame every second. This is
+// a heartbeat: it keeps the top frame's TTL entries fresh and lets verdicts
+// both tighten and relax as media comes and goes inside the frame.
+function reportFrameBoostLimit() {
+    if (isTopFrame()) return;
+    if (tc.vars.isBlocked) return;
+    try {
+        const limit = getBoostLimitInfo();
+        window.top.postMessage({
+            vcFrameBoostLimitVersion: 1,
+            vcFrameBoostLimit: {
+                reason: limit.reason,
+                maxDb: limit.maxDb,
+                boostLimited: limit.boostLimited
+            }
+        }, "*");
+    } catch (e) {
+        // window.top can be inaccessible in exotic frame setups; nothing to do.
+    }
+}
+
+if (!isTopFrame()) {
+    reportFrameBoostLimit();
+    setInterval(reportFrameBoostLimit, 1000);
 }
 
 function setupBoostLimitObserver() {
@@ -927,6 +1057,15 @@ window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const data = event.data;
     if (!data || data.source !== PAGE_BRIDGE_TARGET || data.target !== PAGE_BRIDGE_SOURCE) return;
+
+    // The hook's aggregate page restriction (covers detached/shadow-DOM media
+    // the document scan cannot see) just appeared or cleared. Drop our cached
+    // verdict so the next state query reflects it immediately.
+    if (data.command === "pageRestrictionChanged") {
+        invalidateBoostLimitCache();
+        return;
+    }
+
     if (data.command !== "requestState") return;
 
     // Reset the sync skip-cache so the next syncPageAudioHook actually sends
