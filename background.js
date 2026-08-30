@@ -12,6 +12,7 @@ const {
     storageSet,
     tabsQuery,
     tabsSendMessage,
+    TOP_FRAME_OPTIONS,
     actionSetBadgeText,
     actionSetBadgeBackgroundColor,
     actionSetTitle,
@@ -54,7 +55,11 @@ async function getDomainState(tab) {
 }
 
 async function getContentState(tab) {
-    const controlResponse = await tabsSendMessage(tab.id, { command: "getAudioControlState" }).catch(() => null);
+    // Query ONLY the top frame (frameId 0). Unframed messages are answered by
+    // whichever frame responds first; embedded iframes (captcha, payment, ads)
+    // run their own content script instance and would report their own
+    // unrestricted state instead of the page's real media/boost-limit status.
+    const controlResponse = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(() => null);
     if (controlResponse && controlResponse.response) {
         const state = controlResponse.response;
         return {
@@ -66,9 +71,9 @@ async function getContentState(tab) {
         };
     }
 
-    const volumeResponse = await tabsSendMessage(tab.id, { command: "getVolume" }).catch(() => null);
-    const monoResponse = await tabsSendMessage(tab.id, { command: "getMono" }).catch(() => null);
-    const muteResponse = await tabsSendMessage(tab.id, { command: "getMute" }).catch(() => null);
+    const volumeResponse = await tabsSendMessage(tab.id, { command: "getVolume" }, TOP_FRAME_OPTIONS).catch(() => null);
+    const monoResponse = await tabsSendMessage(tab.id, { command: "getMono" }, TOP_FRAME_OPTIONS).catch(() => null);
+    const muteResponse = await tabsSendMessage(tab.id, { command: "getMute" }, TOP_FRAME_OPTIONS).catch(() => null);
 
     return {
         volume: volumeResponse && volumeResponse.response !== undefined ? normalizeDb(volumeResponse.response) : null,
@@ -105,7 +110,12 @@ async function getFallbackState(domainState) {
 
 async function setVolume(tab, domainState, dB) {
     const requestedVolume = normalizeDb(dB);
-    const response = await tabsSendMessage(tab.id, { command: "setVolume", dB: requestedVolume }).catch(handleError);
+    // Broadcast to every frame so embedded players in iframes are also
+    // controlled. The broadcast response is a cross-frame race and is ignored.
+    await tabsSendMessage(tab.id, { command: "setVolume", dB: requestedVolume }).catch(handleError);
+    // The authoritative applied volume (verdict-clamped by the top frame)
+    // comes from a frame-targeted query.
+    const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(handleError);
     const appliedVolume = response && response.response && response.response.volume !== undefined
         ? normalizeDb(response.response.volume)
         : requestedVolume;
@@ -122,7 +132,10 @@ async function setMono(tab, domainState, mono) {
 
 async function setMute(tab, domainState, muted) {
     const enabled = Boolean(muted);
-    const response = await tabsSendMessage(tab.id, { command: "setMute", muted: enabled }).catch(handleError);
+    // Broadcast the mute toggle to every frame; the racy response is ignored.
+    await tabsSendMessage(tab.id, { command: "setMute", muted: enabled }).catch(handleError);
+    // Authoritative volume for the badge feedback comes from the top frame.
+    const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(handleError);
     const dB = (response && response.response && response.response.volume !== undefined)
         ? normalizeDb(response.response.volume) : 0;
     await showNativeVolumeFeedback(tab.id, dB, enabled);

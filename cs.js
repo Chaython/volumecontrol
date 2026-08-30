@@ -147,6 +147,28 @@ function isLikelyRestrictedMedia(element) {
     return false;
 }
 
+function pageUsesEme() {
+    try {
+        return Boolean(document.documentElement && document.documentElement.dataset.vcPageUsesEme === "true");
+    } catch (e) {
+        return false;
+    }
+}
+
+// Mirrors the page-audio hook's conservative DRM gate. The hook flags the
+// document (vcPageUsesEme) the moment the page is actually granted an EME key
+// system; on such pages, blob: (MSE) media is treated as protected until the
+// element proves otherwise. setMediaKeys / encrypted flags normally land
+// before or within seconds of playback, after which the element itself is
+// flagged and the verdict locks to "restricted" permanently. This closes the
+// birth window where a fresh DRM element looks boostable.
+function isProbablyProtectedMedia(element) {
+    if (isLikelyRestrictedMedia(element)) return true;
+    if (!pageUsesEme()) return false;
+    const src = getMediaSourceUrl(element);
+    return Boolean(src) && src.indexOf("blob:") === 0;
+}
+
 function isPageAudioManaged(element) {
     try {
         return Boolean(element && element.dataset && element.dataset[PAGE_AUDIO_MANAGED_ATTR] === "true");
@@ -156,9 +178,15 @@ function isPageAudioManaged(element) {
 }
 
 function getBoostLimitReason(element) {
-    if (!element || element.dataset.vcHooked === "true") return "";
+    if (!element) return "";
 
-    if (isLikelyRestrictedMedia(element)) return "restricted";
+    // DRM status must never be masked by the hooking state: an element we
+    // hooked before its DRM flags appeared is still restricted (and, in
+    // enforcing browsers, already silent). Hiding that from the user is worse
+    // than admitting boost is unavailable. Check protection FIRST.
+    if (isProbablyProtectedMedia(element)) return "restricted";
+
+    if (element.dataset.vcHooked === "true") return "";
 
     const crossOrigin = isLikelyCrossOriginMedia(element);
     if (isPageAudioManaged(element)) return crossOrigin ? "cross-origin" : "";
@@ -283,7 +311,7 @@ function enforceBoostLimit(options = {}) {
 
 function applyFallbackVolume(element, reason = "") {
     const gain = tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
-    const limitReason = isLikelyRestrictedMedia(element) ? "restricted" : reason;
+    const limitReason = isProbablyProtectedMedia(element) ? "restricted" : reason;
 
     try {
         const currentVolume = (typeof element.volume === 'number') ? element.volume : 1;
@@ -447,9 +475,15 @@ function applyState() {
         const routeNeeded = needsAudioRoute();
         const gain = tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
         for (const el of Array.from(tc.vars.knownMediaElements || [])) {
-            // Clean up elements that have been removed from the DOM.
+            // Clean up elements that have been removed from the DOM -- but
+            // keep tracking detached elements that are still playing. Sites
+            // detach their <video> during player rebuilds while playback
+            // continues; dropping those would freeze any fallback volume we
+            // applied and stop later state changes from reaching them.
             if (!el.isConnected) {
-                tc.vars.knownMediaElements.delete(el);
+                if (!(isMediaPlaying(el) && isAudibleMediaElement(el))) {
+                    tc.vars.knownMediaElements.delete(el);
+                }
                 continue;
             }
             if (isPageAudioManaged(el)) {
@@ -516,7 +550,17 @@ let pageBridgeHeartbeatInterval = null;
 
 function ensurePageBridgeResync() {
     if (pageBridgeResyncInterval !== null) return;
-    pageBridgeResyncInterval = setInterval(syncPageAudioHook, PAGE_BRIDGE_RESYNC_MS);
+    // The resync interval exists to heal any drift between our cached
+    // "last synced" state and the page hook's actual state (e.g. the hook
+    // reset itself after a heartbeat timeout). The skip-cache in
+    // syncPageAudioHook would defeat that purpose if we always skipped, so
+    // every 6th tick (~30s) we force a full state send.
+    let resyncCount = 0;
+    pageBridgeResyncInterval = setInterval(() => {
+        resyncCount++;
+        if (resyncCount % 6 === 0) lastSyncedPageAudioState = null;
+        syncPageAudioHook();
+    }, PAGE_BRIDGE_RESYNC_MS);
 }
 
 function ensurePageBridgeHeartbeat() {
@@ -534,10 +578,16 @@ function suspendAudioContextIfIdle() {
     let isPlaying = false;
     let hasHooked = false;
     for (const el of tc.vars.mediaElements || []) {
-        // Clean up elements that have been removed from the DOM.
+        // Clean up elements that have been removed from the DOM -- but keep
+        // detached elements that are still playing. Deleting a playing
+        // element here makes the isPlaying check below miss it, so the
+        // context gets suspended while its audio is still flowing
+        // (permanently silencing that element until the page is reloaded).
         if (!el.isConnected) {
-            tc.vars.mediaElements.delete(el);
-            continue;
+            if (!(isMediaPlaying(el) && isAudibleMediaElement(el))) {
+                tc.vars.mediaElements.delete(el);
+                continue;
+            }
         }
         if (el.dataset.vcHooked === "true") hasHooked = true;
         if (isMediaPlaying(el) && isAudibleMediaElement(el)) {
@@ -582,14 +632,27 @@ function registerMediaElement(element) {
     // Track all media elements (even page-managed ones) so applyState can
     // iterate knownMediaElements instead of calling querySelectorAll.
     if (tc.vars.knownMediaElements) tc.vars.knownMediaElements.add(element);
+
+    // Attach the encrypted listener BEFORE the page-managed early return
+    // below. The page-audio hook claims elements at creation time, so without
+    // this, hook-claimed DRM elements would rely solely on element.mediaKeys
+    // — which can land seconds after playback starts, leaving a window where
+    // the boost-limit verdict says "unrestricted" while the media is DRM.
+    // The sticky dataset flag written here is shared with the hook's world.
+    try {
+        if (element.dataset && element.dataset.vcEncryptedWatched !== "true") {
+            element.dataset.vcEncryptedWatched = "true";
+            element.addEventListener('encrypted', () => {
+                try { element.dataset.vcRestrictedMedia = "true"; } catch (e) {}
+                // Invalidate boost limit cache since this element just became restricted.
+                invalidateBoostLimitCache();
+            }, { passive: true });
+        }
+    } catch (e) {}
+
     if (isPageAudioManaged(element) || element.dataset.vcWatched === "true" || element.dataset.vcHooked === "true") return;
 
     element.dataset.vcWatched = "true";
-    element.addEventListener('encrypted', () => {
-        element.dataset.vcRestrictedMedia = "true";
-        // Invalidate boost limit cache since this element just became restricted.
-        invalidateBoostLimitCache();
-    }, { passive: true });
 
     const hookIfPlaying = () => {
         if (isPageAudioManaged(element)) {
@@ -649,6 +712,16 @@ function connectOutput(element) {
     if (isLikelyCrossOriginMedia(element)) {
         applyFallbackVolume(element, "cross-origin");
         log(`Skipped WebAudio hook for cross-origin media: ${getMediaSourceUrl(element)}`, 3);
+        return;
+    }
+
+    // Never route DRM-protected media through our AudioContext: browsers feed
+    // the WebAudio graph silence for protected content while the element's
+    // native output stays detached — the element would go permanently mute.
+    // Use fallback (native) volume control instead.
+    if (isProbablyProtectedMedia(element)) {
+        applyFallbackVolume(element, "restricted");
+        log(`Skipped WebAudio hook for DRM-restricted media: ${getMediaSourceUrl(element)}`, 3);
         return;
     }
 

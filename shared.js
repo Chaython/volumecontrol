@@ -85,8 +85,20 @@
         return callApi(browserApi.tabs.query.bind(browserApi.tabs), [queryInfo]);
     }
 
-    function tabsSendMessage(tabId, message) {
-        return callApi(browserApi.tabs.sendMessage.bind(browserApi.tabs), [tabId, message]);
+    // options may carry { frameId } to target a specific frame. Without it the
+    // message is delivered to EVERY frame in the tab and the promise resolves
+    // with whichever frame responds FIRST — a race between the top frame (where
+    // the user's media and the boost-limit verdict live) and any embedded
+    // iframes (ads, captcha, payment frames) that run their own content script
+    // instance. Callers that need a trustworthy response must pass
+    // TOP_FRAME_OPTIONS ({ frameId: 0 }) and callers that only need the command
+    // APPLIED everywhere (e.g. setVolume for embedded players) should broadcast
+    // without a frameId and ignore the racy response.
+    const TOP_FRAME_OPTIONS = { frameId: 0 };
+
+    function tabsSendMessage(tabId, message, options) {
+        const args = options === undefined ? [tabId, message] : [tabId, message, options];
+        return callApi(browserApi.tabs.sendMessage.bind(browserApi.tabs), args);
     }
 
     function runtimeSendMessage(message) {
@@ -191,6 +203,7 @@
         storageSet,
         tabsQuery,
         tabsSendMessage,
+        TOP_FRAME_OPTIONS,
         runtimeSendMessage,
         tabsReload,
         openOptionsPage,

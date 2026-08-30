@@ -299,18 +299,20 @@
             // Check if any media route on this context is still playing.
             if (hasActiveMediaRoute(ctx)) continue;
 
-            // Check if any destination connection on this context is still routed.
-            // For page-owned audio (Howler, WebAudio apps), we conservatively assume
-            // routed connections may still be active, so we only suspend contexts
-            // that have NO routed connections at all.
-            let hasRoutedConnection = false;
+            // Check if any destination connection on this context is still
+            // tracked (routed OR native). Counting only routed connections
+            // meant a context whose connections we had restored to native
+            // (e.g. after the user set 0 dB) would be suspended while its
+            // audio was still playing — killing audio on sites whose graphs
+            // we had previously routed through.
+            let hasTrackedConnection = false;
             for (const entry of destinationConnections) {
-                if (nodeFromRef(entry.contextRef) === ctx && entry.routed) {
-                    hasRoutedConnection = true;
+                if (nodeFromRef(entry.contextRef) === ctx) {
+                    hasTrackedConnection = true;
                     break;
                 }
             }
-            if (hasRoutedConnection) continue;
+            if (hasTrackedConnection) continue;
 
             try {
                 if (typeof ctx.suspend === "function") {
@@ -498,7 +500,133 @@
         }
     }
 
+    // Sticky per-element DRM flag. Written to a data-* attribute so the
+    // ISOLATED-world content script (which shares DOM attributes but not JS
+    // state) sees it too, for both its routing decisions and its boost-limit
+    // verdict.
+    function markElementRestricted(element) {
+        try {
+            if (element && element.dataset) element.dataset.vcRestrictedMedia = "true";
+        } catch (e) {}
+    }
+
+    function isRestrictedMediaElement(element) {
+        if (!element) return false;
+
+        try {
+            if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
+            if (element.mediaKeys) return true;
+            if (element.webkitKeys) return true;
+        } catch (e) {
+            return false;
+        }
+
+        return false;
+    }
+
+    function pageUsesEme() {
+        try {
+            return document.documentElement.dataset.vcPageUsesEme === "true";
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // DRM pipelines always use MSE, and MSE playback surfaces as a blob: URL.
+    // EME init data (encrypted event) and setMediaKeys can land AFTER playback
+    // starts when license setup is slow, so while a page is known to use EME we
+    // conservatively treat blob-sourced media as protected too. This closes the
+    // window where an element gets routed through WebAudio a few ms before its
+    // DRM flags appear — a one-way trip to permanent silence.
+    function isLikelyDrmMedia(element) {
+        if (isRestrictedMediaElement(element)) return true;
+        if (!pageUsesEme()) return false;
+        const src = getMediaSourceUrl(element);
+        return Boolean(src) && src.indexOf("blob:") === 0;
+    }
+
+    function patchEmeApi() {
+        // EME awareness. Browsers output silence when DRM-protected media is
+        // routed through WebAudio: createMediaElementSource() detaches the
+        // element's native output and feeds the graph zeros, permanently muting
+        // the stream for that element (there is no way back). To prevent it, we
+        // watch the EME entry points and flag protected elements/pages BEFORE
+        // any routing decision is made:
+        //   * setMediaKeys(keys) marks that element restricted (sticky).
+        //   * requestMediaKeySystemAccess() resolving marks the page as EME-using
+        //     (feeds isLikelyDrmMedia's conservative blob: heuristic).
+        if (window.HTMLMediaElement && window.HTMLMediaElement.prototype &&
+            !window.HTMLMediaElement.prototype.__volumeControlSetMediaKeysPatched) {
+            const proto = window.HTMLMediaElement.prototype;
+            try {
+                const nativeSetMediaKeys = proto.setMediaKeys;
+                if (typeof nativeSetMediaKeys === "function") {
+                    proto.setMediaKeys = function patchedSetMediaKeys(mediaKeys) {
+                        if (mediaKeys) {
+                            markElementRestricted(this);
+                            log("setMediaKeys: element marked DRM-restricted (WebAudio routing blocked)");
+                        }
+                        return nativeSetMediaKeys.apply(this, arguments);
+                    };
+                }
+                const nativeWebkitSetMediaKeys = proto.webkitSetMediaKeys;
+                if (typeof nativeWebkitSetMediaKeys === "function") {
+                    proto.webkitSetMediaKeys = function patchedWebkitSetMediaKeys(mediaKeys) {
+                        if (mediaKeys) markElementRestricted(this);
+                        return nativeWebkitSetMediaKeys.apply(this, arguments);
+                    };
+                }
+                Object.defineProperty(proto, "__volumeControlSetMediaKeysPatched", {
+                    value: true,
+                    configurable: false,
+                    enumerable: false
+                });
+            } catch (e) {
+                log(`setMediaKeys patch failed: ${e && e.message}`);
+            }
+        }
+
+        if (window.Navigator && window.Navigator.prototype &&
+            typeof window.Navigator.prototype.requestMediaKeySystemAccess === "function" &&
+            !window.Navigator.prototype.__volumeControlRmksaPatched) {
+            try {
+                const nativeRequest = window.Navigator.prototype.requestMediaKeySystemAccess;
+                window.Navigator.prototype.requestMediaKeySystemAccess = function patchedRequestMediaKeySystemAccess() {
+                    const result = nativeRequest.apply(this, arguments);
+                    // Only flag the page when a CDM is actually GRANTED. Players
+                    // that merely probe support and fall back to clear media
+                    // reject here and must not trip the conservative gate.
+                    try {
+                        Promise.resolve(result).then(() => {
+                            try {
+                                document.documentElement.dataset.vcPageUsesEme = "true";
+                            } catch (e) {}
+                            log("EME key system access granted — page flagged as using DRM");
+                        }, () => {});
+                    } catch (e) {}
+                    return result;
+                };
+                Object.defineProperty(window.Navigator.prototype, "__volumeControlRmksaPatched", {
+                    value: true,
+                    configurable: false,
+                    enumerable: false
+                });
+            } catch (e) {
+                log(`requestMediaKeySystemAccess patch failed: ${e && e.message}`);
+            }
+        }
+    }
+
     function createMediaRouteSource(context, element) {
+        // DRM-protected media must NEVER be routed through WebAudio: the browser
+        // outputs silence for protected content in the graph while the element's
+        // native output stays detached — permanently muting the stream. Fall
+        // back to native volume scaling for anything that looks protected.
+        if (isLikelyDrmMedia(element)) {
+            log(`skipping MediaElementAudioSource for DRM-restricted media: ${getMediaSourceUrl(element)}`);
+            return null;
+        }
+
         // captureStream() adds a delayed parallel copy, so blocked media falls back to native volume.
         if (isLikelyCrossOriginMedia(element)) {
             log(`skipping MediaElementAudioSource for cross-origin media: ${getMediaSourceUrl(element)}`);
@@ -532,6 +660,7 @@
         const entry = getMediaState(element);
         entry.applyingVolume = true;
         entry.ignoreVolumeEventsUntil = Date.now() + 100;
+        entry.lastNativeVolume = value; // remember what we wrote (see applyOnVolumeChange)
         try {
             if (nativeVolumeDescriptor && nativeVolumeDescriptor.set) {
                 nativeVolumeDescriptor.set.call(element, value);
@@ -744,6 +873,8 @@
 
     function ensureMediaRoute(element) {
         if (!mediaNeedsAudioRoute() || !isAudibleMediaElement(element)) return null;
+        // DRM-restricted media is never routed (see createMediaRouteSource).
+        if (isLikelyDrmMedia(element)) return null;
         if (mediaRoutes.has(element)) {
             const existing = mediaRoutes.get(element);
             // Defensive: if the route's context was closed out from under us
@@ -848,13 +979,32 @@
         setNativeVolume(element, fallbackVolume);
     }
 
+    // Returns true if an element that was removed from the DOM can still be
+    // heard. Sites like YouTube/Twitch/Twitter detach their <video> element
+    // during player rebuilds and ad transitions WHILE IT KEEPS PLAYING, and
+    // a detached media element keeps producing audio without being in the
+    // DOM. If we stopped tracking such an element, its route gain would
+    // freeze at whatever boost was active when it was detached — a stale
+    // +32 dB "earrape" boost that ignores every later volume change.
+    function isDetachedButAudible(element) {
+        if (element.isConnected) return false;
+        if (!isMediaPlaying(element)) return false;
+        const route = mediaRoutes.get(element);
+        if (route && route.outputConnected) return true;   // routed and live
+        return isAudibleMediaElement(element);             // native output audible
+    }
+
     function applyStateToMediaElements() {
         for (const element of Array.from(mediaElements)) {
-            // Clean up elements that have been removed from the DOM. The
-            // corresponding route in mediaRoutes (a WeakMap) and the entry in
-            // mediaState (also a WeakMap) will be GC'd along with the element
-            // once mediaElements (a strong Set) releases its reference.
             if (!element.isConnected) {
+                // Detached element: keep updating it for as long as it can
+                // still be heard. Only drop it once it is truly quiescent.
+                if (isDetachedButAudible(element)) {
+                    applyMediaElementState(element);
+                    continue;
+                }
+                const route = mediaRoutes.get(element);
+                if (route) disconnectMediaRouteOutput(route);
                 mediaElements.delete(element);
                 continue;
             }
@@ -874,6 +1024,13 @@
         mediaElements.add(element);
         const entry = getMediaState(element);
         if (!entry.listenersInstalled && typeof element.addEventListener === "function") {
+            // DRM detection: the moment the pipeline reports encrypted init
+            // data, flag the element (sticky) so neither this hook nor the
+            // content script ever routes it through WebAudio.
+            element.addEventListener("encrypted", () => {
+                markElementRestricted(element);
+                log("encrypted event: element marked DRM-restricted (WebAudio routing blocked)");
+            }, { passive: true });
             const applyOnPlay = () => {
                 mediaElements.add(element);
                 applyMediaElementState(element);
@@ -886,7 +1043,16 @@
             };
             const applyOnVolumeChange = () => {
                 const currentEntry = getMediaState(element);
-                if (currentEntry.ignoreVolumeEventsUntil > Date.now()) return;
+                if (currentEntry.ignoreVolumeEventsUntil > Date.now()) {
+                    // Only swallow the echo of OUR OWN write. If the native
+                    // volume no longer matches what we last set, the page
+                    // changed volume inside our ignore window and that
+                    // change must be processed, not ignored.
+                    if (currentEntry.lastNativeVolume === undefined ||
+                        currentEntry.lastNativeVolume === readNativeVolume(element)) {
+                        return;
+                    }
+                }
 
                 applyMediaElementState(element);
                 setTimeout(suspendMediaContextIfIdle, 250);
@@ -1206,6 +1372,7 @@
     patchMediaPlayback();
     patchAudioConstructor();
     patchElementCreation();
+    patchEmeApi();
 
     // Poll for Howler for up to 30 seconds, then stop. Once Howler is detected,
     // clear the poll — routeKnownAudioLibraries will be called from handleBridgeMessage
@@ -1234,9 +1401,14 @@
     // state changes (e.g. a soundboard that fires many SFX), mediaElements
     // would otherwise accumulate disconnected elements forever -- and each one
     // keeps its (kept-for-replay) route's mediaAudioContext alive.
+    // Elements detached while still playing are NOT swept: they are still
+    // audible and must keep receiving gain updates (see isDetachedButAudible).
+    // They get dropped by applyStateToMediaElements once they pause or end.
     setInterval(() => {
         for (const element of Array.from(mediaElements)) {
-            if (!element.isConnected) {
+            if (!element.isConnected && !isDetachedButAudible(element)) {
+                const route = mediaRoutes.get(element);
+                if (route) disconnectMediaRouteOutput(route);
                 mediaElements.delete(element);
             }
         }

@@ -8,6 +8,7 @@ const {
   storageSet,
   tabsQuery,
   tabsSendMessage,
+  TOP_FRAME_OPTIONS,
   runtimeSendMessage,
   tabsReload,
   openOptionsPage,
@@ -118,7 +119,10 @@ function handleTabs(tabs) {
 
     updateEnableSwitch(currentTab);
 
-    tabsSendMessage(currentTab.id, { command: "checkExclusion" }).catch(async () => {
+    // Frame-targeted exclusion check: only the top frame's content script is
+    // authoritative for whether the extension is active on this page. An
+    // unframed message would race every iframe's instance.
+    tabsSendMessage(currentTab.id, { command: "checkExclusion" }, TOP_FRAME_OPTIONS).catch(async () => {
         // Content script didn't respond; fall back to storage to decide whether the page is truly excluded.
         try {
             const domain = extractRootDomain(currentTab.url);
@@ -282,7 +286,13 @@ function applyAudioControlState(state = {}) {
 async function refreshAudioControlState(tab) {
     if (!tab || tab.id === undefined) return null;
 
-    const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }).catch(handleError);
+    // Ask ONLY the top frame (frameId 0). The top frame owns the page's media
+    // elements and therefore the boost-limit/DRM verdict. An unframed query is
+    // answered by whichever frame responds first — on pages that embed iframes
+    // (captcha, payment, ads), those frames' content scripts answer with their
+    // own unrestricted state, making the DRM/boost-limit note flicker in and
+    // out while the volume slider is dragged.
+    const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(handleError);
     const state = response && response.response ? response.response : null;
 
     if (state) {
@@ -338,10 +348,21 @@ async function setVolume(dB, tab, options = {}) {
   let normalizedDb = setDisplayedVolume(dB);
 
   if (tab) {
-      const response = await tabsSendMessage(tab.id, {
+      // Broadcast the new volume to EVERY frame in the tab so media living in
+      // embedded iframes (embedded players, ads with audio) is controlled too.
+      // The broadcast response is a race (first frame to respond wins) and is
+      // deliberately ignored.
+      await tabsSendMessage(tab.id, {
           command: "setVolume",
           dB: normalizedDb
       }).catch(handleError);
+
+      // Authoritative state: query the TOP FRAME only. Its response carries
+      // the verdict-clamped volume and the real boost-limit/DRM status, so the
+      // UI cannot flip between frames' answers as the slider moves.
+      const response = await tabsSendMessage(tab.id, {
+          command: "getAudioControlState"
+      }, TOP_FRAME_OPTIONS).catch(handleError);
 
       if (response && response.response) {
           applyAudioControlState(response.response);
@@ -376,9 +397,16 @@ async function toggleMono(tab) {
 async function toggleMute(tab, muted) {
   if (!tab) return;
   applyMuteButtonState(muted);
-  const response = await tabsSendMessage(tab.id, { command: "setMute", muted }).catch(handleError);
+  // Broadcast the mute toggle to every frame (embedded players must mute too);
+  // the racy first response is ignored.
+  await tabsSendMessage(tab.id, { command: "setMute", muted }).catch(handleError);
+  // Authoritative state (and the volume for the badge feedback) comes from the
+  // top frame only — see refreshAudioControlState.
+  const state = await refreshAudioControlState(tab);
+  const dB = state && state.volume !== undefined
+      ? Number(state.volume)
+      : (Number(cached.slider && cached.slider.value) || 0);
   // Update the browser-action badge immediately so the icon reflects mute state.
-  const dB = Number(cached.slider && cached.slider.value) || 0;
   runtimeSendMessage({
       command: "showNativeVolumeFeedback",
       tabId: tab.id,
@@ -560,15 +588,15 @@ async function initializeControls(tab) {
             tabsSendMessage(tab.id, { command: "setMono", mono: Boolean(saved.mono) }).catch(handleError);
             tabsSendMessage(tab.id, { command: "setMute", muted: Boolean(saved.muted) }).catch(handleError);
         } else if (!audioState) {
-            tabsSendMessage(tab.id, { command: "getVolume" }).then((response) => {
+            tabsSendMessage(tab.id, { command: "getVolume" }, TOP_FRAME_OPTIONS).then((response) => {
                 if (response && response.response !== undefined) setVolume(response.response, null);
             }).catch(handleError);
-            tabsSendMessage(tab.id, { command: "getMono" }).then((response) => {
+            tabsSendMessage(tab.id, { command: "getMono" }, TOP_FRAME_OPTIONS).then((response) => {
                 if (response && response.response !== undefined && monoCheckbox) {
                     monoCheckbox.checked = response.response;
                 }
             }).catch(handleError);
-            tabsSendMessage(tab.id, { command: "getMute" }).then((response) => {
+            tabsSendMessage(tab.id, { command: "getMute" }, TOP_FRAME_OPTIONS).then((response) => {
                 if (response && response.response !== undefined) applyMuteButtonState(response.response);
             }).catch(handleError);
         }
