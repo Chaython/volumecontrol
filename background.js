@@ -87,7 +87,13 @@ async function getContentState(tab) {
 async function saveRememberedSettings(domainState, updates) {
     if (!domainState || !domainState.settingsKey) return;
 
-    const siteSettings = domainState.siteSettings || {};
+    // Re-read the latest siteSettings instead of writing back the snapshot
+    // taken at the start of the command. Hotkey auto-repeat (Alt+Shift+Up held
+    // down) and a popup in another window interleave writes; writing a stale
+    // snapshot silently reverts the other writer's change (remembered mute
+    // lost on reload, increments swallowed).
+    const fresh = await storageGet({ siteSettings: {} }).catch(() => null);
+    const siteSettings = (fresh && fresh.siteSettings) || domainState.siteSettings || {};
     const current = siteSettings[domainState.settingsKey] || { volume: 0, mono: false, muted: false };
     siteSettings[domainState.settingsKey] = {
         volume: updates.volume !== undefined ? normalizeDb(updates.volume) : normalizeDb(current.volume),
@@ -98,7 +104,7 @@ async function saveRememberedSettings(domainState, updates) {
 }
 
 async function getFallbackState(domainState) {
-    if (!domainState || !domainState.settingsKey) return { volume: 0, mono: false };
+    if (!domainState || !domainState.settingsKey) return { volume: 0, mono: false, muted: false };
 
     const saved = domainState.siteSettings[domainState.settingsKey] || {};
     return {

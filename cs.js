@@ -352,14 +352,20 @@ function handleFrameLimitReport(event) {
 
 window.addEventListener("message", handleFrameLimitReport);
 
-// Non-top frames report their verdict to the top frame every second. This is
-// a heartbeat: it keeps the top frame's TTL entries fresh and lets verdicts
-// both tighten and relax as media comes and goes inside the frame.
+// Non-top frames report their verdict to the top frame. Reports post
+// immediately when the verdict CHANGES and otherwise refresh the top frame's
+// TTL entry at half its lifetime (2.5s TTL / 2s heartbeat) — posting
+// unconditionally every second only burned CPU/postMessage volume on
+// iframe-heavy pages with stable verdicts.
+let lastPostedFrameReport = { reason: null, at: 0 };
 function reportFrameBoostLimit() {
     if (isTopFrame()) return;
     if (tc.vars.isBlocked) return;
     try {
         const limit = getBoostLimitInfo();
+        const now = Date.now();
+        if (limit.reason === lastPostedFrameReport.reason && now - lastPostedFrameReport.at < 2000) return;
+        lastPostedFrameReport = { reason: limit.reason, at: now };
         window.top.postMessage({
             vcFrameBoostLimitVersion: 1,
             vcFrameBoostLimit: {
@@ -376,6 +382,15 @@ function reportFrameBoostLimit() {
 if (!isTopFrame()) {
     reportFrameBoostLimit();
     setInterval(reportFrameBoostLimit, 1000);
+} else {
+    // Purge expired frame reports on a timer, not only when a verdict is
+    // requested. On a tab that is merely playing audio (no popup/hotkey
+    // activity) getAggregatedFrameLimit is never called; expired entries pin
+    // the REMOVED iframes' Window objects against GC for the tab's lifetime
+    // (ad-refresh loops churn iframes constantly).
+    setInterval(() => {
+        getAggregatedFrameLimit();
+    }, 2500);
 }
 
 function setupBoostLimitObserver() {
@@ -1037,6 +1052,11 @@ async function start() {
             const s = data.siteSettings[siteSettingsKey];
             if (s.volume !== undefined) tc.vars.dB = normalizeDb(s.volume);
             if (s.mono !== undefined) tc.vars.mono = s.mono;
+            // Restore the remembered mute too: "muted" is persisted as part of
+            // the remembered triple (and re-applied when the popup opens), so
+            // leaving it out here meant a remembered-muted site audibly played
+            // after every navigation until the popup happened to be opened.
+            if (s.muted !== undefined) tc.vars.muted = Boolean(s.muted);
         }
 
         applyState();

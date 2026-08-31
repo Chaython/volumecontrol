@@ -130,6 +130,11 @@
         let domain = String(value).trim().toLowerCase();
         domain = domain.replace(/^(https?|ftp):\/\/(www\.)?/, '');
         domain = domain.split('/')[0].split(':')[0];
+        // Strip a bare leading "www." too: a user-typed "www.foo.com" in the
+        // options page previously saved as "www.foo.com", which could never
+        // match a real page (every URL normalizes to "foo.com") — a silently
+        // dead entry. Both spellings now canonicalize to the same key.
+        domain = domain.replace(/^www\./, '');
         return domain;
     }
 

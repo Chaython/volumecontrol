@@ -31,6 +31,7 @@
 
     const graphs = new WeakMap();
     const contexts = new Set();
+    const selfSuspendedContexts = new WeakSet();
     const vcNodes = new WeakSet();
     const destinationConnections = new Set();
     const howlerRoutes = new WeakMap();
@@ -283,21 +284,54 @@
         }
     }
 
+    // Iterate every tracked page context, pruning dead/closed entries.
+    // Entries are WeakRefs when available: a strong Set would pin contexts
+    // the page abandoned without close() (games, per-interaction contexts)
+    // for the tab's lifetime — each retained context counts against Chrome's
+    // per-tab AudioContext quota, eventually breaking the SITE's own audio.
+    function eachTrackedContext(fn) {
+        for (const entry of Array.from(contexts)) {
+            const ctx = (supportsWeakRef && entry instanceof WeakRef)
+                ? (typeof entry.deref === "function" ? entry.deref() : null)
+                : entry;
+            if (!ctx || ctx.state === "closed") {
+                contexts.delete(entry);
+                continue;
+            }
+            fn(ctx);
+        }
+    }
+
+    function addTrackedContext(context) {
+        contexts.add(supportsWeakRef ? new WeakRef(context) : context);
+    }
+
+    // Resume a context ONLY when the extension itself suspended it. Pages call
+    // suspend() deliberately (pause-on-blur, battery savers); those must stay
+    // suspended. A context WE suspended that receives a new destination
+    // connection (page playing its next sound) must be revived, or the new
+    // audio would silently play into a suspended context — "extension killed
+    // my game audio".
+    function resumeIfSelfSuspended(context) {
+        try {
+            if (context && selfSuspendedContexts.has(context)) {
+                resumeContext(context);
+                if (context.state === "running") selfSuspendedContexts.delete(context);
+            }
+        } catch (e) {}
+    }
+
     function suspendIdleContexts() {
         // Suspend page-level AudioContexts that the extension has routed through
         // but which no longer have any active audio sources. This is critical for
         // Bluetooth devices: a running AudioContext keeps the OS audio output
         // stream open, preventing the device from returning to idle.
-        for (const ctx of Array.from(contexts)) {
-            if (!ctx || ctx.state === "closed") {
-                contexts.delete(ctx);
-                continue;
-            }
-            if (ctx.state !== "running") continue;
-            if (ctx === mediaAudioContext) continue; // handled by suspendMediaContextIfIdle
+        eachTrackedContext((ctx) => {
+            if (ctx.state !== "running") return;
+            if (ctx === mediaAudioContext) return; // handled by suspendMediaContextIfIdle
 
             // Check if any media route on this context is still playing.
-            if (hasActiveMediaRoute(ctx)) continue;
+            if (hasActiveMediaRoute(ctx)) return;
 
             // Check if any destination connection on this context is still
             // tracked (routed OR native). Counting only routed connections
@@ -312,17 +346,21 @@
                     break;
                 }
             }
-            if (hasTrackedConnection) continue;
+            if (hasTrackedConnection) return;
 
             try {
                 if (typeof ctx.suspend === "function") {
                     ctx.suspend();
+                    // Remember that WE suspended this context so a later
+                    // destination connection resumes it (see
+                    // resumeIfSelfSuspended).
+                    selfSuspendedContexts.add(ctx);
                     log(`page context suspended (idle): state=${ctx.state}`);
                 }
             } catch (e) {
                 log(`page context suspend failed: ${e && e.message}`);
             }
-        }
+        });
     }
 
     function disconnectMediaRouteOutput(route) {
@@ -440,7 +478,7 @@
 
             const graph = { context, gain, splitter, leftGain, rightGain, merger, currentMode: null };
             graphs.set(context, graph);
-            contexts.add(context);
+            addTrackedContext(context);
             wireGraph(graph);
             return graph;
         } catch (e) {
@@ -450,15 +488,10 @@
     }
 
     function applyStateToGraphs() {
-        for (const context of Array.from(contexts)) {
-            if (!context || context.state === "closed") {
-                contexts.delete(context);
-                continue;
-            }
-
+        eachTrackedContext((context) => {
             const graph = graphs.get(context);
             if (graph) wireGraph(graph);
-        }
+        });
     }
 
     function getMediaContext() {
@@ -494,7 +527,16 @@
 
         try {
             const url = new URL(src, document.baseURI);
-            return url.protocol.indexOf("http") === 0 && url.origin !== window.location.origin;
+            if (url.protocol.indexOf("http") !== 0) return false;
+            // In inherited-origin about:blank frames, location.origin
+            // serializes as "null" while the document's effective origin is
+            // the creator's. Prefer document.origin (the effective origin);
+            // an actually-opaque origin (data:, sandboxed without
+            // allow-same-origin) is "unknown" rather than cross-origin, so
+            // same-origin media inside such frames is not falsely limited.
+            const pageOrigin = (typeof document.origin === "string" && document.origin) || window.location.origin;
+            if (!pageOrigin || pageOrigin === "null") return false;
+            return url.origin !== pageOrigin;
         } catch (e) {
             return false;
         }
@@ -559,6 +601,30 @@
     // aggregate on the documentElement lets the content script's boost-limit
     // verdict include them.
     let lastPublishedPageRestriction = null;
+    let pendingRelaxation = null; // { restriction, since } — surviving the hysteresis window
+    const RESTRICTION_RELAX_DELAY_MS = 500;
+
+    function restrictionSeverity(value) {
+        return value === "restricted" ? 2 : (value === "cross-origin" ? 1 : 0);
+    }
+
+    function publishPageMediaRestriction(restriction) {
+        lastPublishedPageRestriction = restriction;
+        try {
+            const ds = document.documentElement.dataset;
+            if (restriction) ds.vcPageMediaRestriction = restriction;
+            else delete ds.vcPageMediaRestriction;
+            log(`page media restriction: ${restriction || "none"}`);
+        } catch (e) {
+            log(`page media restriction publish failed: ${e && e.message}`);
+        }
+        // Tell the content script immediately: its boost-limit verdict caches
+        // for a second, and without this nudge a freshly-restricted page (DRM
+        // handshake completing, cross-origin src appearing) would keep serving
+        // the stale unrestricted verdict until the cache expires.
+        postToContentScript("pageRestrictionChanged", { restriction });
+    }
+
     function updatePageMediaRestriction() {
         let restriction = "";
         for (const element of mediaElements) {
@@ -574,21 +640,42 @@
             }
         }
 
-        if (restriction === lastPublishedPageRestriction) return;
-        lastPublishedPageRestriction = restriction;
-        try {
-            const ds = document.documentElement.dataset;
-            if (restriction) ds.vcPageMediaRestriction = restriction;
-            else delete ds.vcPageMediaRestriction;
-            log(`page media restriction: ${restriction || "none"}`);
-        } catch (e) {
-            log(`page media restriction publish failed: ${e && e.message}`);
+        if (restriction === lastPublishedPageRestriction) {
+            // Nothing new to say; a pending relaxation that matches the
+            // published value is stale (transient during a src swap).
+            pendingRelaxation = null;
+            return;
         }
-        // Tell the content script immediately: its boost-limit verdict caches
-        // for a second, and without this nudge a freshly-restricted page (DRM
-        // handshake completing, cross-origin src appearing) would keep serving
-        // the stale unrestricted verdict until the cache expires.
-        postToContentScript("pageRestrictionChanged", { restriction });
+
+        if (lastPublishedPageRestriction === null) {
+            // First computation on this page — publish immediately.
+            pendingRelaxation = null;
+            publishPageMediaRestriction(restriction);
+            return;
+        }
+
+        if (restrictionSeverity(restriction) > restrictionSeverity(lastPublishedPageRestriction)) {
+            // Tightening (a restriction appeared or got more severe): publish
+            // at once — the popup must clamp its slider range BEFORE the user
+            // can drag into a region that cannot actually be boosted.
+            pendingRelaxation = null;
+            publishPageMediaRestriction(restriction);
+            return;
+        }
+
+        // Relaxation ("" while a new src loads after a track change, or
+        // "cross-origin" after "restricted"): src swaps make the aggregate
+        // transiently compute a LOWER value while the next source resolves.
+        // Publishing that instantly would flash the boost-limit note off and
+        // back on (the same visible symptom as the v6.8 cross-frame race).
+        // Require the relaxed value to stay stable for the hysteresis window;
+        // the 1s recompute interval will publish it on a later tick.
+        if (!pendingRelaxation || pendingRelaxation.restriction !== restriction) {
+            pendingRelaxation = { restriction, since: Date.now() };
+        } else if (Date.now() - pendingRelaxation.since >= RESTRICTION_RELAX_DELAY_MS) {
+            publishPageMediaRestriction(restriction);
+            pendingRelaxation = null;
+        }
     }
 
     function patchEmeApi() {
@@ -755,7 +842,12 @@
                 continue;
             }
 
-            const graph = ensureGraph(nodeFromRef(entry.contextRef));
+            const entryContext = nodeFromRef(entry.contextRef);
+            // Re-routing implies audio should flow; revive a context we
+            // idled out or these sources would play into silence.
+            resumeIfSelfSuspended(entryContext);
+
+            const graph = ensureGraph(entryContext);
             if (!graph) continue;
 
             try {
@@ -815,6 +907,10 @@
 
         const masterGain = howler.masterGain;
         if (howlerRoutes.has(masterGain)) return;
+
+        // Howler is about to play through this context; if we idled it out
+        // earlier, revive it so the site's sounds are not swallowed.
+        resumeIfSelfSuspended(howler.ctx);
 
         const existingRoute = findDestinationConnection(masterGain, howler.ctx.destination, undefined, undefined);
         if (existingRoute && existingRoute.routed) {
@@ -1025,7 +1121,16 @@
         }
 
         const fallbackVolume = Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)));
-        setNativeVolume(element, fallbackVolume);
+        // Rate-limit our own fallback writes: some sites run volume managers
+        // that write their own value back on every volumechange (normalizers,
+        // "smart volume" features). Without a floor between our writes that
+        // escalates into a write war at event-loop speed (audible flutter +
+        // CPU churn). 250ms bounds the war while staying imperceptible.
+        const now = Date.now();
+        if (entry.lastFallbackWriteAt === undefined || now - entry.lastFallbackWriteAt >= 250) {
+            entry.lastFallbackWriteAt = now;
+            setNativeVolume(element, fallbackVolume);
+        }
     }
 
     // Returns true if an element that was removed from the DOM can still be
@@ -1156,12 +1261,56 @@
         }
     }
 
+    // Elements inserted after DOMContentLoaded via innerHTML/insertAdjacentHTML
+    // (template rendering, jQuery .html()) never pass through the patched
+    // createElement; driven only through native controls, neither the patched
+    // play() nor the volume setter ever runs for them — invisible to boost AND
+    // to the restriction aggregate. Register any audio/video the moment it
+    // enters the (light) DOM so our per-element listeners take over from there.
+    function watchForInjectedMediaElements() {
+        if (typeof MutationObserver === "undefined") return;
+        const registerNode = (node) => {
+            if (!node || node.nodeType !== 1) return;
+            const tag = node.tagName;
+            if (tag === "AUDIO" || tag === "VIDEO") {
+                registerMediaElement(node);
+                return;
+            }
+            if (!node.querySelectorAll) return;
+            try {
+                const found = node.querySelectorAll("audio, video");
+                for (const element of found) registerMediaElement(element);
+            } catch (e) {}
+        };
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                const added = mutation.addedNodes;
+                if (!added || !added.length) continue;
+                for (let i = 0; i < added.length; i++) {
+                    registerNode(added[i]);
+                }
+            }
+        });
+        const startObserving = () => {
+            try {
+                observer.observe(document.documentElement || document, { childList: true, subtree: true });
+            } catch (e) {}
+        };
+        if (document.documentElement) startObserving();
+        else document.addEventListener("DOMContentLoaded", startObserving, { once: true });
+    }
+
     function patchAudioNodeRouting() {
         if (!AudioNodePrototype || !nativeConnect || AudioNodePrototype.__volumeControlPatched) return;
 
         AudioNodePrototype.connect = function patchedConnect(destination, outputIndex, inputIndex) {
             if (isContextDestination(destination) && !vcNodes.has(this)) {
                 const context = this.context || destination.context;
+                // The page is (re)connecting something to the destination — it
+                // wants audio NOW. If we idled this context out (Bluetooth
+                // sweep), revive it before routing, otherwise the new sound
+                // would play into a suspended context (silent SFX bug).
+                resumeIfSelfSuspended(context);
                 const graph = (graphs.has(context) || pageAudioNeedsRoute()) ? ensureGraph(context) : null;
                 if (graph) {
                     trackDestinationConnection(this, destination, outputIndex, inputIndex, true);
@@ -1405,6 +1554,23 @@
         unrouteHowlerGlobal();
 
         for (const element of Array.from(mediaElements)) {
+            const route = mediaRoutes.get(element);
+            if (route && isMediaPlaying(element) && isAudibleMediaElement(element)) {
+                // Once createMediaElementSource() has been called, the element's
+                // native output is permanently detached — its ONLY remaining
+                // audio path is source→gain→destination. releaseMediaRoute()
+                // would disconnect that path and mute a PLAYING element until
+                // its next media event, which can be minutes away on a long
+                // track. effectiveGain() is already 1.0 (extensionActive=false),
+                // so keep the route wired and pass audio through at unity.
+                try {
+                    setNativeVolume(element, getMediaState(element).baseVolume);
+                } catch (e) {
+                    log(`native volume restore failed: ${e && e.message}`);
+                }
+                wireMediaRoute(route);
+                continue;
+            }
             releaseMediaRoute(element);
         }
 
@@ -1498,6 +1664,19 @@
     } else {
         scanMediaElements(document);
     }
+
+    watchForInjectedMediaElements();
+
+    // A media route context created before any user gesture (autoplay granted
+    // via the Media Engagement Index) can be born 'suspended' by the autoplay
+    // policy and stay that way — routed media would then be silent. Retry the
+    // resume on the first user interaction; resumeContext no-ops once the
+    // context is running.
+    const resumeMediaContextOnGesture = () => {
+        if (mediaAudioContext) resumeContext(mediaAudioContext);
+    };
+    document.addEventListener("pointerdown", resumeMediaContextOnGesture, { passive: true, capture: true });
+    document.addEventListener("keydown", resumeMediaContextOnGesture, { passive: true, capture: true });
 
     window.addEventListener("message", handleBridgeMessage);
 })();

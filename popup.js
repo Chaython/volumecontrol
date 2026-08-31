@@ -305,6 +305,21 @@ async function refreshAudioControlState(tab) {
     return state;
 }
 
+async function pollAudioControlState(tab) {
+    if (!tab || tab.id === undefined) return null;
+    const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(() => null);
+    const state = response && response.response ? response.response : null;
+    if (!state) return null;
+    // Refresh ONLY the verdict-driven UI (note, slider range, mono/mute state).
+    // Deliberately NOT the slider value: while the user is dragging, the last
+    // committed value lags the thumb by up to the 40ms debounce, and a poll
+    // response landing mid-drag would snap the thumb back (stale-flash).
+    applyAudioControlState(state);
+    if (state.mono !== undefined && cached.monoCheckbox) cached.monoCheckbox.checked = Boolean(state.mono);
+    if (state.muted !== undefined) applyMuteButtonState(state.muted);
+    return state;
+}
+
 async function saveSiteSettings(tab) {
     try {
         const rememberCheckbox = document.getElementById("remember-checkbox");
@@ -574,6 +589,16 @@ async function initializeControls(tab) {
 
     const domain = extractRootDomain(tab.url);
     if (!domain) return;
+
+    // Keep the boost-limit verdict live while the popup is open: media can
+    // become DRM-restricted/cross-origin at any moment (license handshake
+    // completing after playback started, cross-origin src appearing), and a
+    // stale unrestricted UI would advertise a +32 dB range that cannot be
+    // boosted. The popup document is destroyed on close, tearing the timer
+    // down with it.
+    setInterval(() => {
+        pollAudioControlState(tab).catch(() => {});
+    }, 1000);
 
     try {
         const audioState = await refreshAudioControlState(tab);
