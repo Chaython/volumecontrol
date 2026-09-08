@@ -155,14 +155,39 @@ function pageUsesEme() {
     }
 }
 
+// Engine-aware EME policy (v6.12) — must stay in sync with the hook's twin.
+// Chromium-family browsers silence MediaElementAudioSourceNode output for
+// encrypted content (routing DRM there = permanent silence), so DRM signals
+// block routing and clamp the verdict. Gecko (Firefox) explicitly supports
+// capturing EME media audio through WebAudio (Mozilla bug 1331763, Firefox
+// 55+: "creating a MediaElementSource on a media element should always
+// succeed"; only *video* capture is blocked), so on Firefox DRM media is
+// fully boostable. Cross-origin taint silences routed audio in every engine
+// (spec) and stays enforced on both. Detection: navigator.userAgentData is
+// Chromium-only; a UA containing "Firefox/" identifies Gecko. Unknown
+// engines default to the conservative guard.
+function isGeckoRuntime() {
+    try {
+        if (typeof navigator !== "undefined" && navigator.userAgentData) return false;
+        const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+        return ua.indexOf("Firefox/") !== -1;
+    } catch (e) {
+        return false;
+    }
+}
+const EME_AUDIO_SILENCED_WHEN_ROUTED = !isGeckoRuntime();
+
 // Mirrors the page-audio hook's conservative DRM gate. The hook flags the
 // document (vcPageUsesEme) the moment the page is actually granted an EME key
 // system; on such pages, blob: (MSE) media is treated as protected until the
 // element proves otherwise. setMediaKeys / encrypted flags normally land
 // before or within seconds of playback, after which the element itself is
 // flagged and the verdict locks to "restricted" permanently. This closes the
-// birth window where a fresh DRM element looks boostable.
+// birth window where a fresh DRM element looks boostable. On Gecko
+// (Firefox), EME audio flows through WebAudio (bug 1331763), so DRM media is
+// NOT restricted there and this gate returns false for everything.
 function isProbablyProtectedMedia(element) {
+    if (!EME_AUDIO_SILENCED_WHEN_ROUTED) return false;
     if (isLikelyRestrictedMedia(element)) return true;
     if (!pageUsesEme()) return false;
     const src = getMediaSourceUrl(element);

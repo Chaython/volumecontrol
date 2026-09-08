@@ -14,15 +14,19 @@ Volume Control adds a simple per-site volume control to your browser. It can low
 
 Settings can be remembered per site, and you can exclude sites where you do not want the extension to run. Volume Control supports HTML5 video and audio only; it does not support Flash.
 
-Media that cannot be boosted (DRM-protected or cross-origin streams) is detected automatically: the popup explains the restriction, the slider clamps at 0 dB, and lowering volume still works through the native fallback. See [Restricted Media](#restricted-media-drm--cross-origin) below.
+Media that cannot be boosted (DRM-protected or cross-origin streams) is detected automatically: the popup explains the restriction, the slider clamps at 0 dB, and lowering volume still works through the native fallback. See [Restricted Media](#restricted-media-drm--cross-origin) below. On Firefox, DRM audio **can** be boosted — see the engine note below.
 
 ## Restricted Media (DRM & Cross-Origin)
 
-Some media cannot be routed through WebAudio: DRM-protected streams (EME / Widevine / PlayReady / ClearKey) and cross-origin media loaded without CORS. Routing these through WebAudio either fails or detaches the element's native output and plays silence, so Volume Control detects them and refuses to route — while keeping native volume control working.
+Some media cannot be routed through WebAudio, and whether that applies depends on **both** the media and the browser engine:
 
-**What you will see**
+- **DRM-protected streams (EME / Widevine / PlayReady / ClearKey)** on **Chrome, Edge, and other Chromium browsers**: `createMediaElementSource()` succeeds but the browser feeds the WebAudio graph **silence** for protected content while the element's native output stays detached — a one-way trip to permanent mute. Volume Control detects these and refuses to route; lowering volume still works through the native fallback.
+- **DRM-protected streams on Firefox**: Gecko explicitly allows capturing EME media **audio** through WebAudio (Mozilla bug 1331763, shipped in Firefox 55 — only *video* capture via `captureStream()` is blocked). Since v6.12, Volume Control detects the engine and **routes DRM media normally on Firefox — boosting, mono, and mute all work** on sites like Netflix or Spotify web. Competitor extensions have shipped this behavior for years (it is safe: Firefox's CDM hands decrypted PCM to the standard audio pipeline, which WebAudio taps).
+- **Cross-origin media without CORS** (e.g. detached CDN players with no `crossOrigin` attribute): the WebAudio spec makes routed no-CORS media output silence **in every engine**, so the guard stays enforced everywhere — "cross-origin" note, 0 dB clamp, native fallback for attenuation/mute only.
 
-- The popup shows a "restricted by DRM" note (or a cross-origin restriction note) and the slider clamps at 0 dB — no boost is offered because none is possible on that media.
+**What you will see when media is restricted** (Chromium + DRM, or any engine + cross-origin)
+
+- The popup shows a "restricted by DRM" note (or a cross-origin restriction note) and the slider clamps at 0 dB — no boost is offered because none is possible on that media in that browser.
 - Lowering volume still works: the element's native volume is used (attenuation only, exact dB math, and mute).
 - Mono mixing is unavailable on such media.
 
@@ -33,13 +37,15 @@ Some media cannot be routed through WebAudio: DRM-protected streams (EME / Widev
 - Embedded iframes report their verdict to the top frame (1 s heartbeat, 2.5 s TTL) and the most restrictive live report wins; the verdict relaxes automatically when the media goes quiescent or the frame is removed.
 - All verdicts are computed deterministically by the top frame — no cross-frame response races, which is what keeps the restriction note stable while you drag the slider.
 - Same-window spoofed messages are ignored (`event.source === window`), so page scripts cannot fake or clear a verdict.
+- Engine detection (v6.12): `navigator.userAgentData` identifies Chromium-family browsers (protected-audio guard stays); a UA containing `Firefox/` identifies Gecko (DRM media is routable). Unknown or privacy-stripped UAs keep the conservative guard.
 
-**Verification:** the restriction pipeline was live-tested against real Widevine playback on udio.com and against a real cross-origin CDN audio source replicating detached-player sites (treblo.com pattern), plus a ClearKey EME harness — restricted media is never routed, the verdict is stable, and fallback attenuation is exact.
+**Verification:** the restriction pipeline was live-tested against real Widevine playback on udio.com and against a real cross-origin CDN audio source replicating detached-player sites (treblo.com pattern), plus a ClearKey EME harness — restricted media is never routed, the verdict is stable, and fallback attenuation is exact. The engine split was confirmed empirically: on Chromium, routing an element with MediaKeys produces graph silence even for clear audio (measured 0.00 RMS through the route vs 3.53 RMS for the same route on a non-DRM element); on Firefox, Mozilla's bug 1331763 grants audio capture, and competitor boosters have boosted Netflix on Firefox for years using exactly that route.
 
 ## Known Limitations
 
 - Volume Control cannot run on browser system pages such as `chrome://`, `edge://`, `about:`, extension pages, or other protected browser UI.
-- DRM-protected and cross-origin media can only use the native volume fallback: lowering and mute work; boosting and mono do not. See [Restricted Media](#restricted-media-drm--cross-origin).
+- DRM-protected media on **Chromium browsers** (Chrome/Edge/Brave/Opera/Vivaldi) can only use the native volume fallback: lowering and mute work; boosting and mono do not (the browser silences WebAudio for protected audio). On **Firefox**, DRM media is fully boostable since v6.12. See [Restricted Media](#restricted-media-drm--cross-origin).
+- Cross-origin media without CORS can only use the native volume fallback in every engine: lowering and mute work; boosting and mono do not.
 - Sites that create their own `createMediaElementSource` pipeline for the same element can end up double-attenuating when Volume Control also routes that element.
 - Media that becomes cross-origin-tainted *after* it was already routed cannot be un-tainted; routing continues with the gain that was already applied.
 - Sites with unusual, heavily customized, or late-changing WebAudio graphs may not be fully controllable in every playback path.
@@ -83,6 +89,19 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 
 # Changelog
+
+---
+
+<details>
+<summary><strong>Version 6.12 – Patch Notes</strong></summary>
+
+- New   **DRM audio boosting on Firefox**: Mozilla explicitly allows capturing EME media audio through WebAudio (bug 1331763, Firefox 55+ — only video capture is blocked), so Volume Control now detects the engine and routes DRM media normally on Firefox. Boost, mono, and mute work on Netflix, Spotify web, and other Widevine/PlayReady sites in Firefox — matching what simpler competitor boosters have shipped for years
+- Fixed   The DRM guard was over-conservative on Firefox: DRM media was refused routing and the slider clamped at 0 dB even though Firefox plays routed EME audio normally (the "why does the other booster work on Netflix" report)
+- Kept     Chromium-family browsers (Chrome, Edge, Brave, Opera, Vivaldi) keep the full guard: routing an element with MediaKeys feeds the graph silence there (verified live: 0.00 RMS through a +20 dB route on a keys-attached element vs 3.53 RMS on the same route without keys) — refusal + native fallback remains the correct behavior
+- Kept     Cross-origin (no-CORS) media stays guarded on every engine — the WebAudio spec silences routed tainted media in all browsers, Firefox included
+- Improved     Engine detection is conservative: `navigator.userAgentData` proves Chromium; a `Firefox/` UA proves Gecko; unknown or privacy-stripped UAs keep the restricted verdict (never relax on doubt)
+
+</details>
 
 ---
 
@@ -221,7 +240,7 @@ Planned features: Added to Chrome Web Store. [Looking for donations, to buy chro
 
 | File | World / Context | Has `window`? | Has `chrome.*`? | Can Patch Page JS? | Purpose | Why It Must Be Separate |
 |---|---|---|---|---|---|---|
-| `shared.js` | Loaded into multiple contexts (MAIN + ISOLATED) | ✅ | ✅ (guarded) | ❌ | Pure utility library — dB conversion, media element helpers, domain parsing, bridge constants, frame-targeted messaging helpers, error helpers | The only file that can appear in multiple contexts; guards all `chrome.*` calls so it doesn't crash in MAIN world |
+| `shared.js` | Loaded into multiple contexts (content script, popup, options, background) | ✅ | ✅ (guarded) | ❌ | Pure utility library — dB conversion, media element helpers, domain parsing, bridge constants, frame-targeted messaging helpers, error helpers | The only file that appears in multiple contexts; guards all `chrome.*` calls so it doesn't crash in contexts without extension APIs |
 | `page-audio-hook.js` | **MAIN world** content script | ✅ Page's `window` | ❌ | ✅ **Yes** | Patches `AudioNode.prototype.connect`, `HTMLMediaElement.prototype.volume`, `HTMLMediaElement.prototype.play`, `window.Audio`, `document.createElement`, `setMediaKeys`/`requestMediaKeySystemAccess` (EME detection) to insert gain nodes into the page's audio graph and track every media element (attached, detached, or shadow-DOM) | **Must** run in MAIN world — prototype patches only affect code in the same JS realm; extension APIs are stripped from MAIN world for security |
 | `cs.js` | **ISOLATED world** content script | ✅ Clean `window` | ✅ | ❌ | Content script bridge — reads/writes `chrome.storage`, handles messages from popup/background (top-frame targeted), syncs state to `page-audio-hook.js` via `window.postMessage`, computes the boost-limit verdict (DRM/cross-origin) including the hook's aggregate flag and iframe reports, manages fallback volume for cross-origin/DRM media | **Must** run in ISOLATED world to access `chrome.storage` and `chrome.runtime` APIs; communicates with MAIN world via `postMessage` |
 | `background.js` | **Service worker** (background) | ❌ No DOM | ✅ | ❌ | Handles keyboard shortcuts (`Alt+Shift+Up`/`Down`/`0`/`M`), shows native volume feedback badge, manages per-site remembered settings | **Must** be a service worker — runs globally (not per-tab), has no DOM access, gets killed when idle; can't be merged with page-context scripts |
@@ -270,9 +289,11 @@ Planned features: Added to Chrome Web Store. [Looking for donations, to buy chro
 `shared.js` is **not a context** — it's a library loaded *into* multiple contexts:
 
 ```json
-// manifest.json — shared.js appears in BOTH content script entries
+// manifest.json — the MAIN-world entry loads the hook alone; shared.js is
+// only in the ISOLATED entry (but is also loaded by popup/options/background
+// via <script>/importScripts-style includes in their own contexts)
 {
-  "js": ["shared.js", "page-audio-hook.js"],  // MAIN world
+  "js": ["page-audio-hook.js"],          // MAIN world
   "world": "MAIN"
 },
 {
@@ -285,7 +306,7 @@ It guards all `chrome.*` calls with optional chaining (`if (!browserApi?.storage
 ### Minimum File Count
 
 **5 execution contexts → 5 files** (background, page-audio-hook, cs, popup, options)
-**1 shared library → shared.js** (loaded into 3 of the 5 contexts)
+**1 shared library → shared.js** (loaded by 4 of the 5 contexts)
 
 This is the minimum possible file count given the WebExtension API's security constraints.
 

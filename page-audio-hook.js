@@ -577,13 +577,46 @@
         }
     }
 
+    // Engine-aware EME policy (v6.12). Chromium-family browsers (Chrome, Edge,
+    // Brave, Opera, Vivaldi) silence MediaElementAudioSourceNode output for
+    // encrypted/protected content: createMediaElementSource() detaches the
+    // element's native output and feeds the graph zeros, permanently muting
+    // the stream. Gecko (Firefox) is different — it explicitly SUPPORTS
+    // capturing EME media audio through WebAudio (Mozilla bug 1331763, shipped
+    // in Firefox 55: "creating a MediaElementSource on a media element should
+    // always succeed (no matter it's restricted content or not)" — Mozilla
+    // blocks only video capture via captureStream, never audio). Verified by
+    // reverse-engineering a competitor booster that boosts Netflix/Widevine on
+    // Firefox with a plain createMediaElementSource + GainNode chain.
+    // So on Gecko, DRM signals do NOT block routing and do NOT clamp the boost
+    // limit. Cross-origin taint, by contrast, silences routed audio in EVERY
+    // engine (spec-mandated) and stays enforced everywhere.
+    //
+    // Detection: navigator.userAgentData exists only in Chromium-family
+    // browsers; a UA containing "Firefox/" identifies Gecko. Anything else
+    // (Safari/WebKit, unknown, privacy-hardened UA stripping) keeps the
+    // conservative guard — the default is always "refuse to route DRM".
+    function isGeckoRuntime() {
+        try {
+            if (typeof navigator !== "undefined" && navigator.userAgentData) return false;
+            const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+            return ua.indexOf("Firefox/") !== -1;
+        } catch (e) {
+            return false;
+        }
+    }
+    const EME_AUDIO_SILENCED_WHEN_ROUTED = !isGeckoRuntime();
+
     // DRM pipelines always use MSE, and MSE playback surfaces as a blob: URL.
     // EME init data (encrypted event) and setMediaKeys can land AFTER playback
     // starts when license setup is slow, so while a page is known to use EME we
     // conservatively treat blob-sourced media as protected too. This closes the
     // window where an element gets routed through WebAudio a few ms before its
-    // DRM flags appear — a one-way trip to permanent silence.
+    // DRM flags appear — a one-way trip to permanent silence (on engines that
+    // silence protected audio; see EME_AUDIO_SILENCED_WHEN_ROUTED).
     function isLikelyDrmMedia(element) {
+        // Gecko: EME audio flows through WebAudio — DRM is fully routable there.
+        if (!EME_AUDIO_SILENCED_WHEN_ROUTED) return false;
         if (isRestrictedMediaElement(element)) return true;
         if (!pageUsesEme()) return false;
         const src = getMediaSourceUrl(element);
@@ -679,15 +712,20 @@
     }
 
     function patchEmeApi() {
-        // EME awareness. Browsers output silence when DRM-protected media is
-        // routed through WebAudio: createMediaElementSource() detaches the
-        // element's native output and feeds the graph zeros, permanently muting
-        // the stream for that element (there is no way back). To prevent it, we
-        // watch the EME entry points and flag protected elements/pages BEFORE
-        // any routing decision is made:
+        // EME awareness. On engines that silence protected audio in WebAudio
+        // (Chromium-family — see EME_AUDIO_SILENCED_WHEN_ROUTED),
+        // createMediaElementSource() on a DRM element detaches the native
+        // output and feeds the graph zeros, permanently muting the stream
+        // (there is no way back). To prevent it, we watch the EME entry
+        // points and flag protected elements/pages BEFORE any routing decision
+        // is made:
         //   * setMediaKeys(keys) marks that element restricted (sticky).
         //   * requestMediaKeySystemAccess() resolving marks the page as EME-using
         //     (feeds isLikelyDrmMedia's conservative blob: heuristic).
+        // On Gecko (Firefox) the flags are still recorded for reporting, but
+        // they no longer gate routing or the verdict: Firefox routes EME audio
+        // through WebAudio audibly (bug 1331763), so DRM media is boostable
+        // there. The gates consult EME_AUDIO_SILENCED_WHEN_ROUTED.
         if (window.HTMLMediaElement && window.HTMLMediaElement.prototype &&
             !window.HTMLMediaElement.prototype.__volumeControlSetMediaKeysPatched) {
             const proto = window.HTMLMediaElement.prototype;
@@ -754,10 +792,14 @@
     }
 
     function createMediaRouteSource(context, element) {
-        // DRM-protected media must NEVER be routed through WebAudio: the browser
-        // outputs silence for protected content in the graph while the element's
-        // native output stays detached — permanently muting the stream. Fall
-        // back to native volume scaling for anything that looks protected.
+        // DRM-protected media must NEVER be routed through WebAudio on engines
+        // that silence protected audio (Chromium-family): the browser outputs
+        // silence for protected content in the graph while the element's native
+        // output stays detached — permanently muting the stream. On Gecko
+        // (Firefox), EME audio flows through the graph (bug 1331763), so
+        // isLikelyDrmMedia() returns false there and DRM media routes normally.
+        // Cross-origin taint, in every engine, still falls back to native
+        // volume scaling (spec-mandated silence when routed).
         if (isLikelyDrmMedia(element)) {
             log(`skipping MediaElementAudioSource for DRM-restricted media: ${getMediaSourceUrl(element)}`);
             return null;
