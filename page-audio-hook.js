@@ -1136,7 +1136,16 @@
             const nativeVolume = existingRoute
                 ? entry.baseVolume
                 : Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)));
-            setNativeVolume(element, nativeVolume);
+            // Same 250ms write-rate limit as the playing fallback below: while
+            // paused there is no playback guard against a site volume manager
+            // answering every volumechange with its own write, so an
+            // unconditional write here can re-ignite the write war the v6.11
+            // rate limit extinguished for playing elements.
+            const now = Date.now();
+            if (entry.lastFallbackWriteAt === undefined || now - entry.lastFallbackWriteAt >= 250) {
+                entry.lastFallbackWriteAt = now;
+                setNativeVolume(element, nativeVolume);
+            }
             return;
         }
 

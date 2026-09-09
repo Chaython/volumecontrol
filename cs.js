@@ -513,12 +513,21 @@ function applyFallbackVolume(element, reason = "") {
         // Bluetooth headphones that stay active while a media element plays).
         // We still restore __vc_originalVolume below so unmuting is clean.
         if (tc.vars.muted) {
-            element.muted = true;
+            if (element.dataset.vcNativeMuted !== 'true') {
+                element.muted = true;
+                element.dataset.vcNativeMuted = 'true';
+            }
             if (tc.settings.debugMode) element.style.border = "2px dashed #ffa500";
             return;
         }
-        // Unmute native property if we previously muted it.
-        if (element.muted) element.muted = false;
+        // Unmute ONLY a native mute WE applied. Blanket-unmuting any muted
+        // element overrode the SITE's own mute (muted autoplay ads, the site's
+        // mute button): our fallback loop has no isAudible gate, so with
+        // attenuation active a site-muted element was force-unmuted.
+        if (element.dataset.vcNativeMuted === 'true') {
+            element.muted = false;
+            delete element.dataset.vcNativeMuted;
+        }
 
         const baseVolume = element.__vc_originalVolume !== undefined
             ? element.__vc_originalVolume
@@ -538,13 +547,18 @@ function clearFallbackVolume(element) {
         if (element.__vc_originalVolume !== undefined) {
             element.volume = element.__vc_originalVolume;
         }
-        // Clear any native mute we applied while in fallback mode.
-        if (element.muted) element.muted = false;
+        // Clear any native mute WE applied while in fallback mode (only ours —
+        // never the site's own muted element; see applyFallbackVolume).
+        if (element.dataset.vcNativeMuted === 'true') {
+            element.muted = false;
+            delete element.dataset.vcNativeMuted;
+        }
     } catch (e) {}
 
     delete element.__vc_originalVolume;
     delete element.dataset.vcFallback;
     delete element.dataset.vcFallbackReason;
+    delete element.dataset.vcNativeMuted;
 }
 
 // Track the last state sent to the page-audio hook so we can skip redundant
@@ -984,8 +998,17 @@ function connectOutput(element) {
             applyState();
             checkSuspend();
 
-            if (tc.settings.debugMode) element.style.border = "2px solid #00ff00";
-            else element.style.border = "";
+            // Debug-only visuals. The non-debug branch used to clear
+            // element.style.border unconditionally, wiping inline borders the
+            // SITE had styled its player with. Only ever remove a border WE
+            // painted (tracked via dataset), never the site's own styling.
+            if (tc.settings.debugMode) {
+                element.style.border = "2px solid #00ff00";
+                element.dataset.vcDebugBorder = 'true';
+            } else if (element.dataset.vcDebugBorder === 'true') {
+                element.style.border = "";
+                delete element.dataset.vcDebugBorder;
+            }
             log("Hook Success!", 4);
         } else {
             // Fallback: if we can't create an audio node, adjust element.volume directly so user notices changes
