@@ -19,6 +19,7 @@ const {
     extractRootDomain,
     domainMatchesSaved,
     isUrlBlockedByEntries,
+    purgeLegacyDefaultBlocklist,
     getSiteSettingsKey,
     isRestrictedUrl,
     handleError
@@ -209,6 +210,35 @@ if (browserApi && browserApi.commands && browserApi.commands.onCommand) {
         handleCommand(command, tab).catch(handleError);
     });
 }
+
+// One-time legacy-default blocklist purge (issue #69; see shared.js
+// purgeLegacyDefaultBlocklist). cs.js also runs it on first navigation, but
+// since v6.14 users can CREATE path-scoped entries from the options page —
+// a user who manually re-adds "twitch.tv/*/clip/*" must never have it
+// swept by a migration that has not run yet. Running the purge here at
+// install/update/startup (BEFORE the user can add anything through the UI)
+// closes that window: by the time cs.js start() or the options page sees the
+// storage, the flag is already set and hand-added entries are safe.
+async function purgeLegacyDefaultsOnce() {
+    try {
+        const data = await storageGet({ fqdns: [], legacyTwitchDefaultsPurged: false });
+        if (data.legacyTwitchDefaultsPurged) return;
+        const purged = purgeLegacyDefaultBlocklist(data.fqdns || []);
+        await storageSet(Object.assign(
+            purged.changed ? { fqdns: purged.list } : {},
+            { legacyTwitchDefaultsPurged: true }
+        ));
+    } catch (e) {
+        handleError(e);
+    }
+}
+if (browserApi && browserApi.runtime && browserApi.runtime.onInstalled) {
+    browserApi.runtime.onInstalled.addListener(() => { purgeLegacyDefaultsOnce(); });
+}
+if (browserApi && browserApi.runtime && browserApi.runtime.onStartup) {
+    browserApi.runtime.onStartup.addListener(() => { purgeLegacyDefaultsOnce(); });
+}
+purgeLegacyDefaultsOnce(); // MV3 worker wake (e.g. after an update) before any user interaction
 
 if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
     browserApi.runtime.onMessage.addListener((message, sender, sendResponse) => {

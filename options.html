@@ -21,8 +21,11 @@
 
     <h3 id="listTitle">Blocked Sites</h3>
     <div class="input-group">
-        <input type="text" id="newFqdn" placeholder="example.com">
+        <input type="text" id="newFqdn" placeholder="example.com or example.com/videos/*">
         <button id="addFqdn">Add Site</button>
+    </div>
+    <div class="hint">
+        <strong>Optional path:</strong> an entry with a path blocks only that part of a site (e.g. <em>example.com/videos</em>). Use <em>*</em> to match anything except a <em>/</em> (e.g. <em>example.com/*/season/*</em>). Without a path, the whole site (including subdomains) is blocked.
     </div>
     <div id="fqdnList" class="list-container">
         </div>

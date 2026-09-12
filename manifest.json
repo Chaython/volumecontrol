@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Volume Control",
-  "version": "6.13",
+  "version": "6.14",
   "description": "Adds a volume control for the current site, that can also boost the volume beyond the normal range.",
   "homepage_url": "https://github.com/Chaython/volumecontrol",
   "minimum_chrome_version": "121",

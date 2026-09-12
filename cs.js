@@ -225,34 +225,71 @@ function pageCreatedMediaKeys() {
 
 // Pending EME suspect: the page was granted EME access (probe) and the
 // element plays a blob: (MSE) source without per-element DRM evidence.
-// Routing is refused during the grace window; if no evidence lands, the
-// element is clear media and may be routed (Plex, issue #70). The hook's
-// createMediaKeys patch restarts the clock when keys are imminent.
-const EME_PENDING_GRACE_MS = 3000;
-const emePendingSince = new WeakMap();
+// Routing is refused until DECRYPTION PROOF (v6.14): the element's
+// currentTime actually advancing. EME content cannot decode without
+// MediaKeys attached, and every attachment path is visible (the hook's
+// MAIN-world setMediaKeys patches, element.mediaKeys/webkitKeys, the
+// 'encrypted' event) — so progress + zero evidence means clear media
+// (Plex, issue #70). The hook's createMediaKeys patch bumps a
+// documentElement vcEmeResetSeq counter (shared DOM) when keys become
+// imminent; the mirror proof recorded here is invalidated on a seq change.
+// The verdict itself stays evidence-only (see isProbablyProtectedMedia).
+const EME_PENDING_MIN_PROGRESS_S = 0.01;
+const emePending = new WeakMap(); // element -> { progress, lastTime, seq }
 
 function isPendingEmeSuspect(element) {
     // Probe-level gate: a page granted EME access may attach keys to this
-    // blob: element at any moment; refuse routing during the grace window
-    // (see the hook's twin — the verdict itself stays evidence-only).
+    // blob: element at any moment; refuse routing until decryption proof
+    // or DRM evidence arrives (see the hook's twin — the verdict itself
+    // stays evidence-only).
     if (!pageUsesEme()) return false;
     const src = getMediaSourceUrl(element);
     return Boolean(src) && src.indexOf("blob:") === 0;
 }
 
-function emePendingExpired(element) {
-    let since = emePendingSince.get(element);
-    if (since === undefined) {
-        since = isMediaPlaying(element) ? Date.now() : 0;
-        emePendingSince.set(element, since);
+function emeResetSeq() {
+    try {
+        const v = document.documentElement && document.documentElement.dataset.vcEmeResetSeq;
+        return Number(v) || 0;
+    } catch (e) {
+        return 0;
+    }
+}
+
+function resetEmePending(element) {
+    emePending.delete(element);
+}
+
+function emePendingCleared(element) {
+    // Decryption-proof gate, mirroring the hook's emePendingCleared.
+    // Observes currentTime on every evaluation; a positive delta (while
+    // not seeking) with zero DRM evidence proves the element is decoding
+    // clear media. The seq check invalidates the recorded proof when the
+    // hook reports imminent key attachment (createMediaKeys) or the
+    // element's source changed.
+    let rec = emePending.get(element);
+    const seq = emeResetSeq();
+    if (!rec || rec.seq !== seq) {
+        rec = { progress: false, lastTime: undefined, seq };
+        emePending.set(element, rec);
+    }
+    if (rec.progress) return true;
+    let now = 0;
+    let seeking = false;
+    try {
+        now = Number(element.currentTime);
+        if (typeof element.seeking === "boolean") seeking = element.seeking;
+    } catch (e) {
         return false;
     }
-    if (since === 0) {
-        if (!isMediaPlaying(element)) return false;
-        emePendingSince.set(element, Date.now());
-        return false;
+    if (!Number.isFinite(now)) return false;
+    const last = rec.lastTime;
+    rec.lastTime = now;
+    if (last !== undefined && !seeking && now > last + EME_PENDING_MIN_PROGRESS_S) {
+        rec.progress = true;
+        return true;
     }
-    return Date.now() - since >= EME_PENDING_GRACE_MS;
+    return false;
 }
 
 // VERDICT gate (the popup note + slider clamp): "restricted" requires
@@ -274,14 +311,14 @@ function shouldRefuseMediaRouting(element) {
     if (EME_AUDIO_SILENCED_WHEN_ROUTED) {
         if (elementDrmEvidence(element)) return true;
         if (!isPendingEmeSuspect(element)) return false;
-        return !emePendingExpired(element);
+        return !emePendingCleared(element);
     }
     // Gecko: EME audio flows through WebAudio, but only route once keys are
     // attached — capturing first makes the site's setMediaKeys() throw.
     if (elementEmeKeysAttached(element)) return false;
     if (elementDrmEvidence(element)) return true;
     if (!isPendingEmeSuspect(element)) return false;
-    return !emePendingExpired(element);
+    return !emePendingCleared(element);
 }
 
 function isPageAudioManaged(element) {
@@ -951,6 +988,20 @@ function registerMediaElement(element) {
     element.addEventListener('play', hookIfPlaying, { passive: true });
     element.addEventListener('playing', hookIfPlaying, { passive: true });
     element.addEventListener('volumechange', hookIfPlaying, { passive: true });
+    // v6.14: re-run the routing decision at timeupdate cadence — the EME
+    // pending gate clears on playback progress (decryption proof), so a
+    // probed-but-clear page (Plex) routes within a couple hundred
+    // milliseconds of playback instead of a multi-second grace window.
+    // Cheap guards keep this a no-op for hooked/managed/restricted/
+    // non-suspect elements.
+    element.addEventListener('timeupdate', () => {
+        if (element.dataset.vcHooked === 'true' || isPageAudioManaged(element)) return;
+        if (!isPendingEmeSuspect(element)) return;
+        if (elementDrmEvidence(element)) return;
+        hookIfPlaying();
+    }, { passive: true });
+    // v6.14: a new source must re-earn its EME decryption proof.
+    element.addEventListener('emptied', () => resetEmePending(element), { passive: true });
     const scheduleSuspend = () => setTimeout(suspendAudioContextIfIdle, 250);
     for (const evt of ['pause', 'ended', 'emptied']) {
         element.addEventListener(evt, scheduleSuspend, { passive: true });

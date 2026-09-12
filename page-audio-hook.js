@@ -652,38 +652,76 @@
 
     // Pending EME suspect: the page was granted EME access (probe) and the
     // element has a blob: (MSE) source without per-element DRM evidence.
-    // Real DRM pipelines attach keys/initdata before or within seconds of
-    // playback, so routing is refused during the grace window; if no
+    // Routing is refused while the element is under suspicion; if no
     // evidence lands, the element is clear media and may be routed (Plex
     // probes DRM at startup while playing clear direct-play content —
-    // issue #70). When the page actually creates MediaKeys, the pending
-    // clock restarts (see the createMediaKeys patch) because setMediaKeys
-    // is imminent.
-    const EME_PENDING_GRACE_MS = 3000;
+    // issue #70).
+    //
+    // v6.14: suspicion is no longer cleared by a blind 3-second timer (v6.13
+    // — 3s of un-boosted playback on every probed-but-clear page). It is
+    // cleared by DECRYPTION PROOF: the element's currentTime actually
+    // advancing. EME content cannot decode a single frame without MediaKeys
+    // attached to that element, and every key-attachment path is visible to
+    // us (patched setMediaKeys/webkitSetMediaKeys — MAIN-world patches
+    // installed at document_start, before any page script runs; the
+    // element.mediaKeys / webkitKeys properties; the 'encrypted' init-data
+    // event). Therefore:
+    //   * progress + zero evidence  ⇒  clear media  ⇒  safe to route
+    //   * no progress (currentTime frozen while "playing" — playback blocked
+    //     waiting on a license) ⇒ keep refusing; the evidence race cannot
+    //     be lost because encrypted content cannot produce progress.
+    // Progress is observed at timeupdate cadence (spec: 15-250ms, ~4Hz in
+    // Chromium) via the per-element timeupdate listener, plus the 1s sweep
+    // as a backup, so clear MSE content routes within a couple hundred
+    // milliseconds of actually playing. When the page constructs MediaKeys
+    // (setMediaKeys imminent), earned proof is RESET (see the createMediaKeys
+    // patch) — routing then waits for post-restart progress or the evidence
+    // itself.
+    const EME_PENDING_MIN_PROGRESS_S = 0.01; // epsilon: supports playbackRate >= 0.04
 
     function isPendingEmeSuspect(element) {
         // Probe-level gate (v6.9 semantics): a page that was GRANTED key
         // system access may attach keys to this blob: element at any moment.
-        // Refuse routing during the grace window; if no DRM evidence lands,
-        // the element is clear media and expires into routable (Plex plays
-        // clear direct-play MSE on pages that probe DRM at startup).
+        // Refuse routing until decryption proof or DRM evidence arrives
+        // (Plex plays clear direct-play MSE on pages that probe DRM at
+        // startup).
         if (!pageUsesEme()) return false;
         const src = getMediaSourceUrl(element);
         return Boolean(src) && src.indexOf("blob:") === 0;
     }
 
-    function emePendingExpired(element) {
+    function resetEmePending(element) {
+        const entry = mediaState.get(element);
+        if (!entry) return;
+        entry.emePendingProgress = false;
+        entry.emePendingLastTime = undefined;
+    }
+
+    function emePendingCleared(element) {
+        // Decryption-proof gate. Observes currentTime on every evaluation
+        // (each evaluation also refreshes the baseline, so scripted seeks —
+        // a page setting currentTime — are recorded as baseline moves, not
+        // progress; genuine decode progress is a positive delta while not
+        // seeking).
         const entry = getMediaState(element);
-        if (entry.emePendingSince === undefined) {
-            entry.emePendingSince = isMediaPlaying(element) ? Date.now() : 0;
+        if (entry.emePendingProgress) return true;
+        let now = 0;
+        let seeking = false;
+        try {
+            now = Number(element.currentTime);
+            if (typeof element.seeking === "boolean") seeking = element.seeking;
+        } catch (e) {
             return false;
         }
-        if (entry.emePendingSince === 0) {
-            if (!isMediaPlaying(element)) return false;
-            entry.emePendingSince = Date.now();
-            return false;
+        if (!Number.isFinite(now)) return false;
+        const last = entry.emePendingLastTime;
+        entry.emePendingLastTime = now;
+        if (last !== undefined && !seeking && now > last + EME_PENDING_MIN_PROGRESS_S) {
+            entry.emePendingProgress = true;
+            log(`EME pending cleared by playback progress (clear media): ${getMediaSourceUrl(element)}`);
+            return true;
         }
-        return Date.now() - entry.emePendingSince >= EME_PENDING_GRACE_MS;
+        return false;
     }
 
     // DRM pipelines always use MSE, and MSE playback surfaces as a blob: URL.
@@ -697,24 +735,25 @@
         // ROUTING gate. Returns true when the element must NOT be captured
         // into WebAudio right now:
         //  * Chromium (EME_AUDIO_SILENCED_WHEN_ROUTED): any per-element DRM
-        //    evidence, plus EME-suspect elements during the pending window.
+        //    evidence, plus pending EME suspects (probe granted + blob: MSE
+        //    source) until decryption proof or evidence arrives.
         //  * Gecko: EME audio IS routable (bug 1331763), but only once keys
         //    are attached — capturing first makes the site's setMediaKeys()
         //    throw NotSupportedError and breaks playback. Evidence without
-        //    keys, and the pending window, still refuse routing.
-        // Probe-only pages (Plex) never gate: probing must not produce a
-        // false "restricted" verdict or a permanent routing refusal for
-        // clear MSE content (issue #70).
+        //    keys, and pending suspects without proof, still refuse routing.
+        // Probe-only pages (Plex) never restrict the verdict: probing must
+        // not produce a false "restricted" note or a permanent routing
+        // refusal for clear MSE content (issue #70).
         if (!element) return false;
         if (EME_AUDIO_SILENCED_WHEN_ROUTED) {
             if (elementDrmEvidence(element)) return true;
             if (!isPendingEmeSuspect(element)) return false;
-            return !emePendingExpired(element);
+            return !emePendingCleared(element);
         }
         if (elementEmeKeysAttached(element)) return false;
         if (elementDrmEvidence(element)) return true;
         if (!isPendingEmeSuspect(element)) return false;
-        return !emePendingExpired(element);
+        return !emePendingCleared(element);
     }
 
     // Aggregate, DOM-visible summary of every tracked media element's boost
@@ -914,10 +953,14 @@
         // v6.13: two-level EME page detection. requestMediaKeySystemAccess
         // resolving (above) only proves the page PROBED DRM support —
         // app.plex.tv probes all three key systems at startup while playing
-        // clear direct-play content. The blob:-heuristic pending window
+        // clear direct-play content. The blob:-heuristic pending gate
         // OPENS on that probe (requestMediaKeySystemAccess granted);
         // actually constructing MediaKeys is the strong signal that
-        // setMediaKeys is imminent, so it RESTARTS the pending clock.
+        // setMediaKeys is imminent, so it RESETS any earned decryption
+        // proof (v6.14; v6.13 restarted the grace clock): clear media
+        // re-proves within one timeupdate (~250ms) if the element keeps
+        // progressing, while a would-be-DRM element stalls until the
+        // evidence lands.
         if (window.MediaKeySystemAccess && window.MediaKeySystemAccess.prototype &&
             typeof window.MediaKeySystemAccess.prototype.createMediaKeys === "function" &&
             !window.MediaKeySystemAccess.prototype.__volumeControlCmkPatched) {
@@ -928,15 +971,19 @@
                     try {
                         document.documentElement.dataset.vcPageEmeActive = "true";
                         log("MediaKeys created — page flagged as EME-active");
-                        // The page is about to attach keys: restart the
-                        // pending clock for every tracked element so the
-                        // grace window covers the imminent setMediaKeys,
-                        // even if the original window was about to expire.
+                        // The page is about to attach keys: reset the earned
+                        // progress proof for every tracked element so the
+                        // pending gate re-verifies after this point (fresh
+                        // timeupdate progress, or the imminent evidence).
+                        // Also bump a document-level sequence counter so the
+                        // ISOLATED-world content script invalidates its own
+                        // mirror of the proof (dataset is shared DOM).
+                        try {
+                            const ds = document.documentElement.dataset;
+                            ds.vcEmeResetSeq = String((Number(ds.vcEmeResetSeq) || 0) + 1);
+                        } catch (e) {}
                         for (const element of Array.from(mediaElements)) {
-                            const entry = mediaState.get(element);
-                            if (entry && entry.emePendingSince !== undefined) {
-                                entry.emePendingSince = Date.now();
-                            }
+                            resetEmePending(element);
                         }
                         updatePageMediaRestriction();
                         applyStateToMediaElements();
@@ -1427,6 +1474,20 @@
                 markElementRestricted(element);
                 log("encrypted event: element marked DRM-restricted (WebAudio routing blocked)");
             }, { passive: true });
+            // v6.14: re-run the routing decision at timeupdate cadence
+            // (~4Hz in real browsers). The EME pending gate clears on
+            // playback progress (decryption proof) — this is what turns a
+            // pending suspect into routable clear media within a couple
+            // hundred milliseconds instead of a blind multi-second grace
+            // timer (v6.13's 3s, the source of the "boost takes 3 seconds
+            // to kick in on Plex" report). Cheap guards keep this a no-op
+            // for routed/restricted/non-suspect elements.
+            element.addEventListener("timeupdate", () => {
+                if (mediaRoutes.has(element)) return;      // already routed
+                if (!isPendingEmeSuspect(element)) return; // cheap probe+src gate
+                if (elementDrmEvidence(element)) return;   // restricted; events/audit own it
+                applyMediaElementState(element);
+            }, { passive: true });
             // Keep the aggregate page restriction fresh as this element's
             // lifecycle (src assignment, play, pause, ended) progresses.
             element.addEventListener("loadedmetadata", updatePageMediaRestriction, { passive: true });
@@ -1460,6 +1521,10 @@
             };
             const release = () => {
                 releaseMediaRoute(element);
+                // v6.14: a new source (emptied) or a replay (ended/error)
+                // must re-earn its EME decryption proof — the old source's
+                // progress says nothing about the next one.
+                resetEmePending(element);
                 // Do NOT delete from mediaElements. The element is often reused
                 // for the next video (e.g. YouTube/Twitch auto-next loads the
                 // next source into the SAME <video> element). If we delete here,
@@ -1863,11 +1928,12 @@
     // events, so a cheap 1s recompute closes the gaps. mediaElements is
     // tiny (a handful of entries on typical pages).
     //
-    // The same tick drives two v6.13 hardening loops:
-    //  1. EME pending window: elements waiting on DRM evidence that stay
-    //     clear past the grace window become routable HERE — nothing changed
-    //     from the element's perspective, so no media event will arrive to
-    //     re-run the routing decision.
+    // The same tick drives two hardening loops:
+    //  1. EME pending gate (v6.14): re-run the routing decision for unrouted
+    //     pending suspects. Evaluating the gate also OBSERVES currentTime
+    //     (the decryption-proof check), so this is the backup observation
+    //     point for elements whose timeupdate events are late or missing —
+    //     and it keeps freshly-restricted elements refusing.
     //  2. Fallback audit (issue #71): verify every playing, unrouted,
     //     audible element sits at the fallback volume the extension state
     //     demands. Sites reset video.volume on track changes / replays; if
@@ -1883,9 +1949,10 @@
             if (!entry) continue;
             if (mediaRoutes.has(element)) continue;
 
-            // 1. Pending EME suspect: re-run the routing decision so expired
-            //    windows route (and live windows keep refusing).
-            if (entry.emePendingSince !== undefined) {
+            // 1. Pending EME suspect: re-run the routing decision (gate
+            //    evaluation observes currentTime; restricted elements keep
+            //    refusing via their evidence).
+            if (isPendingEmeSuspect(element)) {
                 applyMediaElementState(element);
                 continue;
             }

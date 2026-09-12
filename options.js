@@ -2,6 +2,7 @@ const {
     browserApi,
     normalizeDb,
     normalizeDomainInput,
+    normalizeBlocklistEntryInput,
     formatDb,
     storageGet,
     storageSet,
@@ -428,9 +429,17 @@ async function initOptions() {
 
     if (addBtn && newFqdnInput) {
         addBtn.addEventListener('click', async () => {
-            const v = normalizeDomainInput(newFqdnInput.value);
-            if (!v) return;
             const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false });
+            // Blocklist mode (v6.14): preserve a typed path so entries can be
+            // path-scoped ("twitch.tv/clips", "twitch.tv/*/clip/*" — * matches
+            // any characters except a slash). Whitelist mode adds remembered sites
+            // instead, and siteSettings is domain-keyed, so input there keeps
+            // normalizing to a bare domain. Pathless input canonicalizes the
+            // same way in both modes, so domain-style entries are unchanged.
+            const v = data.whitelistMode
+                ? normalizeDomainInput(newFqdnInput.value)
+                : normalizeBlocklistEntryInput(newFqdnInput.value);
+            if (!v) return;
             if (data.whitelistMode) {
                 // Add as a remembered site so whitelist contains only remembered sites
                 const sd = await storageGet({ siteSettings: {} });

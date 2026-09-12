@@ -159,11 +159,12 @@
     // the player). normalizeDomainInput strips the path, so that entry
     // normalizes to "twitch.tv" and — since v6.11 also strips the leading
     // "www." — it began matching the MAIN twitch.tv site, deactivating the
-    // extension everywhere on twitch. Stored entries with a path can only
-    // come from that seeder (the options UI normalizes user input to a bare
-    // domain), so path-carrying entries are now matched against the full URL
-    // with wildcards: "twitch.tv/*/clip/*" blocks clip pages only, never the
-    // main site. Bare-domain entries keep the old domain/subdomain match.
+    // extension everywhere on twitch. Path-carrying entries are matched
+    // against the full URL with wildcards: "twitch.tv/*/clip/*" blocks clip
+    // pages only, never the main site. Bare-domain entries keep the old
+    // domain/subdomain match. Since v6.14 the options page ALSO accepts
+    // user-typed paths (see normalizeBlocklistEntryInput), so this is a
+    // first-class feature, not just legacy-entry compatibility.
     const LEGACY_DEFAULT_BLOCKLIST_ENTRIES = [
         "www.twitch.tv/*/clip/*",
         "twitch.tv/*/clip/*",
@@ -184,6 +185,34 @@
         const pathPart = slash === -1 ? "" : raw.slice(slash);
         if (!domainPart) return null;
         return { domain: domainPart.replace(/^www\./, ''), path: pathPart };
+    }
+
+    // Normalize user-typed BLOCKLIST input for storage (v6.14). Unlike
+    // normalizeDomainInput — which strips the path and must keep doing so
+    // for siteSettings keys and remembered sites — this PRESERVES a path so
+    // options-page users can create path-scoped entries:
+    //   "twitch.tv/clips"        blocks only /clips on twitch (+ subdomains
+    //                            of twitch.tv, consistent with bare entries)
+    //   "twitch.tv/*/clip/*"     wildcard: * matches any chars except "/"
+    // Pathless input canonicalizes identically to normalizeDomainInput, so
+    // domain-style entries behave exactly as before (protocol, port and
+    // "www." stripped, lowercased). A trailing "/" is meaningless for
+    // matching (the matcher anchors the pattern against the pathname, and
+    // sites request "/clips", not "/clips/"), so it is trimmed; a lone "/"
+    // degrades to the bare-domain entry.
+    function normalizeBlocklistEntryInput(value) {
+        let raw = String(value == null ? "" : value).trim().toLowerCase();
+        if (!raw) return "";
+        raw = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//, ""); // http://, https://, ...
+        const slash = raw.indexOf('/');
+        let domain = slash === -1 ? raw : raw.slice(0, slash);
+        domain = domain.split(':')[0]; // strip a port
+        if (!domain) return "";
+        domain = domain.replace(/^www\./, '');
+        let path = slash === -1 ? "" : raw.slice(slash);
+        while (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+        if (path === '/') path = "";
+        return domain + path;
     }
 
     function isUrlBlockedByEntry(url, savedEntry) {
@@ -303,6 +332,7 @@
         actionSetBadgeBackgroundColor,
         actionSetTitle,
         normalizeDomainInput,
+        normalizeBlocklistEntryInput,
         extractRootDomain,
         domainMatchesSaved,
         isUrlBlockedByEntry,
