@@ -18,6 +18,7 @@ const {
     actionSetTitle,
     extractRootDomain,
     domainMatchesSaved,
+    isUrlBlockedByEntries,
     getSiteSettingsKey,
     isRestrictedUrl,
     handleError
@@ -43,9 +44,12 @@ async function getDomainState(tab) {
     const data = await storageGet({ fqdns: [], whitelistMode: false, siteSettings: {} });
     const siteSettings = data.siteSettings || {};
     const settingsKey = getSiteSettingsKey(siteSettings, domain);
+    // Path-aware blocklist matching (issue #69): legacy path entries like
+    // "www.twitch.tv/*/clip/*" scope to their path instead of blocking the
+    // whole domain.
     const blocked = data.whitelistMode
         ? !settingsKey
-        : (data.fqdns || []).some(savedDomain => domainMatchesSaved(domain, savedDomain));
+        : isUrlBlockedByEntries(tab.url, data.fqdns || []);
 
     return {
         blocked,

@@ -13,6 +13,8 @@ const {
   tabsReload,
   openOptionsPage,
   domainMatchesSaved,
+  isUrlBlockedByEntry,
+  isUrlBlockedByEntries,
   getSiteSettingsKey,
   handleError,
   BOOST_LIMIT_NOTE
@@ -135,7 +137,7 @@ function handleTabs(tabs) {
             if (data.whitelistMode) {
                 isExcluded = !getSiteSettingsKey(data.siteSettings || {}, domain);
             } else {
-                isExcluded = (data.fqdns || []).some(savedDomain => domainMatchesSaved(domain, savedDomain));
+                isExcluded = isUrlBlockedByEntries(currentTab.url, data.fqdns || []);
             }
             if (isExcluded) showError({ type: "exclusion" });
         } catch (e) {
@@ -168,20 +170,30 @@ async function updateEnableSwitch(tab) {
             return;
         }
 
-        let isExcluded = (data.fqdns || []).some(savedDomain => domainMatchesSaved(domain, savedDomain));
+        // Path-aware (issue #69): legacy path entries must not disable the
+        // Active switch for the whole domain, and the exclusion state shown
+        // here must match what the content script actually enforces.
+        let isExcluded = isUrlBlockedByEntries(tab.url, data.fqdns || []);
 
         if (checkbox) checkbox.checked = !isExcluded;
+        if (switchLabel) {
+            // Issue #69 UX: explain WHY the site is inactive and what the
+            // toggle will do about it (it removes every blocking entry).
+            switchLabel.title = isExcluded
+                ? "This site is in your blocklist. Turning Active on removes the blocking entries and reloads the page."
+                : "";
+        }
 
         checkbox.onchange = (e) => {
             const isActive = e.target.checked;
-            toggleSitePermission(domain, !isActive, tab.id);
+            toggleSitePermission(domain, !isActive, tab.id, tab.url);
         };
     } catch (e) {
         handleError(e);
     }
 } 
 
-async function toggleSitePermission(domain, shouldExclude, tabId) {
+async function toggleSitePermission(domain, shouldExclude, tabId, tabUrl) {
     try {
         const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false });
         const newData = {};
@@ -213,8 +225,11 @@ async function toggleSitePermission(domain, shouldExclude, tabId) {
             if (shouldExclude) {
                 if (!newData.fqdns.includes(domain)) newData.fqdns.push(domain);
             } else {
-                const idx = newData.fqdns.indexOf(domain);
-                if (idx > -1) newData.fqdns.splice(idx, 1);
+                // Remove EVERY entry that keeps this URL inactive — including
+                // legacy raw entries like "www.twitch.tv/*/clip/*" that an
+                // exact indexOf(domain) could never find (issue #69: toggling
+                // Active reloaded the page but stayed off).
+                newData.fqdns = newData.fqdns.filter(entry => !isUrlBlockedByEntry(tabUrl, entry));
             }
             await storageSet({ fqdns: newData.fqdns });
         }

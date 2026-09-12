@@ -152,6 +152,93 @@
         return Boolean(domain && saved && (domain === saved || domain.endsWith(`.${saved}`)));
     }
 
+    // ---- Path-aware blocklist matching (issue #69) --------------------------
+    //
+    // Legacy V4 builds seeded default blocklist entries WITH PATHS into
+    // users' storage, e.g. "www.twitch.tv/*/clip/*" (twitch clips once broke
+    // the player). normalizeDomainInput strips the path, so that entry
+    // normalizes to "twitch.tv" and — since v6.11 also strips the leading
+    // "www." — it began matching the MAIN twitch.tv site, deactivating the
+    // extension everywhere on twitch. Stored entries with a path can only
+    // come from that seeder (the options UI normalizes user input to a bare
+    // domain), so path-carrying entries are now matched against the full URL
+    // with wildcards: "twitch.tv/*/clip/*" blocks clip pages only, never the
+    // main site. Bare-domain entries keep the old domain/subdomain match.
+    const LEGACY_DEFAULT_BLOCKLIST_ENTRIES = [
+        "www.twitch.tv/*/clip/*",
+        "twitch.tv/*/clip/*",
+        "twitch.tv/*/clip",
+        "clips.twitch.tv"
+    ];
+
+    function escapeRegExp(text) {
+        return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function splitBlocklistEntry(entry) {
+        let raw = String(entry == null ? "" : entry).trim().toLowerCase();
+        if (!raw) return null;
+        raw = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//, ""); // tolerate stored URLs
+        const slash = raw.indexOf('/');
+        const domainPart = slash === -1 ? raw : raw.slice(0, slash);
+        const pathPart = slash === -1 ? "" : raw.slice(slash);
+        if (!domainPart) return null;
+        return { domain: domainPart.replace(/^www\./, ''), path: pathPart };
+    }
+
+    function isUrlBlockedByEntry(url, savedEntry) {
+        if (!url || savedEntry == null) return false;
+        const parts = splitBlocklistEntry(savedEntry);
+        if (!parts) return false;
+
+        // Bare-domain entry (the only kind the options UI can produce): keep
+        // the historical domain/subdomain semantics.
+        if (!parts.path) {
+            return domainMatchesSaved(normalizeDomainInput(url), savedEntry);
+        }
+
+        // Path-scoped legacy entry: match the full URL, wildcards = "any chars
+        // except /" (the intent of "twitch.tv/*/clip/*" was clip pages).
+        let parsed = null;
+        try { parsed = new URL(String(url)); } catch (e) { parsed = null; }
+        if (!parsed || !/^https?:$/.test(parsed.protocol)) return false;
+        const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+        if (!(host === parts.domain || host.endsWith(`.${parts.domain}`))) return false;
+        const pattern = "^" + parts.path.split("*").map(escapeRegExp).join("[^/]*") + "$";
+        try {
+            return new RegExp(pattern).test(parsed.pathname);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function isUrlBlockedByEntries(url, savedEntries) {
+        if (!url || !Array.isArray(savedEntries)) return false;
+        return savedEntries.some(entry => isUrlBlockedByEntry(url, entry));
+    }
+
+    // Returns the subset of `savedEntries` that block `url`. Used by the
+    // popup's Active toggle to remove EVERY entry that keeps the site
+    // inactive — including legacy raw entries like "www.twitch.tv/*/clip/*"
+    // that an exact-string indexOf(domain) could never find (the second half
+    // of issue #69: toggling Active reloaded the page but stayed off).
+    function entriesBlockingUrl(url, savedEntries) {
+        if (!url || !Array.isArray(savedEntries)) return [];
+        return savedEntries.filter(entry => isUrlBlockedByEntry(url, entry));
+    }
+
+    // One-time migration: remove the V4-era seeded twitch defaults from the
+    // stored blocklist. The maintainer confirmed these are obsolete ("I'll
+    // remove it in a future version"); they are also the direct cause of
+    // issue #69. Users who genuinely want twitch blocked can re-add the bare
+    // domain from the options page.
+    function purgeLegacyDefaultBlocklist(fqdns) {
+        if (!Array.isArray(fqdns)) return { list: fqdns || [], changed: false };
+        const legacy = new Set(LEGACY_DEFAULT_BLOCKLIST_ENTRIES);
+        const filtered = fqdns.filter(entry => !legacy.has(String(entry == null ? "" : entry).trim().toLowerCase()));
+        return { list: filtered, changed: filtered.length !== fqdns.length };
+    }
+
     function getSiteSettingsKey(siteSettings, domain) {
         if (!siteSettings || !domain) return null;
         if (siteSettings[domain]) return domain;
@@ -218,6 +305,10 @@
         normalizeDomainInput,
         extractRootDomain,
         domainMatchesSaved,
+        isUrlBlockedByEntry,
+        isUrlBlockedByEntries,
+        entriesBlockingUrl,
+        purgeLegacyDefaultBlocklist,
         getSiteSettingsKey,
         isRestrictedUrl,
         isHarmlessMessageError,

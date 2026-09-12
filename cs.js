@@ -4,7 +4,10 @@ const {
     normalizeDb,
     getGainValue,
     storageGet,
+    storageSet,
     domainMatchesSaved,
+    isUrlBlockedByEntries,
+    purgeLegacyDefaultBlocklist,
     getSiteSettingsKey,
     BRIDGE_VERSION,
     BOOST_LIMIT_NOTE
@@ -155,7 +158,7 @@ function pageUsesEme() {
     }
 }
 
-// Engine-aware EME policy (v6.12) — must stay in sync with the hook's twin.
+// Engine-aware EME policy — must stay in sync with the hook's twin.
 // Chromium-family browsers silence MediaElementAudioSourceNode output for
 // encrypted content (routing DRM there = permanent silence), so DRM signals
 // block routing and clamp the verdict. Gecko (Firefox) explicitly supports
@@ -163,35 +166,122 @@ function pageUsesEme() {
 // 55+: "creating a MediaElementSource on a media element should always
 // succeed"; only *video* capture is blocked), so on Firefox DRM media is
 // fully boostable. Cross-origin taint silences routed audio in every engine
-// (spec) and stays enforced on both. Detection: navigator.userAgentData is
-// Chromium-only; a UA containing "Firefox/" identifies Gecko. Unknown
-// engines default to the conservative guard.
+// (spec) and stays enforced on both.
+//
+// Detection order (fixed in v6.13): a UA containing "Firefox/" proves Gecko
+// FIRST — navigator.userAgentData is only consulted afterwards. The old
+// order treated any userAgentData shim as proof of Chromium, which would
+// misclassify a future Firefox that grows one.
 function isGeckoRuntime() {
     try {
-        if (typeof navigator !== "undefined" && navigator.userAgentData) return false;
         const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
-        return ua.indexOf("Firefox/") !== -1;
+        if (ua.indexOf("Firefox/") !== -1) return true;
+        if (typeof navigator !== "undefined" && navigator.userAgentData) return false;
+        return false;
     } catch (e) {
         return false;
     }
 }
 const EME_AUDIO_SILENCED_WHEN_ROUTED = !isGeckoRuntime();
 
-// Mirrors the page-audio hook's conservative DRM gate. The hook flags the
-// document (vcPageUsesEme) the moment the page is actually granted an EME key
-// system; on such pages, blob: (MSE) media is treated as protected until the
-// element proves otherwise. setMediaKeys / encrypted flags normally land
-// before or within seconds of playback, after which the element itself is
-// flagged and the verdict locks to "restricted" permanently. This closes the
-// birth window where a fresh DRM element looks boostable. On Gecko
-// (Firefox), EME audio flows through WebAudio (bug 1331763), so DRM media is
-// NOT restricted there and this gate returns false for everything.
-function isProbablyProtectedMedia(element) {
-    if (!EME_AUDIO_SILENCED_WHEN_ROUTED) return false;
-    if (isLikelyRestrictedMedia(element)) return true;
+// Per-element DRM evidence (sticky): the `encrypted` event fired, or the
+// site attached MediaKeys. Shared with the hook's world through dataset
+// flags + the standard element.mediaKeys property.
+function elementDrmEvidence(element) {
+    if (!element) return false;
+    try {
+        if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
+        if (element.mediaKeys) return true;
+        if (element.webkitKeys) return true;
+    } catch (e) {
+        return false;
+    }
+    return false;
+}
+
+// Gecko keys-attached marker: on Gecko, DRM media becomes routable only
+// AFTER setMediaKeys() succeeds (Gecko throws NotSupportedError from
+// setMediaKeys when the element is already audio-captured — routing first
+// would break the site's player). The hook writes this dataset flag when
+// its setMediaKeys patch sees the native call succeed.
+function elementEmeKeysAttached(element) {
+    if (!element) return false;
+    try {
+        if (element.mediaKeys) return true;
+        if (element.dataset && element.dataset.vcEmeKeysAttached === "true") return true;
+    } catch (e) {
+        return false;
+    }
+    return false;
+}
+
+function pageCreatedMediaKeys() {
+    try {
+        return Boolean(document.documentElement && document.documentElement.dataset.vcPageEmeActive === "true");
+    } catch (e) {
+        return false;
+    }
+}
+
+// Pending EME suspect: the page was granted EME access (probe) and the
+// element plays a blob: (MSE) source without per-element DRM evidence.
+// Routing is refused during the grace window; if no evidence lands, the
+// element is clear media and may be routed (Plex, issue #70). The hook's
+// createMediaKeys patch restarts the clock when keys are imminent.
+const EME_PENDING_GRACE_MS = 3000;
+const emePendingSince = new WeakMap();
+
+function isPendingEmeSuspect(element) {
+    // Probe-level gate: a page granted EME access may attach keys to this
+    // blob: element at any moment; refuse routing during the grace window
+    // (see the hook's twin — the verdict itself stays evidence-only).
     if (!pageUsesEme()) return false;
     const src = getMediaSourceUrl(element);
     return Boolean(src) && src.indexOf("blob:") === 0;
+}
+
+function emePendingExpired(element) {
+    let since = emePendingSince.get(element);
+    if (since === undefined) {
+        since = isMediaPlaying(element) ? Date.now() : 0;
+        emePendingSince.set(element, since);
+        return false;
+    }
+    if (since === 0) {
+        if (!isMediaPlaying(element)) return false;
+        emePendingSince.set(element, Date.now());
+        return false;
+    }
+    return Date.now() - since >= EME_PENDING_GRACE_MS;
+}
+
+// VERDICT gate (the popup note + slider clamp): "restricted" requires
+// per-element DRM evidence AND an engine that silences routed EME audio.
+// Page-level EME *probes* and the pending window are ROUTING gates (see
+// shouldRefuseMediaRouting), not verdict restrictions — Plex probes DRM
+// support at startup while playing clear direct-play content, which must
+// not produce a restriction note (issue #70). On Gecko, DRM is fully
+// boostable (bug 1331763), so the verdict never restricts.
+function isProbablyProtectedMedia(element) {
+    if (!element || !EME_AUDIO_SILENCED_WHEN_ROUTED) return false;
+    return elementDrmEvidence(element);
+}
+
+// ROUTING gate: decides whether this element must NOT be routed through
+// WebAudio right now. Mirrors the hook's isLikelyDrmMedia.
+function shouldRefuseMediaRouting(element) {
+    if (!element) return false;
+    if (EME_AUDIO_SILENCED_WHEN_ROUTED) {
+        if (elementDrmEvidence(element)) return true;
+        if (!isPendingEmeSuspect(element)) return false;
+        return !emePendingExpired(element);
+    }
+    // Gecko: EME audio flows through WebAudio, but only route once keys are
+    // attached — capturing first makes the site's setMediaKeys() throw.
+    if (elementEmeKeysAttached(element)) return false;
+    if (elementDrmEvidence(element)) return true;
+    if (!isPendingEmeSuspect(element)) return false;
+    return !emePendingExpired(element);
 }
 
 function isPageAudioManaged(element) {
@@ -899,12 +989,15 @@ function connectOutput(element) {
         return;
     }
 
-    // Never route DRM-protected media through our AudioContext: browsers feed
-    // the WebAudio graph silence for protected content while the element's
-    // native output stays detached — the element would go permanently mute.
-    // Use fallback (native) volume control instead.
-    if (isProbablyProtectedMedia(element)) {
-        applyFallbackVolume(element, "restricted");
+    // Never route DRM-protected media through our AudioContext on engines
+    // that silence protected audio (Chromium): browsers feed the WebAudio
+    // graph silence for protected content while the element's native output
+    // stays detached — the element would go permanently mute. On Gecko, DRM
+    // audio is routable but only once keys are attached. The pending-EME
+    // grace window is handled here too (shouldRefuseMediaRouting mirrors
+    // the hook's isLikelyDrmMedia). Use fallback (native) volume control.
+    if (shouldRefuseMediaRouting(element)) {
+        applyFallbackVolume(element, isProbablyProtectedMedia(element) ? "restricted" : "");
         log(`Skipped WebAudio hook for DRM-restricted media: ${getMediaSourceUrl(element)}`, 3);
         return;
     }
@@ -1062,7 +1155,25 @@ async function start() {
     if (!browserAPI) return;
 
     try {
-        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false });
+        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false, legacyTwitchDefaultsPurged: false });
+
+        // One-time migration (issue #69): V4-era builds seeded default
+        // blocklist entries with paths ("www.twitch.tv/*/clip/*",
+        // "clips.twitch.tv") into storage and never cleaned them up. After
+        // v6.11's www-stripping normalization they matched the whole
+        // twitch.tv site, silently deactivating the extension there.
+        if (!data.legacyTwitchDefaultsPurged) {
+            const purged = purgeLegacyDefaultBlocklist(data.fqdns || []);
+            data.fqdns = purged.list;
+            try {
+                await storageSet(Object.assign(
+                    purged.changed ? { fqdns: purged.list } : {},
+                    { legacyTwitchDefaultsPurged: true }
+                ));
+            } catch (e) {
+                if (tc.settings.debugMode) log(`legacy blocklist purge failed: ${e && e.message}`, 2);
+            }
+        }
 
         if (data.debugMode !== undefined) tc.settings.debugMode = data.debugMode;
 
@@ -1080,7 +1191,10 @@ async function start() {
             if (tc.settings.debugMode) log(`start(): remembered samples=[${remembered.slice(0,5).join(',')}]`, 4);
             if (!getSiteSettingsKey(data.siteSettings || {}, currentDomain)) blocked = true;
         } else {
-            if ((data.fqdns || []).some(d => domainMatchesSaved(currentDomain, d))) blocked = true;
+            // Path-aware matching (issue #69): legacy path entries like
+            // "www.twitch.tv/*/clip/*" scope to their path and no longer
+            // block the whole domain.
+            if (isUrlBlockedByEntries(window.location.href, data.fqdns || [])) blocked = true;
         }
 
         // Debug: log final decision

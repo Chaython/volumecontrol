@@ -598,14 +598,93 @@
     // conservative guard — the default is always "refuse to route DRM".
     function isGeckoRuntime() {
         try {
-            if (typeof navigator !== "undefined" && navigator.userAgentData) return false;
             const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
-            return ua.indexOf("Firefox/") !== -1;
+            // Firefox-first: a UA that says Firefox proves Gecko even if a
+            // future Firefox release grows a userAgentData shim (which the
+            // old check would have misread as proof of Chromium).
+            if (ua.indexOf("Firefox/") !== -1) return true;
+            if (typeof navigator !== "undefined" && navigator.userAgentData) return false;
+            return false;
         } catch (e) {
             return false;
         }
     }
     const EME_AUDIO_SILENCED_WHEN_ROUTED = !isGeckoRuntime();
+
+    // Per-element DRM evidence (sticky): `encrypted` fired, or MediaKeys were
+    // attached. Shared with the ISOLATED world (dataset flags +
+    // element.mediaKeys).
+    function elementDrmEvidence(element) {
+        if (!element) return false;
+        try {
+            if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
+            if (element.mediaKeys) return true;
+            if (element.webkitKeys) return true;
+        } catch (e) {
+            return false;
+        }
+        return false;
+    }
+
+    // Gecko keys-attached marker: Gecko's setMediaKeys() throws
+    // NotSupportedError when the element is already audio-captured
+    // (MozAudioCaptured), so EME elements become routable only AFTER keys
+    // attach. The setMediaKeys patch below writes vcEmeKeysAttached on
+    // native success.
+    function elementEmeKeysAttached(element) {
+        if (!element) return false;
+        try {
+            if (element.mediaKeys) return true;
+            if (element.dataset && element.dataset.vcEmeKeysAttached === "true") return true;
+        } catch (e) {
+            return false;
+        }
+        return false;
+    }
+
+    function pageCreatedMediaKeys() {
+        try {
+            return document.documentElement.dataset.vcPageEmeActive === "true";
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // Pending EME suspect: the page was granted EME access (probe) and the
+    // element has a blob: (MSE) source without per-element DRM evidence.
+    // Real DRM pipelines attach keys/initdata before or within seconds of
+    // playback, so routing is refused during the grace window; if no
+    // evidence lands, the element is clear media and may be routed (Plex
+    // probes DRM at startup while playing clear direct-play content —
+    // issue #70). When the page actually creates MediaKeys, the pending
+    // clock restarts (see the createMediaKeys patch) because setMediaKeys
+    // is imminent.
+    const EME_PENDING_GRACE_MS = 3000;
+
+    function isPendingEmeSuspect(element) {
+        // Probe-level gate (v6.9 semantics): a page that was GRANTED key
+        // system access may attach keys to this blob: element at any moment.
+        // Refuse routing during the grace window; if no DRM evidence lands,
+        // the element is clear media and expires into routable (Plex plays
+        // clear direct-play MSE on pages that probe DRM at startup).
+        if (!pageUsesEme()) return false;
+        const src = getMediaSourceUrl(element);
+        return Boolean(src) && src.indexOf("blob:") === 0;
+    }
+
+    function emePendingExpired(element) {
+        const entry = getMediaState(element);
+        if (entry.emePendingSince === undefined) {
+            entry.emePendingSince = isMediaPlaying(element) ? Date.now() : 0;
+            return false;
+        }
+        if (entry.emePendingSince === 0) {
+            if (!isMediaPlaying(element)) return false;
+            entry.emePendingSince = Date.now();
+            return false;
+        }
+        return Date.now() - entry.emePendingSince >= EME_PENDING_GRACE_MS;
+    }
 
     // DRM pipelines always use MSE, and MSE playback surfaces as a blob: URL.
     // EME init data (encrypted event) and setMediaKeys can land AFTER playback
@@ -615,12 +694,27 @@
     // DRM flags appear — a one-way trip to permanent silence (on engines that
     // silence protected audio; see EME_AUDIO_SILENCED_WHEN_ROUTED).
     function isLikelyDrmMedia(element) {
-        // Gecko: EME audio flows through WebAudio — DRM is fully routable there.
-        if (!EME_AUDIO_SILENCED_WHEN_ROUTED) return false;
-        if (isRestrictedMediaElement(element)) return true;
-        if (!pageUsesEme()) return false;
-        const src = getMediaSourceUrl(element);
-        return Boolean(src) && src.indexOf("blob:") === 0;
+        // ROUTING gate. Returns true when the element must NOT be captured
+        // into WebAudio right now:
+        //  * Chromium (EME_AUDIO_SILENCED_WHEN_ROUTED): any per-element DRM
+        //    evidence, plus EME-suspect elements during the pending window.
+        //  * Gecko: EME audio IS routable (bug 1331763), but only once keys
+        //    are attached — capturing first makes the site's setMediaKeys()
+        //    throw NotSupportedError and breaks playback. Evidence without
+        //    keys, and the pending window, still refuse routing.
+        // Probe-only pages (Plex) never gate: probing must not produce a
+        // false "restricted" verdict or a permanent routing refusal for
+        // clear MSE content (issue #70).
+        if (!element) return false;
+        if (EME_AUDIO_SILENCED_WHEN_ROUTED) {
+            if (elementDrmEvidence(element)) return true;
+            if (!isPendingEmeSuspect(element)) return false;
+            return !emePendingExpired(element);
+        }
+        if (elementEmeKeysAttached(element)) return false;
+        if (elementDrmEvidence(element)) return true;
+        if (!isPendingEmeSuspect(element)) return false;
+        return !emePendingExpired(element);
     }
 
     // Aggregate, DOM-visible summary of every tracked media element's boost
@@ -664,7 +758,13 @@
             // Mirror the content script's verdict gate: an element that is
             // neither playing nor holding a source cannot limit boost.
             if (!isMediaPlaying(element) && !getMediaSourceUrl(element)) continue;
-            if (isLikelyDrmMedia(element)) {
+            // VERDICT (the popup note + slider clamp) requires per-element
+            // DRM evidence on engines that silence routed EME audio. The
+            // pending window and page-level probes gate ROUTING only (see
+            // isLikelyDrmMedia) — a probed-but-clear page (Plex) must not
+            // show a restriction note (issue #70). On Gecko, DRM audio is
+            // routable (bug 1331763), so the verdict never restricts.
+            if (EME_AUDIO_SILENCED_WHEN_ROUTED && elementDrmEvidence(element)) {
                 restriction = "restricted";
                 break; // most severe; no need to keep scanning
             }
@@ -734,10 +834,31 @@
                 if (typeof nativeSetMediaKeys === "function") {
                     proto.setMediaKeys = function patchedSetMediaKeys(mediaKeys) {
                         if (mediaKeys) {
-                            markElementRestricted(this);
-                            log("setMediaKeys: element marked DRM-restricted (WebAudio routing blocked)");
+                            if (EME_AUDIO_SILENCED_WHEN_ROUTED) {
+                                markElementRestricted(this);
+                                log("setMediaKeys: element marked DRM-restricted (WebAudio routing blocked)");
+                            } else {
+                                log("setMediaKeys: EME keys attaching (Gecko: routable once attached)");
+                            }
                         }
-                        return nativeSetMediaKeys.apply(this, arguments);
+                        const setResult = nativeSetMediaKeys.apply(this, arguments);
+                        if (mediaKeys && !EME_AUDIO_SILENCED_WHEN_ROUTED) {
+                            // Gecko: route only AFTER keys attach —
+                            // setMediaKeys throws NotSupportedError on an
+                            // already-audio-captured element. On success, mark
+                            // the element routable and apply state promptly so
+                            // the route forms without waiting for the next
+                            // media event.
+                            const el = this;
+                            Promise.resolve(setResult).then(() => {
+                                try {
+                                    if (el.dataset) el.dataset.vcEmeKeysAttached = "true";
+                                } catch (e) {}
+                                updatePageMediaRestriction();
+                                applyMediaElementState(el);
+                            }, () => {});
+                        }
+                        return setResult;
                     };
                 }
                 const nativeWebkitSetMediaKeys = proto.webkitSetMediaKeys;
@@ -787,6 +908,48 @@
                 });
             } catch (e) {
                 log(`requestMediaKeySystemAccess patch failed: ${e && e.message}`);
+            }
+        }
+
+        // v6.13: two-level EME page detection. requestMediaKeySystemAccess
+        // resolving (above) only proves the page PROBED DRM support —
+        // app.plex.tv probes all three key systems at startup while playing
+        // clear direct-play content. The blob:-heuristic pending window
+        // OPENS on that probe (requestMediaKeySystemAccess granted);
+        // actually constructing MediaKeys is the strong signal that
+        // setMediaKeys is imminent, so it RESTARTS the pending clock.
+        if (window.MediaKeySystemAccess && window.MediaKeySystemAccess.prototype &&
+            typeof window.MediaKeySystemAccess.prototype.createMediaKeys === "function" &&
+            !window.MediaKeySystemAccess.prototype.__volumeControlCmkPatched) {
+            try {
+                const nativeCreateMediaKeys = window.MediaKeySystemAccess.prototype.createMediaKeys;
+                window.MediaKeySystemAccess.prototype.createMediaKeys = function patchedCreateMediaKeys() {
+                    const result = nativeCreateMediaKeys.apply(this, arguments);
+                    try {
+                        document.documentElement.dataset.vcPageEmeActive = "true";
+                        log("MediaKeys created — page flagged as EME-active");
+                        // The page is about to attach keys: restart the
+                        // pending clock for every tracked element so the
+                        // grace window covers the imminent setMediaKeys,
+                        // even if the original window was about to expire.
+                        for (const element of Array.from(mediaElements)) {
+                            const entry = mediaState.get(element);
+                            if (entry && entry.emePendingSince !== undefined) {
+                                entry.emePendingSince = Date.now();
+                            }
+                        }
+                        updatePageMediaRestriction();
+                        applyStateToMediaElements();
+                    } catch (e) {}
+                    return result;
+                };
+                Object.defineProperty(window.MediaKeySystemAccess.prototype, "__volumeControlCmkPatched", {
+                    value: true,
+                    configurable: false,
+                    enumerable: false
+                });
+            } catch (e) {
+                log(`createMediaKeys patch failed: ${e && e.message}`);
             }
         }
     }
@@ -1121,6 +1284,33 @@
         }
     }
 
+    // Rate-limited fallback write shared by the paused and playing paths.
+    // 250ms spacing bounds the write war against site volume managers, but a
+    // SKIPPED correction is never dropped: sites reset element.volume on
+    // track changes / replays, and if no further media event fires (event
+    // starvation — YouTube auto-next in shuffled playlists, Facebook reels
+    // replays) the reset volume would stick for seconds or until the user
+    // manually moves the slider (issue #71). Schedule the corrective write
+    // for the first allowed moment instead.
+    function writeFallbackVolume(element, entry, wantedVolume) {
+        const now = Date.now();
+        if (entry.lastFallbackWriteAt === undefined || now - entry.lastFallbackWriteAt >= 250) {
+            entry.lastFallbackWriteAt = now;
+            entry.pendingFallbackVolume = null;
+            setNativeVolume(element, wantedVolume);
+            return;
+        }
+        entry.pendingFallbackVolume = wantedVolume;
+        if (!entry.fallbackCorrectionTimer) {
+            const wait = Math.max(0, 250 - (now - entry.lastFallbackWriteAt)) + 1;
+            entry.fallbackCorrectionTimer = setTimeout(() => {
+                entry.fallbackCorrectionTimer = null;
+                // Re-run the full apply so the CURRENT state + baseVolume win.
+                try { applyMediaElementState(element); } catch (e) {}
+            }, wait);
+        }
+    }
+
     function applyMediaElementState(element, options = {}) {
         if (!isMediaElement(element)) return;
 
@@ -1141,11 +1331,7 @@
             // answering every volumechange with its own write, so an
             // unconditional write here can re-ignite the write war the v6.11
             // rate limit extinguished for playing elements.
-            const now = Date.now();
-            if (entry.lastFallbackWriteAt === undefined || now - entry.lastFallbackWriteAt >= 250) {
-                entry.lastFallbackWriteAt = now;
-                setNativeVolume(element, nativeVolume);
-            }
+            writeFallbackVolume(element, entry, nativeVolume);
             return;
         }
 
@@ -1158,6 +1344,11 @@
             : null);
 
         if (route) {
+            if (entry.fallbackCorrectionTimer) {
+                clearTimeout(entry.fallbackCorrectionTimer);
+                entry.fallbackCorrectionTimer = null;
+            }
+            entry.pendingFallbackVolume = null;
             // Restore native volume BEFORE wiring the route so the WebAudio gain
             // is the only scaling applied. If we wire first, there is a brief
             // moment where effective volume = fallbackScaledVolume × gain, which
@@ -1176,12 +1367,10 @@
         // that write their own value back on every volumechange (normalizers,
         // "smart volume" features). Without a floor between our writes that
         // escalates into a write war at event-loop speed (audible flutter +
-        // CPU churn). 250ms bounds the war while staying imperceptible.
-        const now = Date.now();
-        if (entry.lastFallbackWriteAt === undefined || now - entry.lastFallbackWriteAt >= 250) {
-            entry.lastFallbackWriteAt = now;
-            setNativeVolume(element, fallbackVolume);
-        }
+        // CPU churn). 250ms bounds the war while staying imperceptible. A
+        // skipped write schedules a deferred correction instead of dropping
+        // (issue #71 — see writeFallbackVolume).
+        writeFallbackVolume(element, entry, fallbackVolume);
     }
 
     // Returns true if an element that was removed from the DOM can still be
@@ -1673,7 +1862,46 @@
     // setMediaKeys landing after claim time) are not all observable through
     // events, so a cheap 1s recompute closes the gaps. mediaElements is
     // tiny (a handful of entries on typical pages).
-    setInterval(updatePageMediaRestriction, 1000);
+    //
+    // The same tick drives two v6.13 hardening loops:
+    //  1. EME pending window: elements waiting on DRM evidence that stay
+    //     clear past the grace window become routable HERE — nothing changed
+    //     from the element's perspective, so no media event will arrive to
+    //     re-run the routing decision.
+    //  2. Fallback audit (issue #71): verify every playing, unrouted,
+    //     audible element sits at the fallback volume the extension state
+    //     demands. Sites reset video.volume on track changes / replays; if
+    //     the corrective write was rate-limited and no further media event
+    //     fires, the reset would stick (1-10s of wrong volume on YouTube
+    //     auto-next, permanently on Facebook reels until manual action).
+    //     The audit bounds any drift to ~1s without needing events.
+    setInterval(() => {
+        updatePageMediaRestriction();
+
+        for (const element of Array.from(mediaElements)) {
+            const entry = mediaState.get(element);
+            if (!entry) continue;
+            if (mediaRoutes.has(element)) continue;
+
+            // 1. Pending EME suspect: re-run the routing decision so expired
+            //    windows route (and live windows keep refusing).
+            if (entry.emePendingSince !== undefined) {
+                applyMediaElementState(element);
+                continue;
+            }
+
+            // 2. Fallback audit: playing + audible + previously
+            //    fallback-managed + native volume drifted from the expected
+            //    scaled value → re-apply (rate limit still applies).
+            if (entry.lastFallbackWriteAt === undefined) continue;
+            if (!isMediaPlaying(element) || !isAudibleMediaElement(element)) continue;
+            const gain = effectiveGain();
+            const expected = Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)));
+            if (Math.abs(readNativeVolume(element) - expected) > 0.02) {
+                applyMediaElementState(element);
+            }
+        }
+    }, 1000);
 
     // Periodically sweep media elements that have been removed from the DOM.
     // applyStateToMediaElements also does this on state changes, but on pages
