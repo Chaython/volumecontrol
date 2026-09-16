@@ -84,43 +84,6 @@ function New-ExtensionZip {
     }
 }
 
-function Optimize-SourceFile {
-    param([string]$FilePath)
-
-    $ext = [System.IO.Path]::GetExtension($FilePath).ToLower()
-    $content = Get-Content -Raw -LiteralPath $FilePath
-
-    if ($ext -eq ".js") {
-        # Regex matches Strings (Group 1), Block Comments (Group 2), Line Comments (Group 3)
-        # We replace Groups 2 and 3 with empty strings, and return Group 1 intact.
-        $pattern = '("(?:[^"\\]|\\.)*"|''(?:[^''\\]|\\.)*''|`(?:[^`\\]|\\.)*`)|(/\*[\s\S]*?\*/)|(//.*)'
-        $evaluator = [System.Text.RegularExpressions.MatchEvaluator] {
-            param([System.Text.RegularExpressions.Match]$m)
-            if ($m.Groups[2].Success -or $m.Groups[3].Success) {
-                return ""
-            }
-            return $m.Value
-        }
-        $content = [System.Text.RegularExpressions.Regex]::Replace($content, $pattern, $evaluator)
-        
-        # Remove empty lines
-        $content = [System.Text.RegularExpressions.Regex]::Replace($content, '(?m)^\s*\r?\n', '')
-    }
-    elseif ($ext -eq ".css") {
-        # Strip CSS block comments
-        $content = $content -replace '(?s)/\*.*?\*/', ''
-        $content = [System.Text.RegularExpressions.Regex]::Replace($content, '(?m)^\s*\r?\n', '')
-    }
-    elseif ($ext -eq ".html") {
-        # Strip HTML comments
-        $content = $content -replace '(?s)', ''
-        $content = [System.Text.RegularExpressions.Regex]::Replace($content, '(?m)^\s*\r?\n', '')
-    }
-
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($FilePath, $content, $utf8NoBom)
-}
-
 function Copy-ExtensionFiles {
     param([string]$PackageDir, [string]$IconFile)
 
@@ -131,10 +94,9 @@ function Copy-ExtensionFiles {
 
     foreach ($file in $rootFiles) {
         $destPath = Join-Path $PackageDir $file.Name
+        # Copy bytes directly so Windows PowerShell cannot corrupt UTF-8.
+        # JavaScript is minified separately with Terser's parser.
         Copy-Item -LiteralPath $file.FullName -Destination $destPath
-        
-        # Minify Pass: Strip comments and empty lines
-        Optimize-SourceFile -FilePath $destPath
     }
 
     Copy-Item -LiteralPath (Join-Path $RootPath $IconFile) -Destination $PackageDir
@@ -198,6 +160,11 @@ function Write-Package {
 
     Copy-ExtensionFiles -PackageDir $packageDir -IconFile $IconFile
 
+    & $NodePath $MinifyScript $packageDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "JavaScript minification failed for $Browser; no ZIP was created for this package."
+    }
+
     $manifest = New-ManifestVariant -Browser $Browser -IconFile $IconFile
     $manifestPath = Join-Path $packageDir "manifest.json"
     $json = $manifest | ConvertTo-Json -Depth 32
@@ -223,6 +190,21 @@ try {
 
     $baseManifest = Get-Content -Raw -LiteralPath (Join-Path $RootPath "manifest.json") | ConvertFrom-Json
     $version = $baseManifest.version
+
+    # Validate build tools before removing an existing release.
+    $nodeCommand = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $nodeCommand) {
+        throw "Node.js is required for minification. Install Node.js and run npm ci in the repository root."
+    }
+    $NodePath = $nodeCommand.Source
+    $MinifyScript = Join-Path $PSScriptRoot "minify.mjs"
+    if (-not (Test-Path -LiteralPath $MinifyScript -PathType Leaf)) {
+        throw "Required build helper is missing: $MinifyScript"
+    }
+    & $NodePath $MinifyScript --check
+    if ($LASTEXITCODE -ne 0) {
+        throw "Minifier is unavailable. Run npm ci in the repository root before building."
+    }
 
     Remove-DirectoryInRepo $OutputRoot
     New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null

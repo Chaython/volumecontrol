@@ -287,6 +287,18 @@ input:checked + .slider:before { transform: translateX(16px); }
     margin-bottom: 10px;
     font-size: 0.9em;
 }
+/* v6.15: exclusion overlay detail — same look as the DRM limitation note
+   (#volume-limit-note): reason + remedy, small centered gray text. */
+.exclusion-title {
+    font-weight: 600;
+    color: #333;
+}
+.exclusion-detail {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 1.35;
+    color: #666;
+}
 #error-content { padding: 20px; text-align: center; color: #d32f2f; }
 
 /* --- DARK MODE --- */
@@ -309,6 +321,8 @@ input:checked + .slider:before { transform: translateX(16px); }
     input[type=range]::-moz-range-thumb { background: #a8c7fa; }
     
     .exclusion-message { background-color: #333; color: #ccc; border-color: #444; }
+    .exclusion-title { color: #e8eaed; }
+    .exclusion-detail { color: #bdc1c6; }
     .volume-limit-note { color: #bdc1c6; }
     .slider { background-color: #5f6368; }
     input:checked + .slider { background-color: #8ab4f8; }

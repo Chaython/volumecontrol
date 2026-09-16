@@ -15,6 +15,7 @@ const {
   domainMatchesSaved,
   isUrlBlockedByEntry,
   isUrlBlockedByEntries,
+  entriesBlockingUrl,
   getSiteSettingsKey,
   handleError,
   BOOST_LIMIT_NOTE
@@ -40,6 +41,23 @@ function normalizeControlDb(value) {
 
 function extractRootDomain(url) {
     return sharedExtractRootDomain(url, { nullForInvalid: true });
+}
+
+// v6.15: build the exclusion overlay's detail line from the SAME storage the
+// content script enforces. Returns null when the URL is not excluded, so
+// callers can use it as the verdict itself.
+function exclusionOverlayDetail(data, tabUrl) {
+    if (data.whitelistMode) {
+        // Whitelist mode: the page is inactive because it is not remembered.
+        return "Whitelist mode is active, so only remembered sites are controlled. Use Settings to remember this site or turn whitelist mode off.";
+    }
+    const blocking = entriesBlockingUrl(tabUrl, data.fqdns || []);
+    if (!blocking.length) return null;
+    const first = blocking[0];
+    const extra = blocking.length > 1
+        ? ` (and ${blocking.length - 1} more entr${blocking.length === 2 ? "y" : "ies"})`
+        : "";
+    return `This page matched your blocklist entry "${first}"${extra}. Turn the Active switch on to remove the blocking entries and reload the page, or edit the list in Settings.`;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -124,6 +142,14 @@ function handleTabs(tabs) {
     // Frame-targeted exclusion check: only the top frame's content script is
     // authoritative for whether the extension is active on this page. An
     // unframed message would race every iframe's instance.
+    // v6.15: this message path is now the SECONDARY check. A blocked content
+    // script cannot answer (its listener returns early), and Firefox resolves
+    // an unanswered tabs.sendMessage with undefined instead of rejecting —
+    // so this rejection-only fallback never fired there and the popup looked
+    // fully functional while doing nothing. The primary verdict is computed
+    // directly from storage in updateEnableSwitch (same source of truth the
+    // content script uses) on every engine; this path only covers a storage
+    // read failure in the popup.
     tabsSendMessage(currentTab.id, { command: "checkExclusion" }, TOP_FRAME_OPTIONS).catch(async () => {
         // Content script didn't respond; fall back to storage to decide whether the page is truly excluded.
         try {
@@ -134,12 +160,15 @@ function handleTabs(tabs) {
             }
             const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {} });
             let isExcluded = false;
+            let detail = null;
             if (data.whitelistMode) {
                 isExcluded = !getSiteSettingsKey(data.siteSettings || {}, domain);
+                if (isExcluded) detail = exclusionOverlayDetail(data, currentTab.url);
             } else {
-                isExcluded = isUrlBlockedByEntries(currentTab.url, data.fqdns || []);
+                detail = exclusionOverlayDetail(data, currentTab.url);
+                isExcluded = detail !== null;
             }
-            if (isExcluded) showError({ type: "exclusion" });
+            if (isExcluded) showError({ type: "exclusion", detail });
         } catch (e) {
             showError({ type: "exclusion" });
         }
@@ -167,6 +196,12 @@ async function updateEnableSwitch(tab) {
         // Hide the enable/active switch to avoid duplicate controls and potential user confusion.
         if (data.whitelistMode) {
             if (switchLabel) switchLabel.style.display = 'none';
+            // v6.15: a non-remembered site is just as inactive as a blocklisted
+            // one — show the overlay explaining why (same verdict the content
+            // script enforces).
+            if (!getSiteSettingsKey(data.siteSettings || {}, domain)) {
+                showError({ type: "exclusion", detail: exclusionOverlayDetail(data, tab.url) });
+            }
             return;
         }
 
@@ -182,6 +217,15 @@ async function updateEnableSwitch(tab) {
             switchLabel.title = isExcluded
                 ? "This site is in your blocklist. Turning Active on removes the blocking entries and reloads the page."
                 : "";
+        }
+
+        // v6.15: blocklisted site/wildcard — tell the user in the overlay
+        // message (like the DRM note does for restricted media), naming the
+        // entry that matched. Computed from storage directly so it works on
+        // every engine (the checkExclusion message cannot be answered by a
+        // blocked content script).
+        if (isExcluded) {
+            showError({ type: "exclusion", detail: exclusionOverlayDetail(data, tab.url) });
         }
 
         checkbox.onchange = (e) => {
@@ -481,6 +525,14 @@ function showError(error) {
     if (popupContent) popupContent.classList.remove("hidden");
     if (exclusionMessage) {
         exclusionMessage.classList.remove("hidden");
+        // v6.15: informative overlay (mirroring the DRM note's role/status
+        // pattern) — say WHY the site is disabled: the matched blocklist
+        // entry (site or path/wildcard), or whitelist mode. Falls back to a
+        // generic line when the verdict came without storage data.
+        const detail = exclusionMessage.querySelector(".exclusion-detail");
+        if (detail) {
+            detail.textContent = error.detail || "This site is excluded in your blocklist, or not remembered in whitelist mode.";
+        }
         // Make the exclusion message a live region so screen readers announce it,
         // and make it focusable so we can move focus to it.
         exclusionMessage.setAttribute("role", "alert");

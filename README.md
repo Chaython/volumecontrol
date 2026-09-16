@@ -14,7 +14,7 @@ Volume Control adds a simple per-site volume control to your browser. It can low
 
 Settings can be remembered per site, and you can exclude sites where you do not want the extension to run. Volume Control supports HTML5 video and audio only; it does not support Flash.
 
-Excluded-site entries match by domain, and entries saved **with a path** (such as the legacy V4-era defaults) are wildcard-matched against the full URL — so `www.twitch.tv/*/clip/*` excludes only the clip pages while the rest of Twitch runs. A one-time v6.13 migration removes the legacy Twitch default entries that older builds left in users' stored storage (path and `www.` normalization had turned them into a block on the whole domain — issue #69), and the popup's Active toggle now removes **every** entry that blocks the current page — not just the exact domain match — with a tooltip explaining what it removed. Since v6.14 the **options page also accepts user-typed paths**, so path-scoped exclusions are a first-class feature (`example.com/videos`, wildcards with `*` = any characters except `/` — see the options-page hint); the legacy purge now also runs at install/update/startup so a hand-added path entry can never be swept by a migration that has not run yet.
+Excluded-site entries match by domain, and entries saved **with a path** (such as the legacy V4-era defaults) are wildcard-matched against the full URL — so `www.twitch.tv/*/clip/*` excludes only the clip pages while the rest of Twitch runs. A one-time v6.13 migration removes the legacy Twitch default entries that older builds left in users' stored storage (path and `www.` normalization had turned them into a block on the whole domain — issue #69), and the popup's Active toggle now removes **every** entry that blocks the current page — not just the exact domain match — with a tooltip explaining what it removed. Since v6.14 the **options page also accepts user-typed paths**, so path-scoped exclusions are a first-class feature (`example.com/videos`, wildcards with `*` = any characters except `/` — see the options-page hint); the legacy purge now also runs at install/update/startup so a hand-added path entry can never be swept by a migration that has not run yet. Since v6.15 the popup **tells you when the current page is blocklisted** — an overlay message (styled like the DRM note) names the matching entry and how to re-enable the site, on every engine — and the options-page blocklist input accepts **Enter** to add an entry, with an inline notice when the typed site/wildcard is already in the list.
 
 **Compatibility:** Firefox 128+ (event-page background) and Chromium 121+ — Chrome, Edge, Brave, Opera, Vivaldi from January 2024 onward (service-worker background). Chromium 120 and older rejects the cross-browser manifest shape at load time, so the manifest declares `minimum_chrome_version: "121"`.
 
@@ -54,12 +54,49 @@ Some media cannot be routed through WebAudio, and whether that applies depends o
 
 ## Known Limitations
 
+- **Release builds must be produced with the fixed pipeline** — see the new **Release Builds** section below. Releases built with the pre-6.16 `build.ps1` from v6.13–v6.15 sources ship a `shared.js` SyntaxError and are completely inert.
+
 - Volume Control cannot run on browser system pages such as `chrome://`, `edge://`, `about:`, extension pages, or other protected browser UI.
 - DRM-protected media on **Chromium browsers** (Chrome/Edge/Brave/Opera/Vivaldi) can only use the native volume fallback: lowering and mute work; boosting and mono do not (the browser silences WebAudio for protected audio). If Widevine is disabled on such a browser (Brave's default), DRM sites simply won't play anything — non-DRM audio is unaffected and boosts identically. On **Firefox**, DRM media is fully boostable since v6.12. See [Restricted Media](#restricted-media-drm--cross-origin).
 - Cross-origin media without CORS can only use the native volume fallback in every engine: lowering and mute work; boosting and mono do not.
 - Sites that create their own `createMediaElementSource` pipeline for the same element can end up double-attenuating when Volume Control also routes that element.
 - Media that becomes cross-origin-tainted *after* it was already routed cannot be un-tainted; routing continues with the gain that was already applied.
 - Sites with unusual, heavily customized, or late-changing WebAudio graphs may not be fully controllable in every playback path.
+
+## Release Builds (read this before packaging)
+
+`scripts/build.ps1` creates Chrome and Firefox folders and ZIPs in `dist/`. It
+minifies the packaged JavaScript with [Terser](https://terser.org/), generates each
+browser's manifest, and compresses the ZIP entries. Source files stay unchanged;
+HTML, CSS, icons, and the license are copied byte-for-byte.
+
+The old regex-based comment stripper could mistake parts of JavaScript regex
+literals for comments, producing a **SyntaxError** that prevented the extension
+from starting. It could also change template-literal whitespace and corrupt UTF-8
+text on Windows PowerShell. Terser parses JavaScript correctly and reads/writes
+UTF-8 explicitly. The build removes comments and unnecessary whitespace, with
+compression rewrites and name mangling disabled to preserve cross-script names.
+
+Install Node.js 18 or newer and PowerShell. From the repository root, install the
+pinned build dependencies once (and again when `package-lock.json` changes), then
+build and run the regression checks:
+
+```powershell
+npm ci
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1
+npm test
+```
+
+Use `npm.cmd` if Windows PowerShell blocks `npm.ps1`. The build checks that Node,
+`scripts/minify.mjs`, and Terser are available before replacing an existing release,
+and stops if JavaScript cannot be minified.
+
+`scripts/fixtures/` holds sample JavaScript with regression cases; these files are
+test inputs and are not included in the extension. `scripts/test-build.mjs` builds
+both browser variants in a temporary directory and checks minification, original
+source preservation, JavaScript syntax, regexes, templates, Unicode, shared URL
+helpers, and build errors. Run it through `npm test` or directly with
+`node --test scripts/test-build.mjs`.
 
 ## Hotkeys
 
@@ -100,6 +137,28 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 
 # Changelog
+
+---
+
+<details open>
+<summary><strong>Version 6.16 – Patch Notes</strong></summary>
+
+- Fixed   [HIGH] **Release builds did nothing at all — "Plex doesn't allow upward changes to volume again"**: the release packaging script (`scripts/build.ps1`, `Optimize-SourceFile`) strips comments with a single regex that protects STRING literals but not REGEX literals. v6.13 introduced a protocol-stripping regex written as `:/` + `/` (backslash-escaped double slash) in `shared.js`; the build's comment-stripper misread the adjacent slashes inside the regex literal as a LINE COMMENT, truncated the line mid-expression, and shipped `shared.js` as a **SyntaxError** in every release package built from v6.13–v6.15 sources. Because `cs.js` and `popup.js` both start by destructuring `globalThis.VolumeControlShared`, a failed `shared.js` kills them on line 1 — the release extension is completely inert: the popup's slider moves but nothing updates or applies, no page is controlled, hotkeys and the background worker are dead. This also retroactively explains the report on the v6.13 Firefox test zip ("dragging the bar doesn't update the volume number (or change the volume output itself)") and the "it was actually in my release code" follow-up. The loose sources and the hand-built fixed zips were never affected — only `build.ps1` output was. The two protocol regex literals retain their older-build-compatible form (`:[/]{2}`). The build now uses Terser to remove JavaScript comments and unnecessary whitespace while keeping names and expressions intact. It reads and writes UTF-8 explicitly, preserves the original source files, and copies non-JavaScript assets byte-for-byte.
+- Added        **`scripts/test-build.mjs`** — builds both browser variants and checks JavaScript size reduction, original source preservation, JavaScript parsing, regex/template/Unicode behavior, shared URL/blocklist helpers, and failure handling
+- Verified     Live end-to-end reproduction and fix proof (`analysis/harness/live-plex-volume.mjs`, real Chromium + real unpacked extension, driving the REAL popup against `public/vc-plex2.html` — a fidelity reconstruction of app.plex.tv 4.160.0 built from its production bundle: startup DRM probe of all 3 key systems, detached media-element POOL with recycle-on-next-video, `crossOrigin="anonymous"`, the React volume manager, MSE playback, theme music as a CORS-clean cross-origin `<audio>`, and the exact unmount sequence): against the release build of v6.15 sources **every extension-effect check fails** (no routing, no gain nodes, popup inert) — the reported symptom; against the v6.16 release build **33/33 checks pass** (routes with exact gains +10/+15/+20 dB and −10 dB, native-volume/base contract with the site volume manager, pool reuse without duplicate `createMediaElementSource`, theme music interplay, no restriction verdict). Full harness regression green: scenarios A/B/D/E/F2/F3, udio, treblo, v11, trackchange, blocklist, the 3-way firefox-drm A/B (27 cells), fuzz (seeds 12345 × 2000, 424242/777/31337/99991 × 800), and the repro suite against the fixed sources
+
+</details>
+
+---
+
+<details>
+<summary><strong>Version 6.15 – Patch Notes</strong></summary>
+
+- Added   [MED] **The popup now tells you when the current site is in your blocklist — an overlay message like the DRM note**: opening the popup on a page that matches a blocklist entry (bare site or path/wildcard) shows the exclusion overlay with a detail line naming the entry that matched — `This page matched your blocklist entry "twitch.tv/*/clip/*". Turn the Active switch on to remove the blocking entries and reload the page, or edit the list in Settings.` (two matches → first entry + "and 1 more entry"; whitelist-mode exclusions explain that only remembered sites run). Previously the popup showed either a terse "disabled" banner whose cause was unstated — or, on Firefox, **nothing at all**: a blocked content script cannot answer the popup's `checkExclusion` message (its listener returns early), and Firefox resolves an unanswered `tabs.sendMessage` with `undefined` instead of rejecting, so the rejection-only fallback never fired there and the popup looked fully functional while doing nothing. The verdict is now computed directly from the same storage the content script enforces (`entriesBlockingUrl`), on every engine; the checkExclusion message path remains as a secondary fallback for a failed storage read. Verified live (real Chromium + unpacked extension; the popup runs as a background CDP tab while a real http tab is active, so its `tabsQuery({active:true,currentWindow:true})` resolves exactly as from the toolbar): wildcard match, multiple-match count, bare domain, empty-blocklist control (no overlay, Active on), content-script parity (page has no `vc-init` while blocked, restored after the entry is removed), and the overlay is a `role="alert"` live region — 23/23 checks, `analysis/harness/live-popup-blocklist.mjs`, screenshot `output/popup-blocklist-overlay.png`
+- Added   [MED] **Pressing Enter in the options-page blocklist input adds the entry** (same as the remembered-sites input) instead of forcing a click on "Add Site" — verified with real keystrokes (CDP `Input.dispatchKeyEvent`): a bare site, a path/wildcard entry (`some.site/videos/*` — path preserved in storage and shown in the list), and a duplicate. A duplicate no longer silently no-ops and clears the input: a small inline status line (DRM-note pattern, auto-dismisses after 4 s) says `"example.com" is already in your blocklist.` and keeps the typed text so it can be edited into a variant; already-remembered sites in whitelist mode get the same notice. The options-page hint documents the Enter shortcut
+- Verified     Full harness regression green: scenarios A/B/D/E/F3/F2/E, trackchange, v11, udio, treblo, blocklist, the 3-way firefox-drm A/B (27 cells), and fuzz — unchanged, as this release only touches the popup/options UI layer (shared matcher, content script, and hook are byte-identical to v6.14)
+
+</details>
 
 ---
 

@@ -31,6 +31,15 @@ h3 {
     align-items: center;
 }
 
+/* v6.15: inline status line under the blocklist input (DRM-note pattern:
+   small, informative, auto-dismissing — set via the `hidden` attribute). */
+.add-status {
+    margin: -4px 0 10px;
+    font-size: 12px;
+    line-height: 1.35;
+    color: #666;
+}
+
 input,
 button {
     border: 1px solid #888;
@@ -400,6 +409,10 @@ button#openShortcutsPage:hover {
     }
 
     .hint {
+        color: #aaa;
+    }
+
+    .add-status {
         color: #aaa;
     }
 

@@ -179,7 +179,17 @@
     function splitBlocklistEntry(entry) {
         let raw = String(entry == null ? "" : entry).trim().toLowerCase();
         if (!raw) return null;
-        raw = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//, ""); // tolerate stored URLs
+        // NOTE: the protocol pattern is deliberately written as [/]{2}
+        // instead of the equivalent backslash-escaped double slash. The
+        // release build pipeline (scripts/build.ps1 Optimize-SourceFile)
+        // strips comments with a regex that only protects string literals:
+        // a regex literal containing adjacent slashes is misread as a line
+        // comment and the line is truncated mid-expression, which shipped
+        // shared.js as a SyntaxError in every release built from v6.13-v6.15
+        // sources ("Plex doesn't allow upward changes to volume"). Never put
+        // adjacent slashes or a slash-star sequence inside a regex literal
+        // in this codebase; check-release-build.mjs enforces it.
+        raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/, ""); // tolerate stored URLs
         const slash = raw.indexOf('/');
         const domainPart = slash === -1 ? raw : raw.slice(0, slash);
         const pathPart = slash === -1 ? "" : raw.slice(slash);
@@ -203,7 +213,10 @@
     function normalizeBlocklistEntryInput(value) {
         let raw = String(value == null ? "" : value).trim().toLowerCase();
         if (!raw) return "";
-        raw = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//, ""); // http://, https://, ...
+        // [/]{2} instead of backslash-escaped slashes — release-build
+        // comment-stripper safety (see splitBlocklistEntry above;
+        // check-release-build.mjs enforces it).
+        raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/, ""); // strip a leading protocol
         const slash = raw.indexOf('/');
         let domain = slash === -1 ? raw : raw.slice(0, slash);
         domain = domain.split(':')[0]; // strip a port

@@ -1,0 +1,13 @@
+{
+  "name": "volume-control",
+  "private": true,
+  "scripts": {
+    "test": "node --test scripts/test-build.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "terser": "5.51.2"
+  }
+}

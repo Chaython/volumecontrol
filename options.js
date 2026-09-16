@@ -428,7 +428,24 @@ async function initOptions() {
     }
 
     if (addBtn && newFqdnInput) {
-        addBtn.addEventListener('click', async () => {
+        // v6.15: inline status line under the input (the DRM-note pattern:
+        // small, informative, auto-dismissing) — tells the user when the typed
+        // site/wildcard is ALREADY in the blocklist instead of silently
+        // clearing the input and appearing to do nothing.
+        const statusEl = document.getElementById('addFqdnStatus');
+        let statusTimer = null;
+        const showStatus = (text) => {
+            if (!statusEl) return;
+            statusEl.textContent = text;
+            statusEl.hidden = false;
+            if (statusTimer) clearTimeout(statusTimer);
+            statusTimer = setTimeout(() => {
+                statusEl.hidden = true;
+                statusTimer = null;
+            }, 4000);
+        };
+
+        const addFqdn = async () => {
             const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false });
             // Blocklist mode (v6.14): preserve a typed path so entries can be
             // path-scoped ("twitch.tv/clips", "twitch.tv/*/clip/*" — * matches
@@ -444,18 +461,38 @@ async function initOptions() {
                 // Add as a remembered site so whitelist contains only remembered sites
                 const sd = await storageGet({ siteSettings: {} });
                 const settings = sd.siteSettings || {};
-                if (!settings[v]) {
-                    settings[v] = { volume: 0, mono: false };
-                    await storageSet({ siteSettings: settings });
+                if (settings[v]) {
+                    // v6.15: say so instead of a silent no-op; keep the typed
+                    // text so it can be edited into a different site.
+                    showStatus(`"${v}" is already a remembered site.`);
+                    return;
                 }
+                settings[v] = { volume: 0, mono: false };
+                await storageSet({ siteSettings: settings });
             } else {
                 data.fqdns = data.fqdns || [];
-                if (!data.fqdns.includes(v)) data.fqdns.push(v);
+                if (data.fqdns.includes(v)) {
+                    // v6.15: say so instead of a silent no-op; keep the typed
+                    // text so it can be edited into a path/wildcard variant.
+                    showStatus(`"${v}" is already in your blocklist.`);
+                    return;
+                }
+                data.fqdns.push(v);
                 await storageSet({ fqdns: data.fqdns });
             }
             // Refresh list immediately so the UI reflects the addition without waiting for storage.onChanged
             await renderFqdnList();
             newFqdnInput.value = '';
+        };
+
+        addBtn.addEventListener('click', addFqdn);
+        // v6.15: pressing Enter in the input adds the entry (same behavior as
+        // the remembered-sites input) instead of forcing a click on "Add Site".
+        newFqdnInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addFqdn();
+            }
         });
     }
 
