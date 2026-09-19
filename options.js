@@ -371,6 +371,7 @@ async function initOptions() {
     // Wire up whitelist mode and debug mode
     const whitelistModeCheckbox = document.getElementById('whitelistMode');
     const debugModeCheckbox = document.getElementById('debugMode');
+    const forceDrmCaptureCheckbox = document.getElementById('forceDrmCapture');
     const addBtn = document.getElementById('addFqdn');
     const newFqdnInput = document.getElementById('newFqdn');
 
@@ -424,6 +425,14 @@ async function initOptions() {
         debugModeCheckbox.checked = !!data.debugMode;
         debugModeCheckbox.addEventListener('change', async (e) => {
             await storageSet({ debugMode: e.target.checked });
+        });
+    }
+
+    if (forceDrmCaptureCheckbox) {
+        const data = await storageGet({ forceDrmCapture: false });
+        forceDrmCaptureCheckbox.checked = !!data.forceDrmCapture;
+        forceDrmCaptureCheckbox.addEventListener('change', async (e) => {
+            await storageSet({ forceDrmCapture: e.target.checked });
         });
     }
 
@@ -558,6 +567,12 @@ async function initOptions() {
                 renderFqdnList();
                 fqdnListRenderTimeout = null;
             }, 50);
+        }
+        if (changes.debugMode && debugModeCheckbox) {
+            debugModeCheckbox.checked = !!changes.debugMode.newValue;
+        }
+        if (changes.forceDrmCapture && forceDrmCaptureCheckbox) {
+            forceDrmCaptureCheckbox.checked = !!changes.forceDrmCapture.newValue;
         }
     });
 }

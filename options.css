@@ -244,6 +244,15 @@ input[type="checkbox"] {
     font-weight: bold;
 }
 
+.danger-toggle-box {
+    border: 1px solid #d93025;
+    background: #fff4f4;
+}
+
+.danger-warning {
+    color: #b3261e;
+}
+
 .footer-box {
     margin-top: 30px;
     border-top: 1px solid #eee;
@@ -406,6 +415,15 @@ button#openShortcutsPage:hover {
 
     .toggle-box {
         background: #333;
+    }
+
+    .danger-toggle-box {
+        border-color: #f28b82;
+        background: #3a2525;
+    }
+
+    .danger-warning {
+        color: #f28b82;
     }
 
     .hint {

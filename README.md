@@ -154,6 +154,7 @@ The popup/options changes previously labeled 6.15 and the 6.16 build changes are
 - **Easier list editing:** press Enter to add a site or path in Settings. Duplicate blocklist entries and remembered sites show an inline notice and keep the typed text for editing.
 - **Safer build failures:** check for Node, the minifier helper, and Terser before replacing existing output. Invalid JavaScript stops packaging instead of producing a broken ZIP. Original source files stay unchanged.
 - **Added build regression checks:** `npm test` builds both browser variants and checks minification, script parsing, regex/template/Unicode behavior, URL and blocklist helpers, source preservation, and failure handling. Test fixtures and build tools are excluded from release packages.
+- **Add dangerous DRM capture override:** Settings now includes a debug-only option that bypasses DRM/EME routing safeguards and attempts WebAudio capture anyway. The UI warns that this may mute audio, stop protected media from loading, or break playback; cross-origin safety checks remain enforced.
 - **Build setup:** Node.js 18+ and `npm ci` are now required. `build.ps1` runs minification and packaging; `npm test` runs the regression checks separately.
 
 </details>

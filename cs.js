@@ -29,7 +29,8 @@ let pageBridgeResyncInterval = null;
 const tc = {
   settings: {
     logLevel: 4,
-    debugMode: false
+    debugMode: false,
+    forceDrmCapture: false
   },
   vars: {
     dB: 0,
@@ -300,14 +301,14 @@ function emePendingCleared(element) {
 // not produce a restriction note (issue #70). On Gecko, DRM is fully
 // boostable (bug 1331763), so the verdict never restricts.
 function isProbablyProtectedMedia(element) {
-    if (!element || !EME_AUDIO_SILENCED_WHEN_ROUTED) return false;
+    if (!element || tc.settings.forceDrmCapture || !EME_AUDIO_SILENCED_WHEN_ROUTED) return false;
     return elementDrmEvidence(element);
 }
 
 // ROUTING gate: decides whether this element must NOT be routed through
 // WebAudio right now. Mirrors the hook's isLikelyDrmMedia.
 function shouldRefuseMediaRouting(element) {
-    if (!element) return false;
+    if (!element || tc.settings.forceDrmCapture) return false;
     if (EME_AUDIO_SILENCED_WHEN_ROUTED) {
         if (elementDrmEvidence(element)) return true;
         if (!isPendingEmeSuspect(element)) return false;
@@ -377,7 +378,7 @@ function getBoostLimitReason(element) {
     if (isPageAudioManaged(element)) return crossOrigin ? "cross-origin" : "";
 
     const fallbackReason = element.dataset.vcFallbackReason;
-    if (fallbackReason) return fallbackReason;
+    if (fallbackReason && !(tc.settings.forceDrmCapture && fallbackReason === "restricted")) return fallbackReason;
 
     if (crossOrigin) return "cross-origin";
 
@@ -429,8 +430,11 @@ function getBoostLimitInfo() {
     // native volume (their cross-origin audio cannot be routed through
     // WebAudio) while the popup advertises a full +32 dB range.
     const hookRestriction = getHookPageRestriction();
-    if (reasonSeverity(hookRestriction) > reasonSeverity(result.reason)) {
-        result = makeBoostLimitedResult(hookRestriction);
+    const effectiveHookRestriction = tc.settings.forceDrmCapture && hookRestriction === "restricted"
+        ? ""
+        : hookRestriction;
+    if (reasonSeverity(effectiveHookRestriction) > reasonSeverity(result.reason)) {
+        result = makeBoostLimitedResult(effectiveHookRestriction);
     }
 
     // Merge verdicts reported by embedded iframes. Their media elements live
@@ -438,8 +442,11 @@ function getBoostLimitInfo() {
     // see them, and they report their verdict here (the top frame) so the
     // popup — which queries only the top frame — aggregates the whole tab.
     const frameLimit = getAggregatedFrameLimit();
-    if (frameLimit && reasonSeverity(frameLimit.reason) > reasonSeverity(result.reason)) {
-        result = makeBoostLimitedResult(frameLimit.reason);
+    const effectiveFrameReason = frameLimit && tc.settings.forceDrmCapture && frameLimit.reason === "restricted"
+        ? ""
+        : (frameLimit ? frameLimit.reason : "");
+    if (effectiveFrameReason && reasonSeverity(effectiveFrameReason) > reasonSeverity(result.reason)) {
+        result = makeBoostLimitedResult(effectiveFrameReason);
     }
 
     boostLimitCache = result;
@@ -700,7 +707,8 @@ function syncPageAudioHook() {
         dB: tc.vars.isBlocked ? 0 : normalizeDb(tc.vars.dB),
         mono: !tc.vars.isBlocked && tc.vars.mono,
         muted: !tc.vars.isBlocked && Boolean(tc.vars.muted),
-        debugMode: tc.settings.debugMode
+        debugMode: tc.settings.debugMode,
+        forceDrmCapture: tc.settings.forceDrmCapture
     };
 
     // Skip if nothing changed since the last sync.
@@ -709,7 +717,8 @@ function syncPageAudioHook() {
         lastSyncedPageAudioState.dB === currentState.dB &&
         lastSyncedPageAudioState.mono === currentState.mono &&
         lastSyncedPageAudioState.muted === currentState.muted &&
-        lastSyncedPageAudioState.debugMode === currentState.debugMode) {
+        lastSyncedPageAudioState.debugMode === currentState.debugMode &&
+        lastSyncedPageAudioState.forceDrmCapture === currentState.forceDrmCapture) {
         return;
     }
     lastSyncedPageAudioState = currentState;
@@ -1206,7 +1215,7 @@ async function start() {
     if (!browserAPI) return;
 
     try {
-        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false, legacyTwitchDefaultsPurged: false });
+        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false, forceDrmCapture: false, legacyTwitchDefaultsPurged: false });
 
         // One-time migration (issue #69): V4-era builds seeded default
         // blocklist entries with paths ("www.twitch.tv/*/clip/*",
@@ -1227,6 +1236,7 @@ async function start() {
         }
 
         if (data.debugMode !== undefined) tc.settings.debugMode = data.debugMode;
+        if (data.forceDrmCapture !== undefined) tc.settings.forceDrmCapture = !!data.forceDrmCapture;
 
         const currentDomain = extractRootDomain(window.location.href);
 
@@ -1326,6 +1336,17 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
         if (changes.debugMode) {
             tc.settings.debugMode = !!changes.debugMode.newValue;
             syncPageAudioHook();
+        }
+
+        // Dangerous debug override: bypass only the DRM/EME routing guard.
+        // Cross-origin safety remains enforced because routing tainted media
+        // through WebAudio is silent by specification in every engine.
+        if (changes.forceDrmCapture) {
+            tc.settings.forceDrmCapture = !!changes.forceDrmCapture.newValue;
+            invalidateBoostLimitCache();
+            lastSyncedPageAudioState = null;
+            syncPageAudioHook();
+            applyState();
         }
     });
 }

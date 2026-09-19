@@ -17,6 +17,7 @@
         mono: false,
         muted: false,
         debugMode: false,
+        forceDrmCapture: false,
         extensionActive: true
     };
     function effectiveGain() {
@@ -732,6 +733,11 @@
     // DRM flags appear — a one-way trip to permanent silence (on engines that
     // silence protected audio; see EME_AUDIO_SILENCED_WHEN_ROUTED).
     function isLikelyDrmMedia(element) {
+        // Debug override: deliberately bypass every DRM/EME routing guard and
+        // attempt MediaElementAudioSource capture even when it may break the
+        // site's protected-media pipeline. Cross-origin checks remain separate.
+        if (state.forceDrmCapture) return false;
+
         // ROUTING gate. Returns true when the element must NOT be captured
         // into WebAudio right now:
         //  * Chromium (EME_AUDIO_SILENCED_WHEN_ROUTED): any per-element DRM
@@ -803,7 +809,7 @@
             // isLikelyDrmMedia) — a probed-but-clear page (Plex) must not
             // show a restriction note (issue #70). On Gecko, DRM audio is
             // routable (bug 1331763), so the verdict never restricts.
-            if (EME_AUDIO_SILENCED_WHEN_ROUTED && elementDrmEvidence(element)) {
+            if (!state.forceDrmCapture && EME_AUDIO_SILENCED_WHEN_ROUTED && elementDrmEvidence(element)) {
                 restriction = "restricted";
                 break; // most severe; no need to keep scanning
             }
@@ -1485,7 +1491,7 @@
             element.addEventListener("timeupdate", () => {
                 if (mediaRoutes.has(element)) return;      // already routed
                 if (!isPendingEmeSuspect(element)) return; // cheap probe+src gate
-                if (elementDrmEvidence(element)) return;   // restricted; events/audit own it
+                if (!state.forceDrmCapture && elementDrmEvidence(element)) return;
                 applyMediaElementState(element);
             }, { passive: true });
             // Keep the aggregate page restriction fresh as this element's
@@ -1829,6 +1835,7 @@
         state.mono = Boolean(data.mono);
         state.muted = Boolean(data.muted);
         state.debugMode = Boolean(data.debugMode);
+        state.forceDrmCapture = Boolean(data.forceDrmCapture);
 
         // Route or unroute depending on whether audio processing is needed.
         if (pageAudioNeedsRoute()) {
@@ -1853,6 +1860,7 @@
         state.dB = 0;
         state.mono = false;
         state.muted = false;
+        state.forceDrmCapture = false;
         state.extensionActive = false;
 
         unrouteDestinationConnections();
