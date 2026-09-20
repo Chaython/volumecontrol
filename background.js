@@ -70,6 +70,8 @@ async function getContentState(tab) {
         return {
             volume: state.volume !== undefined ? normalizeDb(state.volume) : null,
             mono: state.mono !== undefined ? Boolean(state.mono) : null,
+            monoAvailable: state.monoAvailable !== false,
+            monoUnavailableReason: state.monoUnavailableReason || "",
             muted: state.muted !== undefined ? Boolean(state.muted) : null,
             maxDb: state.maxDb !== undefined ? normalizeDb(state.maxDb) : MAX_DB,
             boostLimited: Boolean(state.boostLimited)
@@ -83,6 +85,8 @@ async function getContentState(tab) {
     return {
         volume: volumeResponse && volumeResponse.response !== undefined ? normalizeDb(volumeResponse.response) : null,
         mono: monoResponse && monoResponse.response !== undefined ? Boolean(monoResponse.response) : null,
+        monoAvailable: true,
+        monoUnavailableReason: "",
         muted: muteResponse && muteResponse.response !== undefined ? Boolean(muteResponse.response) : null,
         maxDb: MAX_DB,
         boostLimited: false
@@ -177,7 +181,9 @@ async function handleCommand(command, commandTab) {
             await setVolume(tab, domainState, 0);
             break;
         case "toggle-mono":
-            await setMono(tab, domainState, !currentMono);
+            if (contentState.monoAvailable !== false) {
+                await setMono(tab, domainState, !currentMono);
+            }
             break;
         case "toggle-mute":
             await setMute(tab, domainState, !currentMuted);

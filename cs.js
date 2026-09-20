@@ -94,6 +94,8 @@ if (browserAPI) {
                         response: {
                             volume: Math.min(normalizeDb(tc.vars.dB), limit.maxDb),
                             mono: tc.vars.mono,
+                            monoAvailable: getMonoAvailability(limit).available,
+                            monoUnavailableReason: getMonoAvailability(limit).reason,
                             muted: Boolean(tc.vars.muted),
                             boostLimited: limit.boostLimited,
                             maxDb: limit.maxDb,
@@ -609,12 +611,25 @@ function normalizeDbForCurrentMedia(value) {
     return Math.min(normalized, limit.maxDb);
 }
 
+function getMonoAvailability(limit = getBoostLimitInfo()) {
+    if (tc.settings.debugRouteMode === "native") {
+        return { available: false, reason: "native-route" };
+    }
+    if (limit && limit.boostLimited) {
+        return { available: false, reason: limit.reason || "fallback" };
+    }
+    return { available: true, reason: "" };
+}
+
 function getAudioControlState() {
     enforceBoostLimit({ sync: true });
     const limit = getBoostLimitInfo();
+    const monoAvailability = getMonoAvailability(limit);
     return {
         volume: Math.min(normalizeDb(tc.vars.dB), limit.maxDb),
         mono: tc.vars.mono,
+        monoAvailable: monoAvailability.available,
+        monoUnavailableReason: monoAvailability.reason,
         muted: Boolean(tc.vars.muted),
         boostLimited: limit.boostLimited,
         maxDb: limit.maxDb,

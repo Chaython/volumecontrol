@@ -32,7 +32,8 @@ const cached = {
   muteBtn: null,
   activeTab: null,
   maxDb: MAX_DB,
-  boostLimited: false
+  boostLimited: false,
+  monoAvailable: true
 };
 
 function normalizeControlDb(value) {
@@ -316,6 +317,36 @@ function applyMuteButtonState(muted) {
   }
 }
 
+function applyMonoAvailability(state = {}) {
+  const monoCheckbox = cached.monoCheckbox || document.querySelector("#mono-checkbox");
+  if (!monoCheckbox) return;
+
+  const available = state.monoAvailable !== false;
+  const reason = state.monoUnavailableReason || state.limitationReason || "";
+  cached.monoAvailable = available;
+  monoCheckbox.disabled = !available;
+  monoCheckbox.setAttribute("aria-disabled", String(!available));
+
+  const container = monoCheckbox.closest(".switch-container");
+  if (container) {
+    container.classList.toggle("is-disabled", !available);
+    if (available) {
+      container.title = "Toggle Mono Audio (Alt+Shift+M)";
+    } else {
+      const message = reason === "restricted"
+        ? "Mono unavailable while DRM/restricted media is using fallback audio."
+        : reason === "cross-origin"
+          ? "Mono unavailable while cross-origin media is using fallback audio."
+          : reason === "route-failed"
+            ? "Mono unavailable because the WebAudio route could not be created."
+            : reason === "native-route"
+              ? "Mono unavailable while HTML Media Route Override is Force native volume fallback."
+              : "Mono unavailable while WebAudio processing is unavailable.";
+      container.title = message;
+    }
+  }
+}
+
 function applyAudioControlState(state = {}) {
   const maxDb = Number.isFinite(Number(state.maxDb)) ? normalizeDb(state.maxDb) : MAX_DB;
 
@@ -335,6 +366,8 @@ function applyAudioControlState(state = {}) {
     note.textContent = state.limitation || BOOST_LIMIT_NOTE;
     note.classList.toggle("hidden", !cached.boostLimited);
   }
+
+  applyMonoAvailability(state);
 
   // Keep the mute button in sync with the content script's actual state.
   // This matters when a setVolume response carries a muted flag that was
@@ -462,7 +495,7 @@ async function setVolume(dB, tab, options = {}) {
 
 async function toggleMono(tab) {
   const monoCheckbox = cached.monoCheckbox || document.querySelector("#mono-checkbox");
-  if (tab && monoCheckbox) {
+  if (tab && monoCheckbox && !monoCheckbox.disabled && cached.monoAvailable) {
       tabsSendMessage(tab.id, { command: "setMono", mono: monoCheckbox.checked }).catch(handleError);
       await saveSiteSettings(tab);
   }

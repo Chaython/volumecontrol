@@ -267,6 +267,16 @@ input:checked + .slider:before { transform: translateX(16px); }
     cursor: pointer;
 }
 
+.switch-container.is-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.switch-container.is-disabled .slider,
+.switch-container.is-disabled .label-text {
+    cursor: not-allowed;
+}
+
 .label-text {
     margin-left: 8px;
     font-size: 14px;
