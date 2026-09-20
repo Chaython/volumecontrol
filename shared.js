@@ -28,7 +28,7 @@
         return browserApi && browserApi.runtime ? browserApi.runtime.lastError : null;
     }
 
-    const BRIDGE_VERSION = 1;
+    const BRIDGE_VERSION = 2;
 
     function callApi(method, args = []) {
         return new Promise((resolve, reject) => {

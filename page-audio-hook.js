@@ -5,7 +5,7 @@
     const MEDIA_MANAGED_ATTR = "vcPageAudioManaged";
     const MIN_DB = -32;
     const MAX_DB = 32;
-    const BRIDGE_VERSION = 1;
+    const BRIDGE_VERSION = 2;
     const HEARTBEAT_TIMEOUT_MS = 10000;
     const supportsWeakRef = typeof WeakRef !== "undefined";
 
@@ -18,6 +18,8 @@
         muted: false,
         debugMode: false,
         forceDrmCapture: false,
+        forceCorsCapture: false,
+        debugRouteMode: "auto",
         extensionActive: true
     };
     function effectiveGain() {
@@ -523,6 +525,11 @@
     }
 
     function isLikelyCrossOriginMedia(element) {
+        // Dangerous debug override: attempt WebAudio capture even when the
+        // media URL is cross-origin. Browsers may output silence for tainted
+        // media; this exists only for troubleshooting/compatibility testing.
+        if (state.forceCorsCapture) return false;
+
         const src = getMediaSourceUrl(element);
         if (!src || element.crossOrigin) return false;
 
@@ -1081,7 +1088,10 @@
     }
 
     function mediaNeedsAudioRoute() {
-        return state.extensionActive && state.enabled && (state.muted || state.mono || getGainValue(state.dB) > 1);
+        if (!state.extensionActive || !state.enabled) return false;
+        if (state.debugRouteMode === "native") return false;
+        if (state.debugRouteMode === "webaudio") return true;
+        return state.muted || state.mono || getGainValue(state.dB) > 1;
     }
 
     function pageAudioNeedsRoute() {
@@ -1328,7 +1338,8 @@
                 currentMode: null
             };
             mediaRoutes.set(element, route);
-            wireMediaRoute(route);
+            // The caller restores base/native volume before exposing the route,
+            // avoiding fallback-volume × GainNode transition artifacts.
             log(`media route attached (${route.sourceKind}): ${element.currentSrc || element.src || element.tagName}`);
             return route;
         } catch (e) {
@@ -1374,16 +1385,27 @@
         const audible = isAudibleMediaElement(element);
 
         if (!playing || !audible) {
-            if (existingRoute) disconnectMediaRouteOutput(existingRoute);
+            // Keep an existing WebAudio route associated with a reused element.
+            // The context can still suspend while idle, but source transitions
+            // no longer restore an unscaled native volume between playlist items.
+            if (existingRoute) {
+                setNativeVolume(element, entry.baseVolume);
+                wireMediaRoute(existingRoute);
+                return;
+            }
 
-            const nativeVolume = existingRoute
-                ? entry.baseVolume
-                : Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)));
-            // Same 250ms write-rate limit as the playing fallback below: while
-            // paused there is no playback guard against a site volume manager
-            // answering every volumechange with its own write, so an
-            // unconditional write here can re-ignite the write war the v6.11
-            // rate limit extinguished for playing elements.
+            // Force WebAudio is deliberately eager: capture while paused so
+            // playback cannot begin for a frame outside the extension gain path.
+            if (state.debugRouteMode === "webaudio" && audible && mediaNeedsAudioRoute()) {
+                const eagerRoute = ensureMediaRoute(element);
+                if (eagerRoute) {
+                    setNativeVolume(element, entry.baseVolume);
+                    wireMediaRoute(eagerRoute);
+                    return;
+                }
+            }
+
+            const nativeVolume = Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)));
             writeFallbackVolume(element, entry, nativeVolume);
             return;
         }
@@ -1504,18 +1526,14 @@
                 applyMediaElementState(element);
             };
             const suspendWhenIdle = () => {
-                if (!isMediaPlaying(element)) {
-                    disconnectMediaRouteOutput(mediaRoutes.get(element));
-                }
+                // Preserve the graph across pauses/source changes. The idle sweep
+                // may suspend the context later, but does not restore full native
+                // volume during a playlist transition.
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
             const applyOnVolumeChange = () => {
                 const currentEntry = getMediaState(element);
                 if (currentEntry.ignoreVolumeEventsUntil > Date.now()) {
-                    // Only swallow the echo of OUR OWN write. If the native
-                    // volume no longer matches what we last set, the page
-                    // changed volume inside our ignore window and that
-                    // change must be processed, not ignored.
                     if (currentEntry.lastNativeVolume === undefined ||
                         currentEntry.lastNativeVolume === readNativeVolume(element)) {
                         return;
@@ -1525,26 +1543,15 @@
                 applyMediaElementState(element);
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
-            const release = () => {
-                releaseMediaRoute(element);
-                // v6.14: a new source (emptied) or a replay (ended/error)
-                // must re-earn its EME decryption proof — the old source's
-                // progress says nothing about the next one.
+            const sourceBoundary = () => {
+                // Source/replay changes re-earn EME proof but keep the same
+                // extension route and gain attached to the reused media element.
                 resetEmePending(element);
-                // Do NOT delete from mediaElements. The element is often reused
-                // for the next video (e.g. YouTube/Twitch auto-next loads the
-                // next source into the SAME <video> element). If we delete here,
-                // suspendMediaContextIfIdle's hasAnyRoute check (which iterates
-                // mediaElements) won't see the kept route, and it will close
-                // mediaAudioContext. Once closed, the route is permanently dead
-                // because createMediaElementSource() can only be called ONCE
-                // per element per context -- the next video would then play
-                // with NO audio because the element's output is piped into a
-                // closed context that can never be revived. Keep the element
-                // tracked here so the context stays alive (suspended, not
-                // closed) and the route can be rewired on replay. Elements
-                // that are actually removed from the DOM are cleaned up in
-                // applyStateToMediaElements().
+                const route = mediaRoutes.get(element);
+                if (route) {
+                    setNativeVolume(element, getMediaState(element).baseVolume);
+                    wireMediaRoute(route);
+                }
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
 
@@ -1552,9 +1559,9 @@
             element.addEventListener("playing", applyOnPlay, { passive: true });
             element.addEventListener("volumechange", applyOnVolumeChange, { passive: true });
             element.addEventListener("pause", suspendWhenIdle, { passive: true });
-            element.addEventListener("ended", release, { passive: true });
-            element.addEventListener("emptied", release, { passive: true });
-            element.addEventListener("error", release, { passive: true });
+            element.addEventListener("ended", sourceBoundary, { passive: true });
+            element.addEventListener("emptied", sourceBoundary, { passive: true });
+            element.addEventListener("error", sourceBoundary, { passive: true });
             entry.listenersInstalled = true;
         }
         applyMediaElementState(element, options);
@@ -1661,6 +1668,18 @@
         });
     }
 
+    function nativeVolumeForBase(element, baseVolume) {
+        const base = Math.max(0, Math.min(1, Number(baseVolume) || 0));
+        if (!state.extensionActive || !state.enabled) return base;
+        if (mediaRoutes.has(element)) return base;
+
+        // Native fallback applies only attenuation/mute. The page still reads
+        // baseVolume from our patched getter, so its own volume is independent
+        // from Volume Control's dB adjustment.
+        const gain = effectiveGain();
+        return Math.max(0, Math.min(1, base * Math.min(gain, 1)));
+    }
+
     function patchMediaVolume() {
         if (!nativeVolumeDescriptor || !nativeVolumeDescriptor.get || !nativeVolumeDescriptor.set) return;
         if (window.HTMLMediaElement.prototype.__volumeControlVolumePatched) return;
@@ -1684,20 +1703,12 @@
 
                     entry.baseVolume = Number.isNaN(n) ? entry.baseVolume : Math.max(0, Math.min(1, n));
 
-                    // Keep the native volume property in sync with baseVolume so that
-                    // when the route is disconnected (e.g., on pause), the element's
-                    // native volume matches what we last reported via the getter.
-                    // Without this, the native volume drifts and can cause a spike
-                    // when playback resumes before the WebAudio route is re-established.
-                    entry.applyingVolume = true;
-                    entry.ignoreVolumeEventsUntil = Date.now() + 100;
-                    try {
-                        nativeVolumeDescriptor.set.call(this, entry.baseVolume);
-                    } catch (e) {
-                        log(`native volume sync failed: ${e && e.message}`);
-                    } finally {
-                        entry.applyingVolume = false;
-                    }
+                    // Apply the extension-adjusted native target immediately.
+                    // The site's requested value remains entry.baseVolume, so a
+                    // playlist item setting video.volume = 1 cannot briefly
+                    // bypass negative dB attenuation.
+                    const nativeTarget = nativeVolumeForBase(this, entry.baseVolume);
+                    setNativeVolume(this, nativeTarget);
 
                     registerMediaElement(this);
                 }
@@ -1719,6 +1730,11 @@
 
         window.HTMLMediaElement.prototype.play = function patchedPlay() {
             registerMediaElement(this);
+            const route = mediaRoutes.get(this);
+            if (route) {
+                wireMediaRoute(route);
+                resumeContext(route.context);
+            }
             return nativePlay.apply(this, arguments);
         };
 
@@ -1836,6 +1852,10 @@
         state.muted = Boolean(data.muted);
         state.debugMode = Boolean(data.debugMode);
         state.forceDrmCapture = Boolean(data.forceDrmCapture);
+        state.forceCorsCapture = Boolean(data.forceCorsCapture);
+        state.debugRouteMode = data.debugRouteMode === "webaudio" || data.debugRouteMode === "native"
+            ? data.debugRouteMode
+            : "auto";
 
         // Route or unroute depending on whether audio processing is needed.
         if (pageAudioNeedsRoute()) {
@@ -1861,6 +1881,8 @@
         state.mono = false;
         state.muted = false;
         state.forceDrmCapture = false;
+        state.forceCorsCapture = false;
+        state.debugRouteMode = "auto";
         state.extensionActive = false;
 
         unrouteDestinationConnections();

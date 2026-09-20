@@ -372,6 +372,8 @@ async function initOptions() {
     const whitelistModeCheckbox = document.getElementById('whitelistMode');
     const debugModeCheckbox = document.getElementById('debugMode');
     const forceDrmCaptureCheckbox = document.getElementById('forceDrmCapture');
+    const forceCorsCaptureCheckbox = document.getElementById('forceCorsCapture');
+    const debugRouteModeSelect = document.getElementById('debugRouteMode');
     const addBtn = document.getElementById('addFqdn');
     const newFqdnInput = document.getElementById('newFqdn');
 
@@ -433,6 +435,26 @@ async function initOptions() {
         forceDrmCaptureCheckbox.checked = !!data.forceDrmCapture;
         forceDrmCaptureCheckbox.addEventListener('change', async (e) => {
             await storageSet({ forceDrmCapture: e.target.checked });
+        });
+    }
+
+    if (forceCorsCaptureCheckbox) {
+        const data = await storageGet({ forceCorsCapture: false });
+        forceCorsCaptureCheckbox.checked = !!data.forceCorsCapture;
+        forceCorsCaptureCheckbox.addEventListener('change', async (e) => {
+            await storageSet({ forceCorsCapture: e.target.checked });
+        });
+    }
+
+    if (debugRouteModeSelect) {
+        const data = await storageGet({ debugRouteMode: 'auto' });
+        const mode = data.debugRouteMode === 'webaudio' || data.debugRouteMode === 'native'
+            ? data.debugRouteMode
+            : 'auto';
+        debugRouteModeSelect.value = mode;
+        debugRouteModeSelect.addEventListener('change', async (e) => {
+            const value = e.target.value;
+            await storageSet({ debugRouteMode: value === 'webaudio' || value === 'native' ? value : 'auto' });
         });
     }
 
@@ -573,6 +595,13 @@ async function initOptions() {
         }
         if (changes.forceDrmCapture && forceDrmCaptureCheckbox) {
             forceDrmCaptureCheckbox.checked = !!changes.forceDrmCapture.newValue;
+        }
+        if (changes.forceCorsCapture && forceCorsCaptureCheckbox) {
+            forceCorsCaptureCheckbox.checked = !!changes.forceCorsCapture.newValue;
+        }
+        if (changes.debugRouteMode && debugRouteModeSelect) {
+            const value = changes.debugRouteMode.newValue;
+            debugRouteModeSelect.value = value === 'webaudio' || value === 'native' ? value : 'auto';
         }
     });
 }

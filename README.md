@@ -155,6 +155,8 @@ The popup/options changes previously labeled 6.15 and the 6.16 build changes are
 - **Safer build failures:** check for Node, the minifier helper, and Terser before replacing existing output. Invalid JavaScript stops packaging instead of producing a broken ZIP. Original source files stay unchanged.
 - **Added build regression checks:** `npm test` builds both browser variants and checks minification, script parsing, regex/template/Unicode behavior, URL and blocklist helpers, source preservation, and failure handling. Test fixtures and build tools are excluded from release packages.
 - **Add dangerous DRM capture override:** Settings now includes a debug-only option that bypasses DRM/EME routing safeguards and attempts WebAudio capture anyway. The UI warns that this may mute audio, stop protected media from loading, or break playback; cross-origin safety checks remain enforced.
+- **Add routing diagnostics:** Settings now also has a debug-only CORS bypass and an HTML-media route override (Automatic / Force WebAudio / Force native fallback). These are intentionally dangerous compatibility tools; CORS-bypassed WebAudio can output silence, and forced native fallback cannot boost or mono-process HTML media.
+- **Fix playlist transition volume spikes:** the page's own media volume is tracked separately from Volume Control's dB gain. Native attenuation is applied immediately when a site rewrites `video.volume`, while existing WebAudio routes remain associated with reused media elements across playlist transitions.
 - **Build setup:** Node.js 18+ and `npm ci` are now required. `build.ps1` runs minification and packaging; `npm test` runs the regression checks separately.
 
 </details>
