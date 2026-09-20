@@ -369,6 +369,18 @@ function makeBoostLimitedResult(reason) {
     };
 }
 
+// Final verdict-layer debug bypass. Routing guards already honor these
+// settings, but restriction information can also arrive from stale fallback
+// flags, the MAIN-world aggregate, or child-frame reports. Filter every
+// source through one helper so the popup/slider cannot remain clamped after
+// the matching dangerous debug override has been enabled.
+function isBoostLimitReasonBypassed(reason) {
+    if (!reason) return false;
+    if (reason === "restricted" && tc.settings.forceDrmCapture) return true;
+    if (reason === "cross-origin" && tc.settings.forceCorsCapture) return true;
+    return false;
+}
+
 function getBoostLimitReason(element) {
     if (!element) return "";
 
@@ -384,9 +396,9 @@ function getBoostLimitReason(element) {
     if (isPageAudioManaged(element)) return crossOrigin ? "cross-origin" : "";
 
     const fallbackReason = element.dataset.vcFallbackReason;
-    if (fallbackReason && !(tc.settings.forceDrmCapture && fallbackReason === "restricted")) return fallbackReason;
+    if (fallbackReason && !isBoostLimitReasonBypassed(fallbackReason)) return fallbackReason;
 
-    if (crossOrigin) return "cross-origin";
+    if (crossOrigin && !isBoostLimitReasonBypassed("cross-origin")) return "cross-origin";
 
     return "";
 }
@@ -436,7 +448,7 @@ function getBoostLimitInfo() {
     // native volume (their cross-origin audio cannot be routed through
     // WebAudio) while the popup advertises a full +32 dB range.
     const hookRestriction = getHookPageRestriction();
-    const effectiveHookRestriction = tc.settings.forceDrmCapture && hookRestriction === "restricted"
+    const effectiveHookRestriction = isBoostLimitReasonBypassed(hookRestriction)
         ? ""
         : hookRestriction;
     if (reasonSeverity(effectiveHookRestriction) > reasonSeverity(result.reason)) {
@@ -448,9 +460,10 @@ function getBoostLimitInfo() {
     // see them, and they report their verdict here (the top frame) so the
     // popup — which queries only the top frame — aggregates the whole tab.
     const frameLimit = getAggregatedFrameLimit();
-    const effectiveFrameReason = frameLimit && tc.settings.forceDrmCapture && frameLimit.reason === "restricted"
+    const rawFrameReason = frameLimit ? frameLimit.reason : "";
+    const effectiveFrameReason = isBoostLimitReasonBypassed(rawFrameReason)
         ? ""
-        : (frameLimit ? frameLimit.reason : "");
+        : rawFrameReason;
     if (effectiveFrameReason && reasonSeverity(effectiveFrameReason) > reasonSeverity(result.reason)) {
         result = makeBoostLimitedResult(effectiveFrameReason);
     }

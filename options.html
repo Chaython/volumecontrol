@@ -80,7 +80,7 @@
             <option value="native">Force native volume fallback</option>
         </select>
         <span class="hint danger-warning">
-            <strong>Warning:</strong> Force WebAudio eagerly captures media elements, including attenuation. Force native disables new MediaElementAudioSource capture, so boost and mono may be unavailable. Reload tabs when switching away from WebAudio because a captured media element cannot be uncaptured.
+            <strong>Warning:</strong> Force WebAudio eagerly captures media elements, including attenuation. It chooses the HTML-media route but does not by itself bypass DRM or CORS; use the separate DRM/CORS debug toggles for those guards. Force native disables new MediaElementAudioSource capture, so boost and mono may be unavailable. Reload tabs when switching away from WebAudio because a captured media element cannot be uncaptured.
         </span>
     </div>
 
