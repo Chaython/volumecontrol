@@ -12,7 +12,7 @@
 
 Volume Control adds a simple per-site volume control to your browser. It can lower volume, boost HTML5 audio and video above the normal browser limit, and optionally play stereo audio as mono. The extension is useful for quiet videos, uneven site volume, embedded players, and pages that do not provide enough audio control on their own.
 
-Settings can be remembered per site, and you can exclude sites where you do not want the extension to run. Volume Control supports HTML5 video and audio only; it does not support Flash.
+Settings can be remembered per site, including volume, mono, mute, and optional per-site debug overrides; you can also exclude sites where you do not want the extension to run. Volume Control supports HTML5 video and audio only; it does not support Flash.
 
 Excluded-site entries match by domain, and entries saved **with a path** (such as the legacy V4-era defaults) are wildcard-matched against the full URL — so `www.twitch.tv/*/clip/*` excludes only the clip pages while the rest of Twitch runs. A one-time v6.13 migration removes the legacy Twitch default entries that older builds left in users' stored storage (path and `www.` normalization had turned them into a block on the whole domain — issue #69), and the popup's Active toggle now removes **every** entry that blocks the current page — not just the exact domain match — with a tooltip explaining what it removed. Since v6.14 the **options page also accepts user-typed paths**, so path-scoped exclusions are a first-class feature (`example.com/videos`, wildcards with `*` = any characters except `/` — see the options-page hint); the legacy purge now also runs at install/update/startup so a hand-added path entry can never be swept by a migration that has not run yet. Since v6.15 the popup **tells you when the current page is blocklisted** — an overlay message (styled like the DRM note) names the matching entry and how to re-enable the site, on every engine — and the options-page blocklist input accepts **Enter** to add an entry, with an inline notice when the typed site/wildcard is already in the list.
 
@@ -138,16 +138,30 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 # Changelog
 
-## Changes since 6.11 (through 6.16)
+## Changes since 6.11 (through 6.21)
 
-These updates improve Firefox media compatibility, restore volume after track changes, add path-based site exclusions, and fix release-build minification. See the [full source comparison](https://github.com/Chaython/volumecontrol/compare/V6.11...1b91cc94f1a27469334ef3b88a7f9e51780f59b3).
+These updates improve Firefox media compatibility, restore volume after track changes, add path-based site exclusions and per-site debug profiles, and harden release-build minification. See the [full source comparison](https://github.com/Chaython/volumecontrol/compare/V6.11...master).
 
 ---
 
 <details open>
-<summary><strong>Versions 6.15–6.16 – Patch Notes</strong></summary>
+<summary><strong>Version 6.21 – Patch Notes</strong></summary>
 
-The popup/options changes previously labeled 6.15 and the 6.16 build changes are included together in the 6.16 commit.
+- **Remember debug options per site:** remembered-site profiles can now store Debug Highlight, Force DRM Audio Capture, Skip CORS Media Guard, and HTML Media Route Override. With **Site debug** disabled, a remembered site continues to inherit the global debug defaults.
+- **Preserve per-site debug profiles:** popup volume/mono/mute saves keep the optional debug object instead of replacing the remembered record.
+- **Minify CSS release assets:** packaged `.css` files are optimized with pinned `clean-css 5.3.3` level-1 optimization, with URL rebasing disabled.
+- **Minify HTML release assets:** packaged `.html` files are minified with pinned `html-minifier-terser 7.2.0` using conservative whitespace handling. Inline JavaScript/CSS minification stays disabled because standalone assets are handled by their dedicated minifiers.
+- **Expand build regression tests:** both browser packages must show smaller JS/CSS/HTML output while the source tree remains byte-for-byte unchanged; tests also verify important popup/options IDs, script references, CSS custom properties, and per-site debug styles survive minification.
+- **Release version:** bump the extension/package version from 6.20 to 6.21.
+
+</details>
+
+---
+
+<details>
+<summary><strong>Versions 6.15–6.20 – Patch Notes</strong></summary>
+
+The 6.15–6.20 line covers exclusion UX, build hardening, debug routing controls, limiter consistency fixes, and mono-availability handling.
 
 - **Fixed broken release builds:** replaced regex-based comment stripping that could corrupt JavaScript and prevent the extension from starting. Terser now removes comments and unnecessary whitespace while preserving names, regex literals, template contents, and UTF-8 text.
 - **Clearer exclusion messages:** the popup identifies the blocklist entry disabling the current page and explains how to re-enable it. Whitelist exclusions explain that only remembered sites are controlled. Exclusion status is read directly from saved settings, so it also works when the content script cannot reply.
@@ -158,7 +172,7 @@ The popup/options changes previously labeled 6.15 and the 6.16 build changes are
 - **Add routing diagnostics:** Settings now also has a debug-only CORS bypass and an HTML-media route override (Automatic / Force WebAudio / Force native fallback). These are intentionally dangerous compatibility tools; CORS-bypassed WebAudio can output silence, and forced native fallback cannot boost or mono-process HTML media.
 - **Fix playlist transition volume spikes:** the page's own media volume is tracked separately from Volume Control's dB gain. Native attenuation is applied immediately when a site rewrites `video.volume`, while existing WebAudio routes remain associated with reused media elements across playlist transitions.
 - **Fix debug override limiter consistency (v6.19):** DRM and CORS debug overrides now apply at the final boost-limit verdict layer too, so stale fallback flags, MAIN-world aggregate restrictions, and iframe reports cannot keep the popup/slider clamped after the matching override is enabled. Force WebAudio remains a routing choice; DRM/CORS bypasses remain independent explicit safety overrides.
-- **Fix debug override limiter consistency (v6.19):** DRM and CORS debug overrides now apply at the final boost-limit verdict layer too, so stale fallback flags, MAIN-world aggregate restrictions, and iframe reports cannot keep the popup/slider clamped after the matching override is enabled. Force WebAudio remains a routing choice; DRM/CORS bypasses remain independent explicit safety overrides.
+- **Disable unavailable mono controls (v6.20):** the popup now disables and visually de-emphasizes Mono whenever the active route cannot provide WebAudio channel processing, including restricted/cross-origin fallback and forced-native debug routing.
 - **Build setup:** Node.js 18+ and `npm ci` are now required. `build.ps1` runs minification and packaging; `npm test` runs the regression checks separately.
 
 </details>
@@ -432,13 +446,20 @@ This is the minimum possible file count given the WebExtension API's security co
 
 ## Build packages
 
+Install the pinned build tools and run the regression suite before packaging:
+
+```powershell
+npm ci
+npm test
+```
+
 Create Firefox and Chrome zip packages:
 
 ```powershell
 .\scripts\build.ps1
 ```
 
-The script writes clean packages to `dist/`, using `ico.svg` for Firefox and `chrome.png` for Chrome. The bundled zips exclude repo files and `README.md`.
+The script writes clean packages to `dist/`, using `ico.svg` for Firefox and `chrome.png` for Chrome. Release copies are minified with **Terser 5.51.2** for JavaScript, **clean-css 5.3.3** for CSS, and **html-minifier-terser 7.2.0** for HTML. The source files are never rewritten by the build, and the bundled zips exclude repo files and `README.md`.
 
 ***
 

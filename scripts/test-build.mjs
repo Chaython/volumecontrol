@@ -61,8 +61,29 @@ for (const browser of ['chrome', 'firefox']) {
         }
     });
 
-    test(`${browser}: other assets preserve source bytes and encoding`, () => {
-        for (const name of assets.filter(name => !name.endsWith('.js'))) {
+    test(`${browser}: HTML and CSS are minified without changing source files`, () => {
+        for (const name of assets.filter(name => name.endsWith('.html') || name.endsWith('.css'))) {
+            const source = readFileSync(join(fixtureRoot, name));
+            const packaged = readFileSync(join(packageDir, name));
+            assert.ok(packaged.length < source.length, `${name} should be smaller after minification`);
+            assert.ok(source.equals(readFileSync(join(root, name))), `Build modified source: ${name}`);
+        }
+
+        const popupHtml = readFileSync(join(packageDir, 'popup.html'), 'utf8');
+        const optionsHtml = readFileSync(join(packageDir, 'options.html'), 'utf8');
+        assert.match(popupHtml, /id="volume-slider"/);
+        assert.match(popupHtml, /src="shared\.js"/);
+        assert.match(optionsHtml, /id="debugRouteMode"/);
+        assert.match(optionsHtml, /src="options\.js"/);
+
+        const popupCss = readFileSync(join(packageDir, 'popup.css'), 'utf8');
+        const optionsCss = readFileSync(join(packageDir, 'options.css'), 'utf8');
+        assert.match(popupCss, /--vc-range-steps/);
+        assert.match(optionsCss, /\.site-debug-group/);
+    });
+
+    test(`${browser}: non-code assets preserve source bytes and encoding`, () => {
+        for (const name of assets.filter(name => !/\.(js|html|css)$/.test(name))) {
             assert.ok(readFileSync(join(packageDir, name)).equals(readFileSync(join(root, name))), name);
         }
     });

@@ -95,7 +95,7 @@ function Copy-ExtensionFiles {
     foreach ($file in $rootFiles) {
         $destPath = Join-Path $PackageDir $file.Name
         # Copy bytes directly so Windows PowerShell cannot corrupt UTF-8.
-        # JavaScript is minified separately with Terser's parser.
+        # JavaScript, CSS, and HTML are minified later from the package copy.
         Copy-Item -LiteralPath $file.FullName -Destination $destPath
     }
 
@@ -162,7 +162,7 @@ function Write-Package {
 
     & $NodePath $MinifyScript $packageDir
     if ($LASTEXITCODE -ne 0) {
-        throw "JavaScript minification failed for $Browser; no ZIP was created for this package."
+        throw "Asset minification failed for $Browser; no ZIP was created for this package."
     }
 
     $manifest = New-ManifestVariant -Browser $Browser -IconFile $IconFile
@@ -194,7 +194,7 @@ try {
     # Validate build tools before removing an existing release.
     $nodeCommand = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
     if (-not $nodeCommand) {
-        throw "Node.js is required for minification. Install Node.js and run npm ci in the repository root."
+        throw "Node.js is required for release asset minification. Install Node.js and run npm ci in the repository root."
     }
     $NodePath = $nodeCommand.Source
     $MinifyScript = Join-Path $PSScriptRoot "minify.mjs"
@@ -203,7 +203,7 @@ try {
     }
     & $NodePath $MinifyScript --check
     if ($LASTEXITCODE -ne 0) {
-        throw "Minifier is unavailable. Run npm ci in the repository root before building."
+        throw "Build minifiers are unavailable. Run npm ci in the repository root before building."
     }
 
     Remove-DirectoryInRepo $OutputRoot
