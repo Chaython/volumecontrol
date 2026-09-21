@@ -256,6 +256,18 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
             return false;
         }
 
+        if (message.command === "topUrlChanged") {
+            const tabId = sender && sender.tab && sender.tab.id;
+            const url = typeof message.url === "string" && message.url
+                ? message.url
+                : (sender && sender.tab && sender.tab.url ? sender.tab.url : "");
+            if (Number.isInteger(tabId)) {
+                tabsSendMessage(tabId, { command: "profileUrlChanged", url }).catch(() => {});
+            }
+            sendResponse({});
+            return false;
+        }
+
         if (message.command !== "showNativeVolumeFeedback") return false;
 
         showNativeVolumeFeedback(message.tabId, message.dB, message.muted)
@@ -265,5 +277,16 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
                 sendResponse({});
             });
         return true;
+    });
+}
+
+
+if (browserApi && browserApi.tabs && browserApi.tabs.onUpdated) {
+    browserApi.tabs.onUpdated.addListener((tabId, changeInfo) => {
+        if (!changeInfo || !changeInfo.url) return;
+        tabsSendMessage(tabId, {
+            command: "profileUrlChanged",
+            url: changeInfo.url
+        }).catch(() => {});
     });
 }

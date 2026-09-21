@@ -23,6 +23,7 @@ const {
 } = globalThis.VolumeControlShared;
 const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
 const WHEEL_STEP_DB = 1;  // volume change per wheel notch (matches hotkey step)
+let siteSettingsSaveChain = Promise.resolve();
 const cached = {
   slider: null,
   volumeText: null,
@@ -415,7 +416,7 @@ async function pollAudioControlState(tab) {
     return state;
 }
 
-async function saveSiteSettings(tab) {
+async function saveSiteSettingsNow(tab) {
     try {
         const rememberCheckbox = document.getElementById("remember-checkbox");
         if (!rememberCheckbox || !rememberCheckbox.checked || !tab || !tab.url) return;
@@ -456,7 +457,13 @@ async function saveSiteSettings(tab) {
     } catch (e) {
         handleError(e);
     }
-} 
+}
+
+function saveSiteSettings(tab) {
+    const run = () => saveSiteSettingsNow(tab);
+    siteSettingsSaveChain = siteSettingsSaveChain.then(run, run);
+    return siteSettingsSaveChain;
+}
 
 async function setVolume(dB, tab, options = {}) {
   let normalizedDb = setDisplayedVolume(dB);

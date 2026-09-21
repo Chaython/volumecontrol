@@ -27,6 +27,8 @@ const BOOST_LIMIT_NOTES = {
 };
 let pageBridgeResyncInterval = null;
 let controlProfileReady = false;
+let profileControlUrl = "";
+let startGeneration = 0;
 
 const tc = {
   settings: {
@@ -60,6 +62,13 @@ function log(msg, level = 4) {
 
 if (browserAPI) {
     browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+        if (!msg) return;
+        if (msg.command === "profileUrlChanged") {
+            if (typeof msg.url === "string" && msg.url) profileControlUrl = msg.url;
+            start();
+            sendResponse({});
+            return;
+        }
         if (tc.vars.isBlocked) return;
         switch (msg.command) {
             case "checkExclusion":
@@ -1260,6 +1269,7 @@ function extractRootDomain(url) {
 
 async function resolveControlUrl() {
     if (isTopFrame()) return window.location.href;
+    if (profileControlUrl) return profileControlUrl;
 
     try {
         const response = await runtimeSendMessage({ command: "getTopTabUrl" });
@@ -1327,9 +1337,11 @@ function applyEffectiveDebugSettings(data, controlUrl) {
 async function start() {
     if (!browserAPI) return;
 
+    const generation = ++startGeneration;
     controlProfileReady = false;
     try {
         const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false, forceDrmCapture: false, forceCorsCapture: false, debugRouteMode: "auto", legacyTwitchDefaultsPurged: false });
+        if (generation !== startGeneration) return;
 
         // One-time migration (issue #69): V4-era builds seeded default
         // blocklist entries with paths ("www.twitch.tv/*/clip/*",
@@ -1349,7 +1361,10 @@ async function start() {
             }
         }
 
+        if (generation !== startGeneration) return;
         const controlUrl = await resolveControlUrl();
+        if (generation !== startGeneration) return;
+        if (!isTopFrame() && controlUrl) profileControlUrl = controlUrl;
         const currentDomain = extractRootDomain(controlUrl);
         const siteSettingsKey = applyEffectiveDebugSettings(data, controlUrl);
 
@@ -1414,6 +1429,15 @@ window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const data = event.data;
     if (!data || data.source !== PAGE_BRIDGE_TARGET || data.target !== PAGE_BRIDGE_SOURCE) return;
+
+    if (data.command === "locationChanged") {
+        if (isTopFrame()) {
+            profileControlUrl = typeof data.href === "string" && data.href ? data.href : window.location.href;
+            start();
+            runtimeSendMessage({ command: "topUrlChanged", url: profileControlUrl }).catch(() => {});
+        }
+        return;
+    }
 
     // The hook's aggregate page restriction (covers detached/shadow-DOM media
     // the document scan cannot see) just appeared or cleared. Drop our cached

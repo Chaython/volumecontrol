@@ -97,7 +97,10 @@ for (const browser of ['chrome', 'firefox']) {
         const shared = context.VolumeControlShared;
         assert.equal(shared.normalizeDomainInput('https://www.example.com/path'), 'example.com');
         assert.equal(shared.normalizeBlocklistEntryInput('https://www.example.com/videos/*'), 'example.com/videos/*');
+        assert.equal(shared.normalizeBlocklistEntryInput('https://EXAMPLE.com/Case/Path/?x=1#top'), 'example.com/Case/Path');
         assert.equal(shared.isUrlBlockedByEntry('https://example.com/videos/one', 'example.com/videos/*'), true);
+        assert.equal(shared.isUrlBlockedByEntry('https://example.com/videos/one', 'example.com/videos'), true);
+        assert.equal(shared.isUrlBlockedByEntry('https://example.com/Videos/one', 'example.com/videos'), false);
         assert.equal(shared.isUrlBlockedByEntry('https://example.com/', 'example.com/videos/*'), false);
 
         assert.equal(
@@ -108,6 +111,7 @@ for (const browser of ['chrome', 'firefox']) {
 
         const remembered = {
             'example.com': { volume: -2 },
+            'sub.example.com': { volume: -1 },
             'example.com/videos': { volume: 3 },
             'example.com/videos/special': { volume: 6 },
             'example.com/*/season/*': { volume: 9 },
@@ -119,6 +123,10 @@ for (const browser of ['chrome', 'firefox']) {
         assert.equal(
             shared.getSiteSettingsKey(remembered, 'https://sub.example.com/videos/other'),
             'example.com/videos'
+        );
+        assert.equal(
+            shared.getSiteSettingsKey(remembered, 'https://sub.example.com/unmatched'),
+            'sub.example.com'
         );
         assert.equal(
             shared.getSiteSettingsKey(remembered, 'https://example.com/show/season/1'),
@@ -141,12 +149,27 @@ test('background hotkeys preserve remembered debug/profile fields', () => {
     assert.match(source, /message\.command === "getTopTabUrl"/);
 });
 
-test('content scripts resolve iframe profiles from the top tab URL', () => {
+test('content scripts resolve iframe profiles from the top tab URL and refresh on SPA navigation', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
     assert.match(source, /async function resolveControlUrl\(\)/);
     assert.match(source, /runtimeSendMessage\(\{ command: "getTopTabUrl" \}\)/);
+    assert.match(source, /msg\.command === "profileUrlChanged"/);
+    assert.match(source, /let startGeneration = 0/);
+    assert.match(source, /generation !== startGeneration/);
+    assert.match(source, /command: "topUrlChanged"/);
     assert.match(source, /getSiteSettingsKey\(data\.siteSettings \|\| \{\}, controlUrl\)/);
     assert.match(source, /isUrlBlockedByEntries\(controlUrl, data\.fqdns \|\| \[\]\)/);
+});
+
+test('page hook captures MediaStream/srcObject call audio and watches SPA history', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(source, /function patchMediaSrcObject\(\)/);
+    assert.match(source, /createMediaStreamSource\(stream\)/);
+    assert.match(source, /streamBacked/);
+    assert.match(source, /immediateFallback: true/);
+    assert.match(source, /function patchSpaNavigation\(\)/);
+    assert.match(source, /"pushState", "replaceState"/);
+    assert.match(source, /postToContentScript\("locationChanged"/);
 });
 
 test('build refuses to delete or use the repository root as output', () => {

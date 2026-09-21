@@ -267,16 +267,22 @@
     }
 
     function splitBlocklistEntry(entry) {
-        let raw = String(entry == null ? "" : entry).trim().toLowerCase();
+        let raw = String(entry == null ? "" : entry).trim();
         if (!raw) return null;
-        // Keep wildcard/path entries parseable without requiring URL(), since
-        // "*" is valid in a saved blocklist pattern but not a normal URL.
-        raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/, ""); // tolerate stored URLs
+        // Preserve path case: URL paths can be case-sensitive. Only the host is
+        // canonicalized to lower case.
+        raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/i, ""); // tolerate stored URLs
+        const suffix = raw.search(/[?#]/);
+        if (suffix !== -1) raw = raw.slice(0, suffix);
+
         const slash = raw.indexOf('/');
-        const domainPart = slash === -1 ? raw : raw.slice(0, slash);
-        const pathPart = slash === -1 ? "" : raw.slice(slash);
+        let domainPart = slash === -1 ? raw : raw.slice(0, slash);
+        let pathPart = slash === -1 ? "" : raw.slice(slash);
+        domainPart = domainPart.split(':')[0].toLowerCase().replace(/^www\./, '');
+        while (pathPart.length > 1 && pathPart.endsWith('/')) pathPart = pathPart.slice(0, -1);
+        if (pathPart === '/') pathPart = "";
         if (!domainPart) return null;
-        return { domain: domainPart.replace(/^www\./, ''), path: pathPart };
+        return { domain: domainPart, path: pathPart };
     }
 
     // Normalize user-typed BLOCKLIST input for storage (v6.14). Unlike
@@ -292,12 +298,15 @@
     // sites request "/clips", not "/clips/"), so it is trimmed; a lone "/"
     // degrades to the bare-domain entry.
     function normalizeBlocklistEntryInput(value) {
-        let raw = String(value == null ? "" : value).trim().toLowerCase();
+        let raw = String(value == null ? "" : value).trim();
         if (!raw) return "";
-        raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/, ""); // strip a leading protocol
+        raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/i, ""); // strip a leading protocol
+        const suffix = raw.search(/[?#]/);
+        if (suffix !== -1) raw = raw.slice(0, suffix);
+
         const slash = raw.indexOf('/');
         let domain = slash === -1 ? raw : raw.slice(0, slash);
-        domain = domain.split(':')[0]; // strip a port
+        domain = domain.split(':')[0].toLowerCase(); // host is case-insensitive; strip a port
         if (!domain) return "";
         domain = domain.replace(/^www\./, '');
         let path = slash === -1 ? "" : raw.slice(slash);
@@ -323,6 +332,10 @@
         if (!parsed || !/^https?:$/.test(parsed.protocol)) return false;
         const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
         if (!(host === parts.domain || host.endsWith(`.${parts.domain}`))) return false;
+        if (!parts.path.includes("*")) {
+            return parsed.pathname === parts.path || parsed.pathname.startsWith(parts.path + "/");
+        }
+
         const pattern = "^" + parts.path.split("*").map(escapeRegExp).join("[^/]*") + "$";
         try {
             return new RegExp(pattern).test(parsed.pathname);
@@ -358,6 +371,41 @@
         return { list: filtered, changed: filtered.length !== fqdns.length };
     }
 
+    function getSiteSettingsMatchRank(url, savedEntry) {
+        const saved = splitSiteSettingsEntry(savedEntry);
+        if (!saved) return [0, 0, 0, 0, 0, 0];
+
+        let currentDomain = "";
+        try {
+            const parsed = new URL(String(url));
+            currentDomain = parsed.hostname.toLowerCase().replace(/^www\./, "");
+        } catch (e) {
+            const normalized = normalizeSiteSettingsEntryInput(url);
+            const slash = normalized.indexOf("/");
+            currentDomain = slash === -1 ? normalized : normalized.slice(0, slash);
+        }
+
+        const wildcardCount = (saved.path.match(/\*/g) || []).length;
+        const literalPathLength = saved.path.replace(/\*/g, "").length;
+        return [
+            saved.path ? 1 : 0,
+            currentDomain === saved.domain ? 1 : 0,
+            literalPathLength,
+            -wildcardCount,
+            saved.domain.split(".").length,
+            saved.domain.length
+        ];
+    }
+
+    function compareSiteSettingsMatches(url, a, b) {
+        const ar = getSiteSettingsMatchRank(url, a);
+        const br = getSiteSettingsMatchRank(url, b);
+        for (let i = 0; i < ar.length; i++) {
+            if (ar[i] !== br[i]) return br[i] - ar[i];
+        }
+        return String(a).localeCompare(String(b));
+    }
+
     function getSiteSettingsKey(siteSettings, url) {
         if (!siteSettings || !url) return null;
 
@@ -370,11 +418,7 @@
 
         return Object.keys(siteSettings)
             .filter(savedEntry => isUrlRememberedByEntry(url, savedEntry))
-            .sort((a, b) => {
-                const aKey = normalizeSiteSettingsEntryInput(a);
-                const bKey = normalizeSiteSettingsEntryInput(b);
-                return bKey.length - aKey.length;
-            })[0] || null;
+            .sort((a, b) => compareSiteSettingsMatches(url, a, b))[0] || null;
     }
 
     function isRestrictedUrl(url) {

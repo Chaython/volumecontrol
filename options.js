@@ -14,6 +14,20 @@ const {
 let memoryListRenderTimeout = null;
 // debounce for fqdn list updates
 let fqdnListRenderTimeout = null;
+let siteSettingsWriteChain = Promise.resolve();
+
+function updateSiteSettings(mutator) {
+    const run = async () => {
+        const data = await storageGet({ siteSettings: {} });
+        const settings = { ...(data.siteSettings || {}) };
+        const result = await mutator(settings);
+        if (result === false) return false;
+        await storageSet({ siteSettings: settings });
+        return true;
+    };
+    siteSettingsWriteChain = siteSettingsWriteChain.then(run, run);
+    return siteSettingsWriteChain;
+}
 
 function normalizeDebugRouteMode(value) {
     return value === 'webaudio' || value === 'native' ? value : 'auto';
@@ -293,20 +307,24 @@ async function renderMemoryList() {
 
         for (const d of domains) {
             const entry = createMemoryEntry(d, settings[d], async (domain) => {
-                // remove
-                delete settings[domain];
-                await storageSet({ siteSettings: settings });
+                await updateSiteSettings((freshSettings) => {
+                    if (!Object.prototype.hasOwnProperty.call(freshSettings, domain)) return false;
+                    delete freshSettings[domain];
+                    return true;
+                });
             }, async (domain, newVal) => {
-                const next = { ...(settings[domain] || {}) };
-                if (newVal.volume !== undefined) next.volume = normalizeDb(newVal.volume);
-                if (newVal.mono !== undefined) next.mono = !!newVal.mono;
-                if (newVal.muted !== undefined) next.muted = !!newVal.muted;
-                if (Object.prototype.hasOwnProperty.call(newVal, 'debug')) {
-                    if (newVal.debug) next.debug = normalizeSiteDebugOverrides(newVal.debug);
-                    else delete next.debug;
-                }
-                settings[domain] = next;
-                await storageSet({ siteSettings: settings });
+                await updateSiteSettings((freshSettings) => {
+                    const next = { ...(freshSettings[domain] || {}) };
+                    if (newVal.volume !== undefined) next.volume = normalizeDb(newVal.volume);
+                    if (newVal.mono !== undefined) next.mono = !!newVal.mono;
+                    if (newVal.muted !== undefined) next.muted = !!newVal.muted;
+                    if (Object.prototype.hasOwnProperty.call(newVal, 'debug')) {
+                        if (newVal.debug) next.debug = normalizeSiteDebugOverrides(newVal.debug);
+                        else delete next.debug;
+                    }
+                    freshSettings[domain] = next;
+                    return true;
+                });
             }, async (oldDomain, newDomain) => {
                 const nd = normalizeSiteSettingsEntryInput(newDomain);
                 if (!nd) {
@@ -314,13 +332,16 @@ async function renderMemoryList() {
                     return;
                 }
                 if (nd === oldDomain) return;
-                if (settings[nd]) {
-                    alert('A remembered entry for that site/path already exists.');
-                    return;
-                }
-                settings[nd] = settings[oldDomain];
-                delete settings[oldDomain];
-                await storageSet({ siteSettings: settings });
+                await updateSiteSettings((freshSettings) => {
+                    if (freshSettings[nd]) {
+                        alert('A remembered entry for that site/path already exists.');
+                        return false;
+                    }
+                    if (!Object.prototype.hasOwnProperty.call(freshSettings, oldDomain)) return false;
+                    freshSettings[nd] = freshSettings[oldDomain];
+                    delete freshSettings[oldDomain];
+                    return true;
+                });
             }, globalDebugSettings);
 
             container.appendChild(entry);
@@ -611,14 +632,11 @@ async function initOptions() {
 
         const addFqdn = async () => {
             const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false });
-            // Blocklist mode (v6.14): preserve a typed path so entries can be
-            // path-scoped ("twitch.tv/clips", "twitch.tv/*/clip/*" — * matches
-            // any characters except a slash). Whitelist mode adds remembered sites
-            // instead, and siteSettings is domain-keyed, so input there keeps
-            // normalizing to a bare domain. Pathless input canonicalizes the
-            // same way in both modes, so domain-style entries are unchanged.
+            // Blocklist and whitelist/remembered modes both support URL paths.
+            // Blocklist paths use block matching semantics; whitelist mode stores
+            // the path as a remembered profile.
             const v = data.whitelistMode
-                ? normalizeDomainInput(newFqdnInput.value)
+                ? normalizeSiteSettingsEntryInput(newFqdnInput.value)
                 : normalizeBlocklistEntryInput(newFqdnInput.value);
             if (!v) return;
             if (data.whitelistMode) {

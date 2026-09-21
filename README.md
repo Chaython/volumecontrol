@@ -138,13 +138,31 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 # Changelog
 
-## Changes since 6.11 (through 6.22)
+## Changes since 6.11 (through 6.23)
 
 These updates improve Firefox media compatibility, restore volume after track changes, add path-based site exclusions and per-site debug profiles, and harden release-build minification. See the [full source comparison](https://github.com/Chaython/volumecontrol/compare/V6.11...master).
 
 ---
 
 <details open>
+<summary><strong>Version 6.23 – Patch Notes</strong></summary>
+
+- **Capture WebRTC/MediaStream call audio:** media assigned through `HTMLMediaElement.srcObject` is now claimed immediately, including streams whose audio tracks are added later. This covers call paths used by sites such as Snapchat Web that do not use a normal URL-backed media source.
+- **MediaStream WebAudio fallback:** when a browser rejects `createMediaElementSource()` for a stream-backed call element, Volume Control can fall back to `createMediaStreamSource()` and silence the element's native duplicate while the extension graph is active. The fallback intentionally avoids the "element already owns a MediaElementSource" case so page-owned WebAudio graphs are not doubled.
+- **Immediate call/native fallback attenuation:** assigning a WebRTC `srcObject`, starting playback, browser volume resets, and source boundaries reapply attenuation immediately rather than waiting behind the normal anti-write-war throttle.
+- **Fix playlist transition spikes:** browser/source-transition corrections can bypass the 250 ms fallback write throttle, closing the short full-volume window reported during auto-next/replay while preserving throttling for ordinary audits.
+- **Live SPA path profiles:** `pushState`, `replaceState`, `popstate`, hash changes, and browser tab URL updates now trigger remembered/debug/whitelist/blocklist re-resolution in every frame. Path profiles no longer require a full reload on YouTube/Netflix/Plex-style navigation.
+- **Prevent stale async profile state:** content-script profile refreshes use a generation token so an older storage/top-URL lookup cannot finish late and overwrite newer navigation/settings state.
+- **Correct blocklist path semantics:** host names remain case-insensitive, URL paths preserve case, query strings/fragments are discarded, and a non-wildcard directory entry such as `example.com/videos` applies to that path and descendants.
+- **Deterministic remembered-profile precedence:** matching profiles now rank path scope, exact host, literal path specificity, wildcard count, and domain specificity instead of relying only on key-string length.
+- **Reduce remembered-setting lost updates:** options-page edits are serialized and re-read the latest storage before mutation; popup remembered writes are serialized as well.
+- **Release version:** bump the extension from 6.22 to 6.23.
+
+</details>
+
+---
+
+<details>
 <summary><strong>Version 6.22 – Patch Notes</strong></summary>
 
 - **True URL/path remembered profiles:** remembered settings and whitelist entries may now use paths such as `example.com/videos`; a path applies to itself and descendants, and `*` can match within a path segment. Existing domain-only settings remain backward compatible.

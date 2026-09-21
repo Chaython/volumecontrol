@@ -51,6 +51,9 @@
     const nativeVolumeDescriptor = window.HTMLMediaElement && window.HTMLMediaElement.prototype
         ? Object.getOwnPropertyDescriptor(window.HTMLMediaElement.prototype, "volume")
         : null;
+    const nativeSrcObjectDescriptor = window.HTMLMediaElement && window.HTMLMediaElement.prototype
+        ? Object.getOwnPropertyDescriptor(window.HTMLMediaElement.prototype, "srcObject")
+        : null;
 
     function log(msg) {
         if (state.debugMode) console.log(`[VolumeControl/PageAudio] ${msg}`);
@@ -1037,13 +1040,60 @@
         try {
             return {
                 source: markNode(context.createMediaElementSource(element)),
-                kind: "mediaElement"
+                kind: "mediaElement",
+                muteNative: false,
+                stream: null
             };
         } catch (e) {
             log(`createMediaElementSource failed: ${e && e.message}`);
+
+            // WebRTC call audio is commonly exposed through media.srcObject.
+            // Some engines/pages reject MediaElementAudioSourceNode for that
+            // element. If this was NOT the "element already has a source node"
+            // case, capture the MediaStream directly and silence the native
+            // element while our graph is connected so the call is not doubled.
+            const stream = getAudioMediaStream(element);
+            const alreadyOwned = e && (e.name === "InvalidStateError" || /already.*MediaElement/i.test(String(e.message || "")));
+            if (stream && !alreadyOwned && typeof context.createMediaStreamSource === "function") {
+                try {
+                    return {
+                        source: markNode(context.createMediaStreamSource(stream)),
+                        kind: "mediaStream",
+                        muteNative: true,
+                        stream
+                    };
+                } catch (streamError) {
+                    log(`createMediaStreamSource failed: ${streamError && streamError.message}`);
+                }
+            }
         }
 
         return null;
+    }
+
+    function readMediaSrcObject(element) {
+        try {
+            if (nativeSrcObjectDescriptor && nativeSrcObjectDescriptor.get) {
+                return nativeSrcObjectDescriptor.get.call(element);
+            }
+            return element && element.srcObject;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function isMediaStreamLike(value) {
+        return Boolean(value && typeof value.getTracks === "function" && typeof value.getAudioTracks === "function");
+    }
+
+    function getAudioMediaStream(element) {
+        const stream = readMediaSrcObject(element);
+        if (!isMediaStreamLike(stream)) return null;
+        try {
+            return stream.getAudioTracks().length ? stream : null;
+        } catch (e) {
+            return null;
+        }
     }
 
     function readNativeVolume(element) {
@@ -1080,7 +1130,9 @@
                 baseVolume: readNativeVolume(element),
                 applyingVolume: false,
                 ignoreVolumeEventsUntil: 0,
-                listenersInstalled: false
+                listenersInstalled: false,
+                streamBacked: isMediaStreamLike(readMediaSrcObject(element)),
+                streamCleanup: null
             };
             mediaState.set(element, entry);
         }
@@ -1334,6 +1386,8 @@
                 rightGain,
                 merger,
                 sourceKind: routeSource.kind,
+                muteNative: Boolean(routeSource.muteNative),
+                stream: routeSource.stream || null,
                 outputConnected: false,
                 currentMode: null
             };
@@ -1356,9 +1410,9 @@
     // replays) the reset volume would stick for seconds or until the user
     // manually moves the slider (issue #71). Schedule the corrective write
     // for the first allowed moment instead.
-    function writeFallbackVolume(element, entry, wantedVolume) {
+    function writeFallbackVolume(element, entry, wantedVolume, immediate = false) {
         const now = Date.now();
-        if (entry.lastFallbackWriteAt === undefined || now - entry.lastFallbackWriteAt >= 250) {
+        if (immediate || entry.lastFallbackWriteAt === undefined || now - entry.lastFallbackWriteAt >= 250) {
             entry.lastFallbackWriteAt = now;
             entry.pendingFallbackVolume = null;
             setNativeVolume(element, wantedVolume);
@@ -1389,24 +1443,27 @@
             // The context can still suspend while idle, but source transitions
             // no longer restore an unscaled native volume between playlist items.
             if (existingRoute) {
-                setNativeVolume(element, entry.baseVolume);
+                setNativeVolume(element, existingRoute.muteNative ? 0 : entry.baseVolume);
                 wireMediaRoute(existingRoute);
                 return;
             }
 
-            // Force WebAudio is deliberately eager: capture while paused so
-            // playback cannot begin for a frame outside the extension gain path.
-            if (state.debugRouteMode === "webaudio" && audible && mediaNeedsAudioRoute()) {
+            // WebRTC/MediaStream-backed elements are captured eagerly. Remote
+            // call audio can begin without a normal URL-backed play() path, so
+            // waiting for a later media event misses the call entirely on some
+            // sites (Snapchat Web is one example).
+            const eagerRequested = state.debugRouteMode === "webaudio" || options.eagerRoute || entry.streamBacked;
+            if (eagerRequested && audible && mediaNeedsAudioRoute()) {
                 const eagerRoute = ensureMediaRoute(element);
                 if (eagerRoute) {
-                    setNativeVolume(element, entry.baseVolume);
+                    setNativeVolume(element, eagerRoute.muteNative ? 0 : entry.baseVolume);
                     wireMediaRoute(eagerRoute);
                     return;
                 }
             }
 
             const nativeVolume = Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)));
-            writeFallbackVolume(element, entry, nativeVolume);
+            writeFallbackVolume(element, entry, nativeVolume, Boolean(options.immediateFallback));
             return;
         }
 
@@ -1428,7 +1485,7 @@
             // is the only scaling applied. If we wire first, there is a brief
             // moment where effective volume = fallbackScaledVolume × gain, which
             // causes an audible dip-then-snap spike.
-            setNativeVolume(element, entry.baseVolume);
+            setNativeVolume(element, route.muteNative ? 0 : entry.baseVolume);
             wireMediaRoute(route);
             // After wireMediaRoute, output should be reconnected. If the context
             // was suspended (e.g. after pause), resume it so audio flows again.
@@ -1445,7 +1502,7 @@
         // CPU churn). 250ms bounds the war while staying imperceptible. A
         // skipped write schedules a deferred correction instead of dropping
         // (issue #71 — see writeFallbackVolume).
-        writeFallbackVolume(element, entry, fallbackVolume);
+        writeFallbackVolume(element, entry, fallbackVolume, Boolean(options.immediateFallback));
     }
 
     // Returns true if an element that was removed from the DOM can still be
@@ -1523,7 +1580,7 @@
             element.addEventListener("emptied", updatePageMediaRestriction, { passive: true });
             const applyOnPlay = () => {
                 mediaElements.add(element);
-                applyMediaElementState(element);
+                applyMediaElementState(element, { immediateFallback: true, eagerRoute: true });
             };
             const suspendWhenIdle = () => {
                 // Preserve the graph across pauses/source changes. The idle sweep
@@ -1540,7 +1597,7 @@
                     }
                 }
 
-                applyMediaElementState(element);
+                applyMediaElementState(element, { immediateFallback: true, eagerRoute: true });
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
             const sourceBoundary = () => {
@@ -1549,8 +1606,10 @@
                 resetEmePending(element);
                 const route = mediaRoutes.get(element);
                 if (route) {
-                    setNativeVolume(element, getMediaState(element).baseVolume);
+                    setNativeVolume(element, route.muteNative ? 0 : getMediaState(element).baseVolume);
                     wireMediaRoute(route);
+                } else {
+                    applyMediaElementState(element, { immediateFallback: true, eagerRoute: true });
                 }
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
@@ -1724,6 +1783,69 @@
         }
     }
 
+    function resetDirectMediaStreamRoute(element) {
+        const route = mediaRoutes.get(element);
+        if (!route || route.sourceKind !== "mediaStream") return;
+        disconnectMediaRouteOutput(route);
+        safeDisconnect(route.source);
+        mediaRoutes.delete(element);
+    }
+
+    function bindMediaStreamLifecycle(element, stream) {
+        const entry = getMediaState(element);
+        if (entry.streamCleanup) {
+            try { entry.streamCleanup(); } catch (e) {}
+            entry.streamCleanup = null;
+        }
+
+        entry.streamBacked = isMediaStreamLike(stream);
+        if (!entry.streamBacked || typeof stream.addEventListener !== "function") return;
+
+        const refresh = () => {
+            resetDirectMediaStreamRoute(element);
+            entry.streamBacked = isMediaStreamLike(readMediaSrcObject(element));
+            registerMediaElement(element, { immediateFallback: true, eagerRoute: true });
+        };
+        stream.addEventListener("addtrack", refresh);
+        stream.addEventListener("removetrack", refresh);
+        entry.streamCleanup = () => {
+            stream.removeEventListener("addtrack", refresh);
+            stream.removeEventListener("removetrack", refresh);
+        };
+    }
+
+    function patchMediaSrcObject() {
+        if (!nativeSrcObjectDescriptor || !nativeSrcObjectDescriptor.get || !nativeSrcObjectDescriptor.set) return;
+        if (window.HTMLMediaElement.prototype.__volumeControlSrcObjectPatched) return;
+
+        try {
+            Object.defineProperty(window.HTMLMediaElement.prototype, "srcObject", {
+                configurable: true,
+                enumerable: nativeSrcObjectDescriptor.enumerable,
+                get: function patchedSrcObjectGetter() {
+                    return nativeSrcObjectDescriptor.get.call(this);
+                },
+                set: function patchedSrcObjectSetter(value) {
+                    // A direct MediaStream route is tied to the old stream, so
+                    // tear only that route down before replacing srcObject.
+                    resetDirectMediaStreamRoute(this);
+                    nativeSrcObjectDescriptor.set.call(this, value);
+                    bindMediaStreamLifecycle(this, value);
+                    registerMediaElement(this, { immediateFallback: true, eagerRoute: true });
+                    log(`srcObject assigned (${isMediaStreamLike(value) ? "MediaStream" : typeof value})`);
+                }
+            });
+
+            Object.defineProperty(window.HTMLMediaElement.prototype, "__volumeControlSrcObjectPatched", {
+                value: true,
+                configurable: false,
+                enumerable: false
+            });
+        } catch (e) {
+            log(`srcObject patch failed: ${e && e.message}`);
+        }
+    }
+
     function patchMediaPlayback() {
         if (!window.HTMLMediaElement || !nativePlay) return;
         if (window.HTMLMediaElement.prototype.__volumeControlPlayPatched) return;
@@ -1815,6 +1937,37 @@
         }
     }
 
+    function patchSpaNavigation() {
+        if (!window.history || window.history.__volumeControlNavigationPatched) return;
+
+        const notify = () => {
+            Promise.resolve().then(() => {
+                postToContentScript("locationChanged", { href: window.location.href });
+            });
+        };
+
+        for (const method of ["pushState", "replaceState"]) {
+            const original = window.history[method];
+            if (typeof original !== "function") continue;
+            window.history[method] = function patchedHistoryMethod() {
+                const result = original.apply(this, arguments);
+                notify();
+                return result;
+            };
+        }
+
+        window.addEventListener("popstate", notify, { passive: true });
+        window.addEventListener("hashchange", notify, { passive: true });
+
+        try {
+            Object.defineProperty(window.history, "__volumeControlNavigationPatched", {
+                value: true,
+                configurable: false,
+                enumerable: false
+            });
+        } catch (e) {}
+    }
+
     function handleBridgeMessage(event) {
         if (event.source !== window) return;
 
@@ -1899,7 +2052,7 @@
                 // track. effectiveGain() is already 1.0 (extensionActive=false),
                 // so keep the route wired and pass audio through at unity.
                 try {
-                    setNativeVolume(element, getMediaState(element).baseVolume);
+                    setNativeVolume(element, route.muteNative ? 0 : getMediaState(element).baseVolume);
                 } catch (e) {
                     log(`native volume restore failed: ${e && e.message}`);
                 }
@@ -1926,10 +2079,12 @@
 
     patchAudioNodeRouting();
     patchMediaVolume();
+    patchMediaSrcObject();
     patchMediaPlayback();
     patchAudioConstructor();
     patchElementCreation();
     patchEmeApi();
+    patchSpaNavigation();
 
     // Poll for Howler for up to 30 seconds, then stop. Once Howler is detected,
     // clear the poll — routeKnownAudioLibraries will be called from handleBridgeMessage
