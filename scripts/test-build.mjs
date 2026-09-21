@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { runInNewContext, Script } from 'node:vm';
@@ -99,8 +99,77 @@ for (const browser of ['chrome', 'firefox']) {
         assert.equal(shared.normalizeBlocklistEntryInput('https://www.example.com/videos/*'), 'example.com/videos/*');
         assert.equal(shared.isUrlBlockedByEntry('https://example.com/videos/one', 'example.com/videos/*'), true);
         assert.equal(shared.isUrlBlockedByEntry('https://example.com/', 'example.com/videos/*'), false);
+
+        assert.equal(
+            shared.normalizeSiteSettingsEntryInput('https://www.Example.com/Videos/?view=grid#top'),
+            'example.com/Videos'
+        );
+        assert.equal(shared.extractRootDomain('file:///C:/Music/song.mp3'), 'file');
+
+        const remembered = {
+            'example.com': { volume: -2 },
+            'example.com/videos': { volume: 3 },
+            'example.com/videos/special': { volume: 6 },
+            'example.com/*/season/*': { volume: 9 },
+        };
+        assert.equal(
+            shared.getSiteSettingsKey(remembered, 'https://example.com/videos/special/episode-1'),
+            'example.com/videos/special'
+        );
+        assert.equal(
+            shared.getSiteSettingsKey(remembered, 'https://sub.example.com/videos/other'),
+            'example.com/videos'
+        );
+        assert.equal(
+            shared.getSiteSettingsKey(remembered, 'https://example.com/show/season/1'),
+            'example.com/*/season/*'
+        );
+        assert.equal(
+            shared.getSiteSettingsKey(remembered, 'https://example.com/unmatched'),
+            'example.com'
+        );
+        assert.equal(
+            shared.getSiteSettingsKey({ 'Local File': { volume: 1 } }, 'file:///C:/Music/song.mp3'),
+            'Local File'
+        );
     });
 }
+
+test('background hotkeys preserve remembered debug/profile fields', () => {
+    const source = readFileSync(join(root, 'background.js'), 'utf8');
+    assert.match(source, /\.\.\.\(current \|\| \{\}\)/);
+    assert.match(source, /message\.command === "getTopTabUrl"/);
+});
+
+test('content scripts resolve iframe profiles from the top tab URL', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(source, /async function resolveControlUrl\(\)/);
+    assert.match(source, /runtimeSendMessage\(\{ command: "getTopTabUrl" \}\)/);
+    assert.match(source, /getSiteSettingsKey\(data\.siteSettings \|\| \{\}, controlUrl\)/);
+    assert.match(source, /isUrlBlockedByEntries\(controlUrl, data\.fqdns \|\| \[\]\)/);
+});
+
+test('build refuses to delete or use the repository root as output', () => {
+    const manifestPath = join(fixtureRoot, 'manifest.json');
+    const before = readFileSync(manifestPath);
+    const result = runBuild('-OutputDir', '.');
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout + result.stderr, /repository root as build output/i);
+    assert.ok(existsSync(manifestPath));
+    assert.ok(readFileSync(manifestPath).equals(before));
+});
+
+test('build rejects sibling paths that only share the repository name prefix', () => {
+    const siblingName = basename(fixtureRoot) + '-sibling-output';
+    const siblingPath = join(dirname(fixtureRoot), siblingName);
+    rmSync(siblingPath, { recursive: true, force: true });
+    const result = runBuild('-OutputDir', join('..', siblingName));
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout + result.stderr, /outside repo/i);
+    assert.equal(existsSync(siblingPath), false);
+});
 
 test('invalid JavaScript fails the build before producing a ZIP', () => {
     const invalidFile = join(fixtureRoot, 'broken.js');

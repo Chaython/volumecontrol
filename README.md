@@ -12,7 +12,7 @@
 
 Volume Control adds a simple per-site volume control to your browser. It can lower volume, boost HTML5 audio and video above the normal browser limit, and optionally play stereo audio as mono. The extension is useful for quiet videos, uneven site volume, embedded players, and pages that do not provide enough audio control on their own.
 
-Settings can be remembered per site, including volume, mono, mute, and optional per-site debug overrides; you can also exclude sites where you do not want the extension to run. Volume Control supports HTML5 video and audio only; it does not support Flash.
+Settings can be remembered per site or URL path, including volume, mono, mute, and optional debug overrides; you can also exclude sites where you do not want the extension to run. Volume Control supports HTML5 video and audio only; it does not support Flash.
 
 Excluded-site entries match by domain, and entries saved **with a path** (such as the legacy V4-era defaults) are wildcard-matched against the full URL — so `www.twitch.tv/*/clip/*` excludes only the clip pages while the rest of Twitch runs. A one-time v6.13 migration removes the legacy Twitch default entries that older builds left in users' stored storage (path and `www.` normalization had turned them into a block on the whole domain — issue #69), and the popup's Active toggle now removes **every** entry that blocks the current page — not just the exact domain match — with a tooltip explaining what it removed. Since v6.14 the **options page also accepts user-typed paths**, so path-scoped exclusions are a first-class feature (`example.com/videos`, wildcards with `*` = any characters except `/` — see the options-page hint); the legacy purge now also runs at install/update/startup so a hand-added path entry can never be swept by a migration that has not run yet. Since v6.15 the popup **tells you when the current page is blocklisted** — an overlay message (styled like the DRM note) names the matching entry and how to re-enable the site, on every engine — and the options-page blocklist input accepts **Enter** to add an entry, with an inline notice when the typed site/wildcard is already in the list.
 
@@ -138,13 +138,29 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 # Changelog
 
-## Changes since 6.11 (through 6.21)
+## Changes since 6.11 (through 6.22)
 
 These updates improve Firefox media compatibility, restore volume after track changes, add path-based site exclusions and per-site debug profiles, and harden release-build minification. See the [full source comparison](https://github.com/Chaython/volumecontrol/compare/V6.11...master).
 
 ---
 
 <details open>
+<summary><strong>Version 6.22 – Patch Notes</strong></summary>
+
+- **True URL/path remembered profiles:** remembered settings and whitelist entries may now use paths such as `example.com/videos`; a path applies to itself and descendants, and `*` can match within a path segment. Existing domain-only settings remain backward compatible.
+- **Embedded-player profile consistency:** content scripts in cross-origin iframes now resolve remembered volume, mono, mute, whitelist state, and debug overrides against the top-level tab URL via the background service. CDN/player frames no longer silently use a different profile from the page the user remembered.
+- **Preserve per-site debug settings from hotkeys:** keyboard volume/mono/mute updates merge into the current remembered record instead of replacing it, so the nested per-site debug profile survives hotkey use.
+- **Fix local-file memory:** all contexts now use the canonical `file` key, while still recognizing the legacy `Local File` key.
+- **Harden release output deletion:** `build.ps1` explicitly rejects the repository root and sibling paths that merely share the repository-name prefix, preventing an unsafe `-OutputDir .` from recursively deleting the checkout.
+- **Add CI:** Windows GitHub Actions now runs `npm ci`, the regression suite, a full Firefox/Chrome package build, and uploads the generated ZIPs on pushes, pull requests, and manual runs.
+- **Expand regression coverage:** tests now cover URL/path profile precedence, wildcard matching, local-file compatibility, iframe top-URL inheritance, hotkey profile preservation, and dangerous build-output paths.
+- **Release version:** bump the extension from 6.21 to 6.22.
+
+</details>
+
+---
+
+<details>
 <summary><strong>Version 6.21 – Patch Notes</strong></summary>
 
 - **Remember debug options per site:** remembered-site profiles can now store Debug Highlight, Force DRM Audio Capture, Skip CORS Media Guard, and HTML Media Route Override. With **Site debug** disabled, a remembered site continues to inherit the global debug defaults.
@@ -152,7 +168,7 @@ These updates improve Firefox media compatibility, restore volume after track ch
 - **Minify CSS release assets:** packaged `.css` files are optimized with pinned `clean-css 5.3.3` level-1 optimization, with URL rebasing disabled.
 - **Minify HTML release assets:** packaged `.html` files are minified with pinned `html-minifier-terser 7.2.0` using conservative whitespace handling. Inline JavaScript/CSS minification stays disabled because standalone assets are handled by their dedicated minifiers.
 - **Expand build regression tests:** both browser packages must show smaller JS/CSS/HTML output while the source tree remains byte-for-byte unchanged; tests also verify important popup/options IDs, script references, CSS custom properties, and per-site debug styles survive minification.
-- **Release version:** bump the extension/package version from 6.20 to 6.21.
+- **Release version:** bump the extension from 6.20 to 6.21.
 
 </details>
 
@@ -459,7 +475,7 @@ Create Firefox and Chrome zip packages:
 .\scripts\build.ps1
 ```
 
-The script writes clean packages to `dist/`, using `ico.svg` for Firefox and `chrome.png` for Chrome. Release copies are minified with **Terser 5.51.2** for JavaScript, **clean-css 5.3.3** for CSS, and **html-minifier-terser 7.2.0** for HTML. The source files are never rewritten by the build, and the bundled zips exclude repo files and `README.md`.
+The script writes clean packages to `dist/`, using `ico.svg` for Firefox and `chrome.png` for Chrome. Release copies are minified with **Terser 5.51.2** for JavaScript, **clean-css 5.3.3** for CSS, and **html-minifier-terser 7.2.0** for HTML. The source files are never rewritten by the build, and the bundled zips exclude repo files and `README.md`. `.github/workflows/ci.yml` runs the same regression/build path on Windows for pushes and pull requests and publishes the ZIPs as workflow artifacts.
 
 ***
 

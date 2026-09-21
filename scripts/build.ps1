@@ -12,7 +12,16 @@ function Assert-InRepo {
     param([string]$Path)
 
     $fullPath = [System.IO.Path]::GetFullPath($Path)
-    if (-not $fullPath.StartsWith($RootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $comparison = [System.StringComparison]::OrdinalIgnoreCase
+    $rootWithSeparator = $RootPath.TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+
+    if ($fullPath.Equals($RootPath, $comparison)) {
+        throw "Refusing to use the repository root as build output: $fullPath"
+    }
+    if (-not $fullPath.StartsWith($rootWithSeparator, $comparison)) {
         throw "Refusing to operate outside repo: $fullPath"
     }
     return $fullPath

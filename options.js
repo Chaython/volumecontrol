@@ -2,6 +2,7 @@ const {
     browserApi,
     normalizeDb,
     normalizeDomainInput,
+    normalizeSiteSettingsEntryInput,
     normalizeBlocklistEntryInput,
     formatDb,
     storageGet,
@@ -40,7 +41,7 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename, globa
 
     // Commit rename on blur or Enter
     const commitRename = async () => {
-        const newName = normalizeDomainInput(info.value);
+        const newName = normalizeSiteSettingsEntryInput(info.value);
         if (!newName) {
             alert('Site cannot be empty.');
             info.value = domain;
@@ -307,14 +308,14 @@ async function renderMemoryList() {
                 settings[domain] = next;
                 await storageSet({ siteSettings: settings });
             }, async (oldDomain, newDomain) => {
-                const nd = normalizeDomainInput(newDomain);
+                const nd = normalizeSiteSettingsEntryInput(newDomain);
                 if (!nd) {
                     alert('Site cannot be empty.');
                     return;
                 }
                 if (nd === oldDomain) return;
                 if (settings[nd]) {
-                    alert('A remembered entry for that site already exists.');
+                    alert('A remembered entry for that site/path already exists.');
                     return;
                 }
                 settings[nd] = settings[oldDomain];
@@ -664,12 +665,12 @@ async function initOptions() {
     const newRememberedInput = document.getElementById('newRememberedSite');
     if (addRememberedBtn && newRememberedInput) {
         addRememberedBtn.addEventListener('click', async () => {
-            const v = normalizeDomainInput(newRememberedInput.value);
+            const v = normalizeSiteSettingsEntryInput(newRememberedInput.value);
             if (!v) return;
             const data = await storageGet({ siteSettings: {} });
             const settings = data.siteSettings || {};
             if (settings[v]) {
-                alert('A remembered entry for that site already exists.');
+                alert('A remembered entry for that site/path already exists.');
                 return;
             }
             settings[v] = { volume: 0, mono: false };

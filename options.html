@@ -33,10 +33,10 @@
 
     <h3>Remembered Settings</h3>
     <div class="hint remembered-hint">
-        Manage saved volume, mono, mute, and optional per-site debug overrides. Sites without a debug override inherit the global debug defaults below.
+        Manage saved volume, mono, mute, and optional debug overrides per site or URL path. A path such as <em>example.com/videos</em> applies to that path and its descendants; <em>*</em> can match within a path segment. Existing domain-only entries still apply to the whole site. Entries without a debug override inherit the global debug defaults below.
     </div>
     <div class="input-group">
-        <input type="text" id="newRememberedSite" placeholder="example.com">
+        <input type="text" id="newRememberedSite" placeholder="example.com or example.com/videos">
         <button id="addRemembered">Add</button>
     </div>
     <div id="memoryList" class="list-container">

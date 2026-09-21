@@ -39,12 +39,9 @@ async function getActiveTab(commandTab) {
 async function getDomainState(tab) {
     if (!tab || !tab.url || isRestrictedUrl(tab.url)) return null;
 
-    const domain = extractRootDomain(tab.url);
-    if (!domain) return null;
-
     const data = await storageGet({ fqdns: [], whitelistMode: false, siteSettings: {} });
     const siteSettings = data.siteSettings || {};
-    const settingsKey = getSiteSettingsKey(siteSettings, domain);
+    const settingsKey = getSiteSettingsKey(siteSettings, tab.url);
     // Path-aware blocklist matching (issue #69): legacy path entries like
     // "www.twitch.tv/*/clip/*" scope to their path instead of blocking the
     // whole domain.
@@ -105,6 +102,7 @@ async function saveRememberedSettings(domainState, updates) {
     const siteSettings = (fresh && fresh.siteSettings) || domainState.siteSettings || {};
     const current = siteSettings[domainState.settingsKey] || { volume: 0, mono: false, muted: false };
     siteSettings[domainState.settingsKey] = {
+        ...(current || {}),
         volume: updates.volume !== undefined ? normalizeDb(updates.volume) : normalizeDb(current.volume),
         mono: updates.mono !== undefined ? Boolean(updates.mono) : Boolean(current.mono),
         muted: updates.muted !== undefined ? Boolean(updates.muted) : Boolean(current.muted)
@@ -248,7 +246,17 @@ purgeLegacyDefaultsOnce(); // MV3 worker wake (e.g. after an update) before any 
 
 if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
     browserApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (!message || message.command !== "showNativeVolumeFeedback") return false;
+        if (!message) return false;
+
+        // Content scripts in cross-origin iframes cannot read window.top.location.
+        // sender.tab.url is the authoritative top-level tab URL, so every frame
+        // resolves whitelist/memory/debug state against the same user-visible page.
+        if (message.command === "getTopTabUrl") {
+            sendResponse({ url: sender && sender.tab && sender.tab.url ? sender.tab.url : "" });
+            return false;
+        }
+
+        if (message.command !== "showNativeVolumeFeedback") return false;
 
         showNativeVolumeFeedback(message.tabId, message.dB, message.muted)
             .then(() => sendResponse({}))

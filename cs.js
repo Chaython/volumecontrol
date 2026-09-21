@@ -5,6 +5,7 @@ const {
     getGainValue,
     storageGet,
     storageSet,
+    runtimeSendMessage,
     domainMatchesSaved,
     isUrlBlockedByEntries,
     purgeLegacyDefaultBlocklist,
@@ -25,6 +26,7 @@ const BOOST_LIMIT_NOTES = {
     "fallback": BOOST_LIMIT_NOTE
 };
 let pageBridgeResyncInterval = null;
+let controlProfileReady = false;
 
 const tc = {
   settings: {
@@ -540,7 +542,7 @@ window.addEventListener("message", handleFrameLimitReport);
 let lastPostedFrameReport = { reason: null, at: 0 };
 function reportFrameBoostLimit() {
     if (isTopFrame()) return;
-    if (tc.vars.isBlocked) return;
+    if (!controlProfileReady || tc.vars.isBlocked) return;
     try {
         const limit = getBoostLimitInfo();
         const now = Date.now();
@@ -1253,14 +1255,31 @@ function initWhenReady() {
 }
 
 function extractRootDomain(url) {
-    return sharedExtractRootDomain(url, { fileValue: "file" });
+    return sharedExtractRootDomain(url);
+}
+
+async function resolveControlUrl() {
+    if (isTopFrame()) return window.location.href;
+
+    try {
+        const response = await runtimeSendMessage({ command: "getTopTabUrl" });
+        if (response && typeof response.url === "string" && response.url) {
+            return response.url;
+        }
+    } catch (e) {
+        if (tc.settings.debugMode) log(`top-tab URL lookup failed: ${e && e.message}`, 3);
+    }
+
+    // Fall back to the frame URL only if the background is temporarily
+    // unavailable. A later storage change/navigation will retry start().
+    return window.location.href;
 }
 
 function normalizeDebugRouteMode(value) {
     return value === "webaudio" || value === "native" ? value : "auto";
 }
 
-function applyEffectiveDebugSettings(data, currentDomain) {
+function applyEffectiveDebugSettings(data, controlUrl) {
     const previous = {
         debugMode: tc.settings.debugMode,
         forceDrmCapture: tc.settings.forceDrmCapture,
@@ -1276,7 +1295,7 @@ function applyEffectiveDebugSettings(data, currentDomain) {
 
     // A remembered site's optional debug object overrides those defaults only
     // for URLs matched by the existing whitelist/memory lookup.
-    const siteSettingsKey = getSiteSettingsKey(data.siteSettings || {}, currentDomain);
+    const siteSettingsKey = getSiteSettingsKey(data.siteSettings || {}, controlUrl);
     const siteSettings = siteSettingsKey ? data.siteSettings[siteSettingsKey] : null;
     const siteDebug = siteSettings && siteSettings.debug && typeof siteSettings.debug === "object"
         ? siteSettings.debug
@@ -1308,6 +1327,7 @@ function applyEffectiveDebugSettings(data, currentDomain) {
 async function start() {
     if (!browserAPI) return;
 
+    controlProfileReady = false;
     try {
         const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false, forceDrmCapture: false, forceCorsCapture: false, debugRouteMode: "auto", legacyTwitchDefaultsPurged: false });
 
@@ -1329,12 +1349,13 @@ async function start() {
             }
         }
 
-        const currentDomain = extractRootDomain(window.location.href);
-        const siteSettingsKey = applyEffectiveDebugSettings(data, currentDomain);
+        const controlUrl = await resolveControlUrl();
+        const currentDomain = extractRootDomain(controlUrl);
+        const siteSettingsKey = applyEffectiveDebugSettings(data, controlUrl);
 
         // Debug: show state used to decide blocking
         if (tc.settings.debugMode) {
-            log(`start(): domain=${currentDomain} whitelistMode=${data.whitelistMode} fqdns=[${(data.fqdns||[]).slice(0,5).join(',')}] siteSettingsCount=${Object.keys(data.siteSettings||{}).length}`, 4);
+            log(`start(): controlUrl=${controlUrl} domain=${currentDomain} whitelistMode=${data.whitelistMode} fqdns=[${(data.fqdns||[]).slice(0,5).join(',')}] siteSettingsCount=${Object.keys(data.siteSettings||{}).length}`, 4);
         }
 
         let blocked = false;
@@ -1347,7 +1368,7 @@ async function start() {
             // Path-aware matching (issue #69): legacy path entries like
             // "www.twitch.tv/*/clip/*" scope to their path and no longer
             // block the whole domain.
-            if (isUrlBlockedByEntries(window.location.href, data.fqdns || [])) blocked = true;
+            if (isUrlBlockedByEntries(controlUrl, data.fqdns || [])) blocked = true;
         }
 
         // Debug: log final decision
@@ -1355,6 +1376,8 @@ async function start() {
 
         // Ensure the content script's blocked flag reflects the current state (clear it when unblocked)
         tc.vars.isBlocked = blocked;
+        controlProfileReady = true;
+        if (!isTopFrame()) reportFrameBoostLimit();
         if (blocked) {
             applyState();
             ensurePageBridgeResync();

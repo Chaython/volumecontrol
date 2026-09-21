@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install pinned build dependencies
+        run: npm ci
+
+      - name: Run regression tests
+        run: npm test
+
+      - name: Build Firefox and Chrome packages
+        shell: powershell
+        run: .\scripts\build.ps1
+
+      - name: Upload extension packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: volume-control-${{ github.sha }}
+          path: |
+            dist/volume-control-firefox-v*.zip
+            dist/volume-control-chrome-v*.zip
+          if-no-files-found: error

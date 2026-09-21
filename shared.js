@@ -141,7 +141,7 @@
     function extractRootDomain(url, options = {}) {
         const invalidValue = options.nullForInvalid ? null : "";
         if (!url) return invalidValue;
-        if (url.startsWith('file:')) return options.fileValue !== undefined ? options.fileValue : 'Local File';
+        if (url.startsWith('file:')) return options.fileValue !== undefined ? options.fileValue : 'file';
 
         if (isRestrictedUrl(url)) return invalidValue;
         return normalizeDomainInput(url);
@@ -150,6 +150,96 @@
     function domainMatchesSaved(domain, savedDomain) {
         const saved = normalizeDomainInput(savedDomain);
         return Boolean(domain && saved && (domain === saved || domain.endsWith(`.${saved}`)));
+    }
+
+    // Remembered settings may be scoped to a whole site or to a URL path.
+    // Existing domain-only keys remain fully compatible. Queries/fragments are
+    // deliberately ignored because they are commonly transient player state.
+    function normalizeSiteSettingsEntryInput(value) {
+        let raw = String(value == null ? "" : value).trim();
+        if (!raw) return "";
+        if (/^(?:local file|file)$/i.test(raw) || /^file:/i.test(raw)) return "file";
+
+        raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/i, "");
+        const suffix = raw.search(/[?#]/);
+        if (suffix !== -1) raw = raw.slice(0, suffix);
+
+        const slash = raw.indexOf("/");
+        let domain = (slash === -1 ? raw : raw.slice(0, slash)).toLowerCase();
+        domain = domain.split(":")[0].replace(/^www\./, "");
+        if (!domain) return "";
+
+        let path = slash === -1 ? "" : raw.slice(slash);
+        while (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+        if (path === "/") path = "";
+        return domain + path;
+    }
+
+    function splitSiteSettingsEntry(entry) {
+        const normalized = normalizeSiteSettingsEntryInput(entry);
+        if (!normalized) return null;
+        if (normalized === "file") return { file: true, domain: "file", path: "" };
+
+        const slash = normalized.indexOf("/");
+        return {
+            file: false,
+            domain: slash === -1 ? normalized : normalized.slice(0, slash),
+            path: slash === -1 ? "" : normalized.slice(slash)
+        };
+    }
+
+    function isUrlRememberedByEntry(url, savedEntry) {
+        const saved = splitSiteSettingsEntry(savedEntry);
+        if (!saved) return false;
+
+        const rawUrl = String(url == null ? "" : url).trim();
+        if (!rawUrl) return false;
+        if (saved.file) {
+            return /^file:/i.test(rawUrl) || /^(?:local file|file)$/i.test(rawUrl);
+        }
+
+        let current = null;
+        try {
+            if (/^[a-z][a-z0-9+.-]*:[/]{2}/i.test(rawUrl)) {
+                const parsed = new URL(rawUrl);
+                if (!/^https?:$/.test(parsed.protocol)) return false;
+                current = {
+                    domain: parsed.hostname.toLowerCase().replace(/^www\./, ""),
+                    path: parsed.pathname || "/"
+                };
+            }
+        } catch (e) {
+            current = null;
+        }
+
+        if (!current) {
+            const normalizedCurrent = normalizeSiteSettingsEntryInput(rawUrl);
+            if (!normalizedCurrent || normalizedCurrent === "file") return false;
+            const slash = normalizedCurrent.indexOf("/");
+            current = {
+                domain: slash === -1 ? normalizedCurrent : normalizedCurrent.slice(0, slash),
+                path: slash === -1 ? "/" : normalizedCurrent.slice(slash)
+            };
+        }
+
+        if (!(current.domain === saved.domain || current.domain.endsWith(`.${saved.domain}`))) {
+            return false;
+        }
+        if (!saved.path) return true;
+
+        if (saved.path.includes("*")) {
+            const pattern = "^" + saved.path.split("*").map(escapeRegExp).join("[^/]*") + "$";
+            try {
+                return new RegExp(pattern).test(current.path);
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // A remembered path applies to that path and descendants. This makes
+        // "example.com/videos" a useful URL+directory profile while allowing
+        // more-specific entries to override it.
+        return current.path === saved.path || current.path.startsWith(saved.path + "/");
     }
 
     // ---- Path-aware blocklist matching (issue #69) --------------------------
@@ -179,16 +269,8 @@
     function splitBlocklistEntry(entry) {
         let raw = String(entry == null ? "" : entry).trim().toLowerCase();
         if (!raw) return null;
-        // NOTE: the protocol pattern is deliberately written as [/]{2}
-        // instead of the equivalent backslash-escaped double slash. The
-        // release build pipeline (scripts/build.ps1 Optimize-SourceFile)
-        // strips comments with a regex that only protects string literals:
-        // a regex literal containing adjacent slashes is misread as a line
-        // comment and the line is truncated mid-expression, which shipped
-        // shared.js as a SyntaxError in every release built from v6.13-v6.15
-        // sources ("Plex doesn't allow upward changes to volume"). Never put
-        // adjacent slashes or a slash-star sequence inside a regex literal
-        // in this codebase; check-release-build.mjs enforces it.
+        // Keep wildcard/path entries parseable without requiring URL(), since
+        // "*" is valid in a saved blocklist pattern but not a normal URL.
         raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/, ""); // tolerate stored URLs
         const slash = raw.indexOf('/');
         const domainPart = slash === -1 ? raw : raw.slice(0, slash);
@@ -198,9 +280,8 @@
     }
 
     // Normalize user-typed BLOCKLIST input for storage (v6.14). Unlike
-    // normalizeDomainInput — which strips the path and must keep doing so
-    // for siteSettings keys and remembered sites — this PRESERVES a path so
-    // options-page users can create path-scoped entries:
+    // normalizeDomainInput, this PRESERVES a path so options-page users can
+    // create path-scoped entries:
     //   "twitch.tv/clips"        blocks only /clips on twitch (+ subdomains
     //                            of twitch.tv, consistent with bare entries)
     //   "twitch.tv/*/clip/*"     wildcard: * matches any chars except "/"
@@ -213,9 +294,6 @@
     function normalizeBlocklistEntryInput(value) {
         let raw = String(value == null ? "" : value).trim().toLowerCase();
         if (!raw) return "";
-        // [/]{2} instead of backslash-escaped slashes — release-build
-        // comment-stripper safety (see splitBlocklistEntry above;
-        // check-release-build.mjs enforces it).
         raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/, ""); // strip a leading protocol
         const slash = raw.indexOf('/');
         let domain = slash === -1 ? raw : raw.slice(0, slash);
@@ -233,8 +311,7 @@
         const parts = splitBlocklistEntry(savedEntry);
         if (!parts) return false;
 
-        // Bare-domain entry (the only kind the options UI can produce): keep
-        // the historical domain/subdomain semantics.
+        // Bare-domain entry: keep the historical domain/subdomain semantics.
         if (!parts.path) {
             return domainMatchesSaved(normalizeDomainInput(url), savedEntry);
         }
@@ -281,13 +358,23 @@
         return { list: filtered, changed: filtered.length !== fqdns.length };
     }
 
-    function getSiteSettingsKey(siteSettings, domain) {
-        if (!siteSettings || !domain) return null;
-        if (siteSettings[domain]) return domain;
+    function getSiteSettingsKey(siteSettings, url) {
+        if (!siteSettings || !url) return null;
+
+        const normalized = normalizeSiteSettingsEntryInput(url);
+        if (normalized && siteSettings[normalized]) return normalized;
+
+        // Backward compatibility for versions that saved local files under
+        // "Local File" while the content script looked for "file".
+        if (normalized === "file" && siteSettings["Local File"]) return "Local File";
 
         return Object.keys(siteSettings)
-            .filter(savedDomain => domainMatchesSaved(domain, savedDomain))
-            .sort((a, b) => b.length - a.length)[0] || null;
+            .filter(savedEntry => isUrlRememberedByEntry(url, savedEntry))
+            .sort((a, b) => {
+                const aKey = normalizeSiteSettingsEntryInput(a);
+                const bKey = normalizeSiteSettingsEntryInput(b);
+                return bKey.length - aKey.length;
+            })[0] || null;
     }
 
     function isRestrictedUrl(url) {
@@ -345,9 +432,11 @@
         actionSetBadgeBackgroundColor,
         actionSetTitle,
         normalizeDomainInput,
+        normalizeSiteSettingsEntryInput,
         normalizeBlocklistEntryInput,
         extractRootDomain,
         domainMatchesSaved,
+        isUrlRememberedByEntry,
         isUrlBlockedByEntry,
         isUrlBlockedByEntries,
         entriesBlockingUrl,
