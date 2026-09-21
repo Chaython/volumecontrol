@@ -33,7 +33,7 @@
 
     <h3>Remembered Settings</h3>
     <div class="hint remembered-hint">
-        Manage saved volume and mono settings for specific sites.
+        Manage saved volume, mono, mute, and optional per-site debug overrides. Sites without a debug override inherit the global debug defaults below.
     </div>
     <div class="input-group">
         <input type="text" id="newRememberedSite" placeholder="example.com">
@@ -41,6 +41,9 @@
     </div>
     <div id="memoryList" class="list-container">
         </div>
+
+    <h3>Global Debug Defaults</h3>
+    <div class="hint remembered-hint">These defaults apply everywhere unless a remembered site has <strong>Site debug</strong> enabled.</div>
 
     <div class="toggle-box debug-toggle-box">
         <label>

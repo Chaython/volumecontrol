@@ -427,7 +427,11 @@ async function saveSiteSettings(tab) {
         const data = await storageGet({ siteSettings: {} });
         data.siteSettings = data.siteSettings || {};
         const settingsKey = getSiteSettingsKey(data.siteSettings, domain) || domain;
+        // Preserve optional per-site debug overrides when the popup updates
+        // volume/mono/mute. Older code replaced the whole remembered record,
+        // which would silently erase the debug profile on every volume change.
         data.siteSettings[settingsKey] = {
+            ...(data.siteSettings[settingsKey] || {}),
             volume: normalizeControlDb(volumeSlider?.value),
             mono: Boolean(monoCheckbox?.checked),
             muted: Boolean(muteBtn && muteBtn.classList.contains("muted"))

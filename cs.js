@@ -1254,7 +1254,56 @@ function initWhenReady() {
 
 function extractRootDomain(url) {
     return sharedExtractRootDomain(url, { fileValue: "file" });
-} 
+}
+
+function normalizeDebugRouteMode(value) {
+    return value === "webaudio" || value === "native" ? value : "auto";
+}
+
+function applyEffectiveDebugSettings(data, currentDomain) {
+    const previous = {
+        debugMode: tc.settings.debugMode,
+        forceDrmCapture: tc.settings.forceDrmCapture,
+        forceCorsCapture: tc.settings.forceCorsCapture,
+        debugRouteMode: tc.settings.debugRouteMode
+    };
+
+    // Global options remain the defaults for every site.
+    tc.settings.debugMode = !!data.debugMode;
+    tc.settings.forceDrmCapture = !!data.forceDrmCapture;
+    tc.settings.forceCorsCapture = !!data.forceCorsCapture;
+    tc.settings.debugRouteMode = normalizeDebugRouteMode(data.debugRouteMode);
+
+    // A remembered site's optional debug object overrides those defaults only
+    // for URLs matched by the existing whitelist/memory lookup.
+    const siteSettingsKey = getSiteSettingsKey(data.siteSettings || {}, currentDomain);
+    const siteSettings = siteSettingsKey ? data.siteSettings[siteSettingsKey] : null;
+    const siteDebug = siteSettings && siteSettings.debug && typeof siteSettings.debug === "object"
+        ? siteSettings.debug
+        : null;
+
+    if (siteDebug) {
+        if (siteDebug.debugMode !== undefined) tc.settings.debugMode = !!siteDebug.debugMode;
+        if (siteDebug.forceDrmCapture !== undefined) tc.settings.forceDrmCapture = !!siteDebug.forceDrmCapture;
+        if (siteDebug.forceCorsCapture !== undefined) tc.settings.forceCorsCapture = !!siteDebug.forceCorsCapture;
+        if (siteDebug.debugRouteMode !== undefined) {
+            tc.settings.debugRouteMode = normalizeDebugRouteMode(siteDebug.debugRouteMode);
+        }
+    }
+
+    const changed =
+        previous.debugMode !== tc.settings.debugMode ||
+        previous.forceDrmCapture !== tc.settings.forceDrmCapture ||
+        previous.forceCorsCapture !== tc.settings.forceCorsCapture ||
+        previous.debugRouteMode !== tc.settings.debugRouteMode;
+
+    if (changed) {
+        invalidateBoostLimitCache();
+        lastSyncedPageAudioState = null;
+    }
+
+    return siteSettingsKey;
+}
 
 async function start() {
     if (!browserAPI) return;
@@ -1280,14 +1329,8 @@ async function start() {
             }
         }
 
-        if (data.debugMode !== undefined) tc.settings.debugMode = data.debugMode;
-        if (data.forceDrmCapture !== undefined) tc.settings.forceDrmCapture = !!data.forceDrmCapture;
-        if (data.forceCorsCapture !== undefined) tc.settings.forceCorsCapture = !!data.forceCorsCapture;
-        tc.settings.debugRouteMode = data.debugRouteMode === "webaudio" || data.debugRouteMode === "native"
-            ? data.debugRouteMode
-            : "auto";
-
         const currentDomain = extractRootDomain(window.location.href);
+        const siteSettingsKey = applyEffectiveDebugSettings(data, currentDomain);
 
         // Debug: show state used to decide blocking
         if (tc.settings.debugMode) {
@@ -1299,7 +1342,7 @@ async function start() {
             // Whitelist is derived from remembered sites (siteSettings)
             const remembered = Object.keys(data.siteSettings || {});
             if (tc.settings.debugMode) log(`start(): remembered samples=[${remembered.slice(0,5).join(',')}]`, 4);
-            if (!getSiteSettingsKey(data.siteSettings || {}, currentDomain)) blocked = true;
+            if (!siteSettingsKey) blocked = true;
         } else {
             // Path-aware matching (issue #69): legacy path entries like
             // "www.twitch.tv/*/clip/*" scope to their path and no longer
@@ -1319,7 +1362,6 @@ async function start() {
             return;
         }
 
-        const siteSettingsKey = getSiteSettingsKey(data.siteSettings, currentDomain);
         if (siteSettingsKey) {
             const s = data.siteSettings[siteSettingsKey];
             if (s.volume !== undefined) tc.vars.dB = normalizeDb(s.volume);
@@ -1373,43 +1415,19 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
 
         if (tc.settings.debugMode) log(`onChanged: keys=[${Object.keys(changes).join(',')}]`, 4);
 
-        // Re-evaluate blocking and apply site settings in a single pass.
-        // Previously this called start() AND a separate siteSettings handler,
-        // causing double storage reads, double applyState() calls, and potential
-        // race conditions if the two reads completed in different orders.
-        if (changes.whitelistMode || changes.fqdns || changes.siteSettings) {
+        // Re-evaluate blocking, remembered audio state, and effective debug
+        // settings in one pass. This is important for per-site debug: a global
+        // change must not overwrite a remembered site's explicit override.
+        if (
+            changes.whitelistMode ||
+            changes.fqdns ||
+            changes.siteSettings ||
+            changes.debugMode ||
+            changes.forceDrmCapture ||
+            changes.forceCorsCapture ||
+            changes.debugRouteMode
+        ) {
             start();
-        }
-
-        // Update debug mode live
-        if (changes.debugMode) {
-            tc.settings.debugMode = !!changes.debugMode.newValue;
-            syncPageAudioHook();
-        }
-
-        // Dangerous debug overrides. They intentionally bypass safeguards or
-        // force a media routing strategy for troubleshooting.
-        if (changes.forceDrmCapture) {
-            tc.settings.forceDrmCapture = !!changes.forceDrmCapture.newValue;
-            invalidateBoostLimitCache();
-            lastSyncedPageAudioState = null;
-            syncPageAudioHook();
-            applyState();
-        }
-        if (changes.forceCorsCapture) {
-            tc.settings.forceCorsCapture = !!changes.forceCorsCapture.newValue;
-            invalidateBoostLimitCache();
-            lastSyncedPageAudioState = null;
-            syncPageAudioHook();
-            applyState();
-        }
-        if (changes.debugRouteMode) {
-            const mode = changes.debugRouteMode.newValue;
-            tc.settings.debugRouteMode = mode === "webaudio" || mode === "native" ? mode : "auto";
-            invalidateBoostLimitCache();
-            lastSyncedPageAudioState = null;
-            syncPageAudioHook();
-            applyState();
         }
     });
 }

@@ -123,6 +123,7 @@ button#addRemembered:hover {
     border-bottom: 1px solid #eee;
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 12px;
     background: #fff;
 }
@@ -151,7 +152,9 @@ button#addRemembered:hover {
 .controls-container {
     display: flex;
     align-items: center;
-    gap: 15px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 10px;
 }
 
 .setting-group {
@@ -166,6 +169,29 @@ button#addRemembered:hover {
     border: 1px solid #e0e0e0;
     height: 36px;
     box-sizing: border-box;
+}
+
+.site-debug-group {
+    height: auto;
+    min-height: 36px;
+    flex-wrap: wrap;
+}
+
+.site-debug-group.is-inherited {
+    opacity: 0.72;
+}
+
+.site-debug-enable {
+    font-weight: 600;
+}
+
+.site-debug-option {
+    white-space: nowrap;
+}
+
+.site-debug-route {
+    max-width: 150px;
+    padding: 4px 6px;
 }
 
 .mono-label {
