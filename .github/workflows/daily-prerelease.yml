@@ -52,7 +52,7 @@ jobs:
 
           $head = (git rev-parse HEAD).Trim()
           $shortSha = $head.Substring(0, 7)
-          $lastTag = git tag --list "vc-daily-*" --sort=-creatordate | Select-Object -First 1
+          $lastTag = git tag --list "V*-pre.*" --sort=-creatordate | Select-Object -First 1
           $force = $env:FORCE_RELEASE -eq "true"
           $shouldRelease = $false
 
@@ -159,8 +159,8 @@ jobs:
           $dateTag = $utcNow.ToString("yyyyMMdd")
           $dateDisplay = $utcNow.ToString("yyyy-MM-dd")
           $shortSha = "${{ steps.changes.outputs.short_sha }}"
-          $tag = "vc-daily-v$($manifest.version)-$dateTag.$env:GITHUB_RUN_NUMBER-$shortSha"
-          $title = "Volume Control v$($manifest.version) daily $dateDisplay ($shortSha)"
+          $tag = "V$($manifest.version)-pre.$dateTag.$env:GITHUB_RUN_NUMBER-$shortSha"
+          $title = "V$($manifest.version): Pre-release $dateDisplay ($shortSha)"
 
           "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
