@@ -60,6 +60,22 @@
     const nativeSrcObjectDescriptor = window.HTMLMediaElement && window.HTMLMediaElement.prototype
         ? Object.getOwnPropertyDescriptor(window.HTMLMediaElement.prototype, "srcObject")
         : null;
+    const DocumentPrototype = window.Document && window.Document.prototype;
+    const nativeCreateElement = DocumentPrototype && DocumentPrototype.createElement;
+    const nativeCreateElementNS = DocumentPrototype && DocumentPrototype.createElementNS;
+    const nativeSetMediaKeys = window.HTMLMediaElement && window.HTMLMediaElement.prototype
+        ? window.HTMLMediaElement.prototype.setMediaKeys
+        : null;
+    const nativeWebkitSetMediaKeys = window.HTMLMediaElement && window.HTMLMediaElement.prototype
+        ? window.HTMLMediaElement.prototype.webkitSetMediaKeys
+        : null;
+    const NavigatorPrototype = window.Navigator && window.Navigator.prototype;
+    const nativeRequestMediaKeySystemAccess = NavigatorPrototype && NavigatorPrototype.requestMediaKeySystemAccess;
+    const MediaKeySystemAccessPrototype = window.MediaKeySystemAccess && window.MediaKeySystemAccess.prototype;
+    const nativeCreateMediaKeys = MediaKeySystemAccessPrototype && MediaKeySystemAccessPrototype.createMediaKeys;
+    const nativeHistoryPushState = window.history && window.history.pushState;
+    const nativeHistoryReplaceState = window.history && window.history.replaceState;
+    let spaNavigationNotify = null;
 
     function log(msg) {
         if (state.debugMode) console.log(`[VolumeControl/PageAudio] ${msg}`);
@@ -869,7 +885,6 @@
             !window.HTMLMediaElement.prototype.__volumeControlSetMediaKeysPatched) {
             const proto = window.HTMLMediaElement.prototype;
             try {
-                const nativeSetMediaKeys = proto.setMediaKeys;
                 if (typeof nativeSetMediaKeys === "function") {
                     proto.setMediaKeys = function patchedSetMediaKeys(mediaKeys) {
                         if (mediaKeys) {
@@ -900,7 +915,6 @@
                         return setResult;
                     };
                 }
-                const nativeWebkitSetMediaKeys = proto.webkitSetMediaKeys;
                 if (typeof nativeWebkitSetMediaKeys === "function") {
                     proto.webkitSetMediaKeys = function patchedWebkitSetMediaKeys(mediaKeys) {
                         if (mediaKeys) markElementRestricted(this);
@@ -909,7 +923,7 @@
                 }
                 Object.defineProperty(proto, "__volumeControlSetMediaKeysPatched", {
                     value: true,
-                    configurable: false,
+                    configurable: true,
                     enumerable: false
                 });
             } catch (e) {
@@ -921,9 +935,8 @@
             typeof window.Navigator.prototype.requestMediaKeySystemAccess === "function" &&
             !window.Navigator.prototype.__volumeControlRmksaPatched) {
             try {
-                const nativeRequest = window.Navigator.prototype.requestMediaKeySystemAccess;
                 window.Navigator.prototype.requestMediaKeySystemAccess = function patchedRequestMediaKeySystemAccess() {
-                    const result = nativeRequest.apply(this, arguments);
+                    const result = nativeRequestMediaKeySystemAccess.apply(this, arguments);
                     // Only flag the page when a CDM is actually GRANTED. Players
                     // that merely probe support and fall back to clear media
                     // reject here and must not trip the conservative gate.
@@ -942,7 +955,7 @@
                 };
                 Object.defineProperty(window.Navigator.prototype, "__volumeControlRmksaPatched", {
                     value: true,
-                    configurable: false,
+                    configurable: true,
                     enumerable: false
                 });
             } catch (e) {
@@ -965,7 +978,6 @@
             typeof window.MediaKeySystemAccess.prototype.createMediaKeys === "function" &&
             !window.MediaKeySystemAccess.prototype.__volumeControlCmkPatched) {
             try {
-                const nativeCreateMediaKeys = window.MediaKeySystemAccess.prototype.createMediaKeys;
                 window.MediaKeySystemAccess.prototype.createMediaKeys = function patchedCreateMediaKeys() {
                     const result = nativeCreateMediaKeys.apply(this, arguments);
                     try {
@@ -992,7 +1004,7 @@
                 };
                 Object.defineProperty(window.MediaKeySystemAccess.prototype, "__volumeControlCmkPatched", {
                     value: true,
-                    configurable: false,
+                    configurable: true,
                     enumerable: false
                 });
             } catch (e) {
@@ -1509,6 +1521,25 @@
         writeFallbackVolume(element, entry, fallbackVolume, Boolean(options.immediateFallback));
     }
 
+    function cleanupTrackedMediaElement(element) {
+        const entry = mediaState.get(element);
+        if (entry) {
+            if (entry.streamCleanup) {
+                try { entry.streamCleanup(); } catch (e) {}
+                entry.streamCleanup = null;
+            }
+            entry.streamBacked = false;
+            if (entry.fallbackCorrectionTimer) {
+                clearTimeout(entry.fallbackCorrectionTimer);
+                entry.fallbackCorrectionTimer = null;
+            }
+            entry.pendingFallbackVolume = null;
+        }
+        const route = mediaRoutes.get(element);
+        if (route) disconnectMediaRouteOutput(route);
+        mediaElements.delete(element);
+    }
+
     // Returns true if an element that was removed from the DOM can still be
     // heard. Sites like YouTube/Twitch/Twitter detach their <video> element
     // during player rebuilds and ad transitions WHILE IT KEEPS PLAYING, and
@@ -1533,9 +1564,7 @@
                     applyMediaElementState(element);
                     continue;
                 }
-                const route = mediaRoutes.get(element);
-                if (route) disconnectMediaRouteOutput(route);
-                mediaElements.delete(element);
+                cleanupTrackedMediaElement(element);
                 continue;
             }
             applyMediaElementState(element);
@@ -1733,7 +1762,7 @@
 
         Object.defineProperty(AudioNodePrototype, "__volumeControlPatched", {
             value: true,
-            configurable: false,
+            configurable: true,
             enumerable: false
         });
     }
@@ -1795,7 +1824,7 @@
 
             Object.defineProperty(window.HTMLMediaElement.prototype, "__volumeControlVolumePatched", {
                 value: true,
-                configurable: false,
+                configurable: true,
                 enumerable: false
             });
         } catch (e) {
@@ -1858,7 +1887,7 @@
 
             Object.defineProperty(window.HTMLMediaElement.prototype, "__volumeControlSrcObjectPatched", {
                 value: true,
-                configurable: false,
+                configurable: true,
                 enumerable: false
             });
         } catch (e) {
@@ -1882,7 +1911,7 @@
 
         Object.defineProperty(window.HTMLMediaElement.prototype, "__volumeControlPlayPatched", {
             value: true,
-            configurable: false,
+            configurable: true,
             enumerable: false
         });
     }
@@ -1903,7 +1932,7 @@
 
             Object.defineProperty(VolumeControlAudio, "__volumeControlPatched", {
                 value: true,
-                configurable: false,
+                configurable: true,
                 enumerable: false
             });
 
@@ -1915,9 +1944,6 @@
 
     function patchElementCreation() {
         if (!window.Document || window.Document.prototype.__volumeControlCreateElementPatched) return;
-
-        const nativeCreateElement = window.Document.prototype.createElement;
-        const nativeCreateElementNS = window.Document.prototype.createElementNS;
 
         try {
             window.Document.prototype.createElement = function patchedCreateElement() {
@@ -1934,7 +1960,7 @@
 
             Object.defineProperty(window.Document.prototype, "__volumeControlCreateElementPatched", {
                 value: true,
-                configurable: false,
+                configurable: true,
                 enumerable: false
             });
         } catch (e) {
@@ -1967,9 +1993,10 @@
                 postToContentScript("locationChanged", { href: window.location.href });
             });
         };
+        spaNavigationNotify = notify;
 
         for (const method of ["pushState", "replaceState"]) {
-            const original = window.history[method];
+            const original = method === "pushState" ? nativeHistoryPushState : nativeHistoryReplaceState;
             if (typeof original !== "function") continue;
             window.history[method] = function patchedHistoryMethod() {
                 const result = original.apply(this, arguments);
@@ -1984,10 +2011,105 @@
         try {
             Object.defineProperty(window.history, "__volumeControlNavigationPatched", {
                 value: true,
-                configurable: false,
+                configurable: true,
                 enumerable: false
             });
         } catch (e) {}
+    }
+
+    function deletePatchMarker(target, key) {
+        if (!target) return;
+        try { delete target[key]; } catch (e) {}
+    }
+
+    function restorePatchedPageApis() {
+        stopMaintenanceTimers();
+
+        // Only restore a method when OUR wrapper is still installed. If the page
+        // replaced it after us, leave the page's newer implementation alone.
+        if (AudioNodePrototype) {
+            if (AudioNodePrototype.connect && AudioNodePrototype.connect.name === "patchedConnect" && nativeConnect) {
+                AudioNodePrototype.connect = nativeConnect;
+            }
+            if (AudioNodePrototype.disconnect && AudioNodePrototype.disconnect.name === "patchedDisconnect" && nativeDisconnect) {
+                AudioNodePrototype.disconnect = nativeDisconnect;
+            }
+            deletePatchMarker(AudioNodePrototype, "__volumeControlPatched");
+        }
+
+        if (window.HTMLMediaElement && window.HTMLMediaElement.prototype) {
+            const proto = window.HTMLMediaElement.prototype;
+            const volumeDescriptor = Object.getOwnPropertyDescriptor(proto, "volume");
+            if (volumeDescriptor && volumeDescriptor.set && volumeDescriptor.set.name === "patchedVolumeSetter" && nativeVolumeDescriptor) {
+                Object.defineProperty(proto, "volume", nativeVolumeDescriptor);
+            }
+            const srcObjectDescriptor = Object.getOwnPropertyDescriptor(proto, "srcObject");
+            if (srcObjectDescriptor && srcObjectDescriptor.set && srcObjectDescriptor.set.name === "patchedSrcObjectSetter" && nativeSrcObjectDescriptor) {
+                Object.defineProperty(proto, "srcObject", nativeSrcObjectDescriptor);
+            }
+            if (proto.play && proto.play.name === "patchedPlay" && nativePlay) proto.play = nativePlay;
+            if (proto.setMediaKeys && proto.setMediaKeys.name === "patchedSetMediaKeys" && nativeSetMediaKeys) proto.setMediaKeys = nativeSetMediaKeys;
+            if (proto.webkitSetMediaKeys && proto.webkitSetMediaKeys.name === "patchedWebkitSetMediaKeys" && nativeWebkitSetMediaKeys) {
+                proto.webkitSetMediaKeys = nativeWebkitSetMediaKeys;
+            }
+            deletePatchMarker(proto, "__volumeControlVolumePatched");
+            deletePatchMarker(proto, "__volumeControlSrcObjectPatched");
+            deletePatchMarker(proto, "__volumeControlPlayPatched");
+            deletePatchMarker(proto, "__volumeControlSetMediaKeysPatched");
+        }
+
+        if (window.Audio && window.Audio.name === "VolumeControlAudio" && nativeAudioConstructor) {
+            window.Audio = nativeAudioConstructor;
+        }
+
+        if (DocumentPrototype) {
+            if (DocumentPrototype.createElement && DocumentPrototype.createElement.name === "patchedCreateElement" && nativeCreateElement) {
+                DocumentPrototype.createElement = nativeCreateElement;
+            }
+            if (DocumentPrototype.createElementNS && DocumentPrototype.createElementNS.name === "patchedCreateElementNS" && nativeCreateElementNS) {
+                DocumentPrototype.createElementNS = nativeCreateElementNS;
+            }
+            deletePatchMarker(DocumentPrototype, "__volumeControlCreateElementPatched");
+        }
+
+        if (NavigatorPrototype &&
+            NavigatorPrototype.requestMediaKeySystemAccess &&
+            NavigatorPrototype.requestMediaKeySystemAccess.name === "patchedRequestMediaKeySystemAccess" &&
+            nativeRequestMediaKeySystemAccess) {
+            NavigatorPrototype.requestMediaKeySystemAccess = nativeRequestMediaKeySystemAccess;
+            deletePatchMarker(NavigatorPrototype, "__volumeControlRmksaPatched");
+        }
+
+        if (MediaKeySystemAccessPrototype &&
+            MediaKeySystemAccessPrototype.createMediaKeys &&
+            MediaKeySystemAccessPrototype.createMediaKeys.name === "patchedCreateMediaKeys" &&
+            nativeCreateMediaKeys) {
+            MediaKeySystemAccessPrototype.createMediaKeys = nativeCreateMediaKeys;
+            deletePatchMarker(MediaKeySystemAccessPrototype, "__volumeControlCmkPatched");
+        }
+
+        if (window.history) {
+            if (window.history.pushState && window.history.pushState.name === "patchedHistoryMethod" && nativeHistoryPushState) {
+                window.history.pushState = nativeHistoryPushState;
+            }
+            if (window.history.replaceState && window.history.replaceState.name === "patchedHistoryMethod" && nativeHistoryReplaceState) {
+                window.history.replaceState = nativeHistoryReplaceState;
+            }
+            deletePatchMarker(window.history, "__volumeControlNavigationPatched");
+        }
+        if (spaNavigationNotify) {
+            window.removeEventListener("popstate", spaNavigationNotify);
+            window.removeEventListener("hashchange", spaNavigationNotify);
+            spaNavigationNotify = null;
+        }
+
+        if (gestureListenersInstalled) {
+            document.removeEventListener("pointerdown", resumeMediaContextOnGesture, true);
+            document.removeEventListener("keydown", resumeMediaContextOnGesture, true);
+            gestureListenersInstalled = false;
+        }
+
+        hooksInstalled = false;
     }
 
     function handleBridgeMessage(event) {
@@ -1997,10 +2119,17 @@
         if (!data || data.source !== BRIDGE_SOURCE || data.target !== BRIDGE_TARGET) return;
 
         if (!bridgeToken) {
-            if (data.command !== "setState" || typeof data.token !== "string" || data.token.length < 24) return;
+            if ((data.command !== "setState" && data.command !== "heartbeat") ||
+                typeof data.token !== "string" || data.token.length < 24) return;
             bridgeToken = data.token;
         } else if (data.token !== bridgeToken) {
-            return;
+            if (!state.extensionActive &&
+                (data.command === "setState" || data.command === "heartbeat") &&
+                typeof data.token === "string" && data.token.length >= 24) {
+                bridgeToken = data.token;
+            } else {
+                return;
+            }
         }
 
         // Handle heartbeat from the content script. If the content script is
@@ -2055,6 +2184,7 @@
         }
         applyStateToGraphs();
         applyStateToMediaElements();
+        if (!state.enabled) restorePatchedPageApis();
     }
 
     function restoreNativeBehavior() {
@@ -2100,6 +2230,8 @@
 
         suspendMediaContextIfIdle();
         suspendIdleContexts();
+        restorePatchedPageApis();
+        bridgeToken = null;
     }
 
     function runRestrictionAudit() {
@@ -2122,9 +2254,7 @@
     function sweepDetachedMediaElements() {
         for (const element of Array.from(mediaElements)) {
             if (!element.isConnected && !isDetachedButAudible(element)) {
-                const route = mediaRoutes.get(element);
-                if (route) disconnectMediaRouteOutput(route);
-                mediaElements.delete(element);
+                cleanupTrackedMediaElement(element);
             }
         }
         setTimeout(suspendMediaContextIfIdle, 0);
@@ -2203,9 +2333,13 @@
         startMaintenanceTimers();
     }
 
-    // Install only the lightweight bridge listener at document_start. Page
-    // prototypes, observers and timers stay untouched until an authenticated
-    // setState says this document is enabled.
+    // Install a transparent AudioNode destination interceptor immediately at
+    // document_start. It records graphs created before async storage/profile
+    // resolution but does not reroute or alter gain until an authenticated
+    // setState enables this document. Excluded pages restore the native methods
+    // as soon as their disabled state arrives.
+    patchAudioNodeRouting();
+
     try {
         Object.defineProperty(window, HOOK_KEY, {
             value: { installed: true },

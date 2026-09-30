@@ -802,11 +802,9 @@ function syncPageAudioHook() {
         lastSyncedPageAudioState.debugRouteMode === currentState.debugRouteMode) {
         return;
     }
-    // A document that starts excluded should remain completely untouched by
-    // the MAIN-world hook. Do not even send the token until this page has been
-    // enabled at least once.
-    if (!currentState.enabled && !pageHookActivated) return;
-
+    // The MAIN-world hook installs only a transparent AudioNode interceptor at
+    // document_start. Always send the resolved state, including "disabled", so
+    // an excluded page can immediately restore its native prototypes.
     lastSyncedPageAudioState = currentState;
 
     try {
@@ -818,7 +816,7 @@ function syncPageAudioHook() {
             version: BRIDGE_VERSION,
             ...currentState
         }, "*");
-        if (currentState.enabled) pageHookActivated = true;
+        pageHookActivated = true;
     } catch (e) {
         if (tc.settings.debugMode) log(`page audio sync failed: ${e.message}`, 3);
     }
@@ -1126,8 +1124,19 @@ function connectOutput(element) {
     }
 
     if (element.dataset.vcHooked === "true") {
+        if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') {
+            // A MediaElementAudioSource cannot be recreated on another context.
+            // Do not pretend the stale route is healthy or bind a new GainNode
+            // to the dead context. Surface the limitation until navigation
+            // replaces the element.
+            element.dataset.vcFallbackReason = "route-failed";
+            if (tc.vars.mediaElements) tc.vars.mediaElements.delete(element);
+            invalidateBoostLimitCache();
+            log("Previously hooked media lost its AudioContext; route is unavailable until the element is replaced", 2);
+            return;
+        }
         if (tc.vars.mediaElements) tc.vars.mediaElements.add(element);
-        if (isMediaPlaying(element) && tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
+        if (isMediaPlaying(element) && tc.vars.audioCtx.state === 'suspended') {
             tc.vars.audioCtx.resume().then(applyState);
         }
         return;
@@ -1170,6 +1179,10 @@ function connectOutput(element) {
     }
 
     if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') {
+        // A GainNode belongs to exactly one AudioContext. Clear the stale node
+        // before constructing a replacement context or connect() will throw a
+        // cross-context InvalidAccessError.
+        tc.vars.gainNode = undefined;
         // If the context was closed (e.g. the page itself called .close()
         // on it, or a previous extension version closed it), create a fresh
         // one. Note: any elements previously hooked on the old context have
@@ -1444,7 +1457,11 @@ async function start() {
         tc.vars.isBlocked = blocked;
         controlProfileReady = true;
         if (blocked) {
-            if (pageHookActivated) applyState();
+            // Resolve the MAIN-world preflight immediately. This sends an
+            // authenticated disabled state, causing it to restore native page
+            // APIs instead of leaving wrappers installed on an excluded site.
+            lastSyncedPageAudioState = null;
+            syncPageAudioHook();
             stopPageBridgeTimers();
             stopFrameReporting();
             stopBoostLimitObserver();

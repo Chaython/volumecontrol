@@ -316,3 +316,27 @@ test('CI uses a trusted local JavaScript action for downloadable build artifacts
     assert.match(action, /using: node24/);
     assert.match(implementation, /ACTIONS_RUNTIME_TOKEN|@actions\/artifact/);
 });
+
+
+test('MAIN hook preflights early WebAudio but restores page APIs on exclusion', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(source, /patchAudioNodeRouting\(\);\s*\n\s*try \{/);
+    assert.match(source, /function restorePatchedPageApis\(\)/);
+    assert.match(source, /if \(!state\.enabled\) restorePatchedPageApis\(\)/);
+    assert.match(source, /bridgeToken = null/);
+    assert.match(source, /data\.command !== "setState" && data\.command !== "heartbeat"/);
+});
+
+test('detached MediaStream media releases external stream listeners', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(source, /function cleanupTrackedMediaElement\(element\)/);
+    assert.match(source, /entry\.streamCleanup\(\)/);
+    assert.match(source, /cleanupTrackedMediaElement\(element\)/);
+});
+
+test('isolated fallback never reuses a GainNode from a closed AudioContext', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(source, /tc\.vars\.gainNode = undefined/);
+    assert.match(source, /Previously hooked media lost its AudioContext/);
+    assert.match(source, /syncPageAudioHook\(\);\s*\n\s*stopPageBridgeTimers\(\)/);
+});
