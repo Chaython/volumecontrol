@@ -20,7 +20,7 @@
         forceDrmCapture: false,
         forceCorsCapture: false,
         debugRouteMode: "auto",
-        extensionActive: true
+        extensionActive: false
     };
     function effectiveGain() {
         // When the extension is inactive (disabled, blocked, or heartbeat lost),
@@ -31,6 +31,12 @@
     }
 
     let lastHeartbeat = Date.now();
+    let bridgeToken = null;
+    let hooksInstalled = false;
+    let mediaObserver = null;
+    let maintenanceTimerIds = [];
+    let howlerPollId = null;
+    let gestureListenersInstalled = false;
 
     const graphs = new WeakMap();
     const contexts = new Set();
@@ -545,7 +551,7 @@
             // an actually-opaque origin (data:, sandboxed without
             // allow-same-origin) is "unknown" rather than cross-origin, so
             // same-origin media inside such frames is not falsely limited.
-            const pageOrigin = (typeof document.origin === "string" && document.origin) || window.location.origin;
+            const pageOrigin = (typeof globalThis.origin === "string" && globalThis.origin) || window.location.origin;
             if (!pageOrigin || pageOrigin === "null") return false;
             return url.origin !== pageOrigin;
         } catch (e) {
@@ -564,20 +570,6 @@
         // The aggregate page restriction may have just appeared (this element
         // is now DRM-restricted even if it is detached or in shadow DOM).
         updatePageMediaRestriction();
-    }
-
-    function isRestrictedMediaElement(element) {
-        if (!element) return false;
-
-        try {
-            if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
-            if (element.mediaKeys) return true;
-            if (element.webkitKeys) return true;
-        } catch (e) {
-            return false;
-        }
-
-        return false;
     }
 
     function pageUsesEme() {
@@ -651,14 +643,6 @@
             return false;
         }
         return false;
-    }
-
-    function pageCreatedMediaKeys() {
-        try {
-            return document.documentElement.dataset.vcPageEmeActive === "true";
-        } catch (e) {
-            return false;
-        }
     }
 
     // Pending EME suspect: the page was granted EME access (probe) and the
@@ -1174,6 +1158,7 @@
                 disconnectNative(source, dest, entry.outputIndex, entry.inputIndex);
             } catch (e) {
                 log(`native destination disconnect failed: ${e && e.message}`);
+                continue;
             }
 
             try {
@@ -1181,6 +1166,12 @@
                 entry.routed = true;
             } catch (e) {
                 log(`recorded destination route failed: ${e && e.message}`);
+                try {
+                    connectNative(source, dest, entry.outputIndex, entry.inputIndex);
+                    entry.routed = false;
+                } catch (rollbackError) {
+                    log(`recorded destination rollback failed: ${rollbackError && rollbackError.message}`);
+                }
             }
         }
     }
@@ -1202,12 +1193,13 @@
             }
 
             const graph = graphs.get(nodeFromRef(entry.contextRef));
-            if (graph) {
-                try {
-                    disconnectNative(source, graph.gain, entry.outputIndex, 0);
-                } catch (e) {
-                    log(`unroute disconnect failed: ${e && e.message}`);
-                }
+            if (!graph) continue;
+
+            try {
+                disconnectNative(source, graph.gain, entry.outputIndex, 0);
+            } catch (e) {
+                log(`unroute disconnect failed: ${e && e.message}`);
+                continue;
             }
 
             try {
@@ -1215,6 +1207,12 @@
                 entry.routed = false;
             } catch (e) {
                 log(`unroute reconnect failed: ${e && e.message}`);
+                try {
+                    connectNative(source, graph.gain, entry.outputIndex, 0);
+                    entry.routed = true;
+                } catch (rollbackError) {
+                    log(`unroute rollback failed: ${rollbackError && rollbackError.message}`);
+                }
             }
         }
     }
@@ -1245,6 +1243,7 @@
             disconnectNative(masterGain, howler.ctx.destination);
         } catch (e) {
             log(`Howler master disconnect failed: ${e && e.message}`);
+            return;
         }
 
         try {
@@ -1254,6 +1253,11 @@
             log("Howler master gain routed");
         } catch (e) {
             log(`Howler master route failed: ${e && e.message}`);
+            try {
+                connectNative(masterGain, howler.ctx.destination);
+            } catch (rollbackError) {
+                log(`Howler master rollback failed: ${rollbackError && rollbackError.message}`);
+            }
         }
     }
 
@@ -1645,7 +1649,7 @@
     // to the restriction aggregate. Register any audio/video the moment it
     // enters the (light) DOM so our per-element listeners take over from there.
     function watchForInjectedMediaElements() {
-        if (typeof MutationObserver === "undefined") return;
+        if (typeof MutationObserver === "undefined") return null;
         const registerNode = (node) => {
             if (!node || node.nodeType !== 1) return;
             const tag = node.tagName;
@@ -1675,6 +1679,7 @@
         };
         if (document.documentElement) startObserving();
         else document.addEventListener("DOMContentLoaded", startObserving, { once: true });
+        return observer;
     }
 
     function patchAudioNodeRouting() {
@@ -1690,9 +1695,15 @@
                 resumeIfSelfSuspended(context);
                 const graph = (graphs.has(context) || pageAudioNeedsRoute()) ? ensureGraph(context) : null;
                 if (graph) {
-                    trackDestinationConnection(this, destination, outputIndex, inputIndex, true);
-                    connectNative(this, graph.gain, outputIndex, 0);
-                    return destination;
+                    const entry = trackDestinationConnection(this, destination, outputIndex, inputIndex, true);
+                    try {
+                        connectNative(this, graph.gain, outputIndex, 0);
+                        return destination;
+                    } catch (e) {
+                        entry.routed = false;
+                        log(`live destination route failed, using native path: ${e && e.message}`);
+                        return nativeConnect.apply(this, arguments);
+                    }
                 }
 
                 trackDestinationConnection(this, destination, outputIndex, inputIndex, false);
@@ -1753,14 +1764,23 @@
                 },
                 set: function patchedVolumeSetter(value) {
                     const n = Number(value);
-                    const entry = getMediaState(this);
 
-                    if (entry.applyingVolume) {
-                        nativeVolumeDescriptor.set.call(this, Number.isNaN(n) ? value : n);
+                    // Preserve native HTMLMediaElement semantics. Browsers throw
+                    // for NaN/Infinity and values outside 0..1; silently
+                    // clamping here broke sites that intentionally rely on that
+                    // exception behavior.
+                    if (!Number.isFinite(n) || n < 0 || n > 1) {
+                        nativeVolumeDescriptor.set.call(this, value);
                         return;
                     }
 
-                    entry.baseVolume = Number.isNaN(n) ? entry.baseVolume : Math.max(0, Math.min(1, n));
+                    const entry = getMediaState(this);
+                    if (entry.applyingVolume) {
+                        nativeVolumeDescriptor.set.call(this, n);
+                        return;
+                    }
+
+                    entry.baseVolume = n;
 
                     // Apply the extension-adjusted native target immediately.
                     // The site's requested value remains entry.baseVolume, so a
@@ -1926,9 +1946,11 @@
     // direction of the normal bridge flow).
     function postToContentScript(command, extra = {}) {
         try {
+            if (!bridgeToken) return;
             window.postMessage({
                 source: BRIDGE_TARGET,
                 target: BRIDGE_SOURCE,
+                token: bridgeToken,
                 command,
                 ...extra
             }, "*");
@@ -1974,6 +1996,13 @@
         const data = event.data;
         if (!data || data.source !== BRIDGE_SOURCE || data.target !== BRIDGE_TARGET) return;
 
+        if (!bridgeToken) {
+            if (data.command !== "setState" || typeof data.token !== "string" || data.token.length < 24) return;
+            bridgeToken = data.token;
+        } else if (data.token !== bridgeToken) {
+            return;
+        }
+
         // Handle heartbeat from the content script. If the content script is
         // unloaded (extension disabled/updated), the heartbeat stops and we
         // restore native audio behavior.
@@ -2010,6 +2039,12 @@
             ? data.debugRouteMode
             : "auto";
 
+        if (state.enabled) {
+            ensurePageHooksInstalled();
+        } else {
+            stopMaintenanceTimers();
+        }
+
         // Route or unroute depending on whether audio processing is needed.
         if (pageAudioNeedsRoute()) {
             routeRecordedDestinationConnections();
@@ -2037,6 +2072,7 @@
         state.forceCorsCapture = false;
         state.debugRouteMode = "auto";
         state.extensionActive = false;
+        stopMaintenanceTimers();
 
         unrouteDestinationConnections();
         unrouteHowlerGlobal();
@@ -2066,6 +2102,110 @@
         suspendIdleContexts();
     }
 
+    function runRestrictionAudit() {
+        updatePageMediaRestriction();
+        for (const element of Array.from(mediaElements)) {
+            const entry = mediaState.get(element);
+            if (!entry || mediaRoutes.has(element)) continue;
+            if (isPendingEmeSuspect(element)) {
+                applyMediaElementState(element);
+                continue;
+            }
+            if (entry.lastFallbackWriteAt === undefined) continue;
+            if (!isMediaPlaying(element) || !isAudibleMediaElement(element)) continue;
+            const gain = effectiveGain();
+            const expected = Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)));
+            if (Math.abs(readNativeVolume(element) - expected) > 0.02) applyMediaElementState(element);
+        }
+    }
+
+    function sweepDetachedMediaElements() {
+        for (const element of Array.from(mediaElements)) {
+            if (!element.isConnected && !isDetachedButAudible(element)) {
+                const route = mediaRoutes.get(element);
+                if (route) disconnectMediaRouteOutput(route);
+                mediaElements.delete(element);
+            }
+        }
+        setTimeout(suspendMediaContextIfIdle, 0);
+    }
+
+    function startMaintenanceTimers() {
+        if (!state.extensionActive || !state.enabled || maintenanceTimerIds.length) return;
+
+        let howlerPollCount = 0;
+        howlerPollId = setInterval(() => {
+            howlerPollCount++;
+            if (window.Howler) {
+                routeKnownAudioLibraries();
+                clearInterval(howlerPollId);
+                howlerPollId = null;
+            } else if (howlerPollCount >= 30) {
+                clearInterval(howlerPollId);
+                howlerPollId = null;
+            }
+        }, 1000);
+
+        maintenanceTimerIds = [
+            setInterval(sweepDeadDestinationConnections, 30000),
+            setInterval(runRestrictionAudit, 1000),
+            setInterval(sweepDetachedMediaElements, 30000),
+            setInterval(() => {
+                if (state.extensionActive && Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT_MS) {
+                    restoreNativeBehavior();
+                }
+            }, 2000)
+        ];
+    }
+
+    function stopMaintenanceTimers() {
+        for (const id of maintenanceTimerIds) clearInterval(id);
+        maintenanceTimerIds = [];
+        if (howlerPollId !== null) {
+            clearInterval(howlerPollId);
+            howlerPollId = null;
+        }
+        if (mediaObserver) {
+            mediaObserver.disconnect();
+            mediaObserver = null;
+        }
+    }
+
+    const resumeMediaContextOnGesture = () => {
+        if (state.extensionActive && state.enabled && mediaAudioContext) resumeContext(mediaAudioContext);
+    };
+
+    function ensurePageHooksInstalled() {
+        if (!hooksInstalled) {
+            patchAudioNodeRouting();
+            patchMediaVolume();
+            patchMediaSrcObject();
+            patchMediaPlayback();
+            patchAudioConstructor();
+            patchElementCreation();
+            patchEmeApi();
+            patchSpaNavigation();
+            hooksInstalled = true;
+
+            if (!gestureListenersInstalled) {
+                document.addEventListener("pointerdown", resumeMediaContextOnGesture, { passive: true, capture: true });
+                document.addEventListener("keydown", resumeMediaContextOnGesture, { passive: true, capture: true });
+                gestureListenersInstalled = true;
+            }
+        }
+
+        if (document.documentElement) scanMediaElements(document);
+        else document.addEventListener("DOMContentLoaded", () => {
+            if (state.extensionActive && state.enabled) scanMediaElements(document);
+        }, { once: true });
+
+        if (!mediaObserver) mediaObserver = watchForInjectedMediaElements();
+        startMaintenanceTimers();
+    }
+
+    // Install only the lightweight bridge listener at document_start. Page
+    // prototypes, observers and timers stay untouched until an authenticated
+    // setState says this document is enabled.
     try {
         Object.defineProperty(window, HOOK_KEY, {
             value: { installed: true },
@@ -2076,138 +2216,6 @@
     } catch (e) {
         window[HOOK_KEY] = { installed: true };
     }
-
-    patchAudioNodeRouting();
-    patchMediaVolume();
-    patchMediaSrcObject();
-    patchMediaPlayback();
-    patchAudioConstructor();
-    patchElementCreation();
-    patchEmeApi();
-    patchSpaNavigation();
-
-    // Poll for Howler for up to 30 seconds, then stop. Once Howler is detected,
-    // clear the poll — routeKnownAudioLibraries will be called from handleBridgeMessage
-    // on future state changes. Previously the poll only cleared after routing, which
-    // meant it ran forever if the user set volume to 0 dB (unroute deletes the route).
-    let howlerPollCount = 0;
-    const howlerPoll = setInterval(() => {
-        howlerPollCount++;
-        if (window.Howler) {
-            routeKnownAudioLibraries();
-            clearInterval(howlerPoll);
-        } else if (howlerPollCount >= 30) {
-            // Give up after 30 seconds — Howler probably isn't on this page.
-            clearInterval(howlerPoll);
-        }
-    }, 1000);
-
-    // Periodically sweep dead destination connections (GC'd nodes) to prevent
-    // the Set from growing unboundedly on pages that create many short-lived
-    // audio nodes.
-    setInterval(sweepDeadDestinationConnections, 30000);
-
-    // Keep the published page-restriction aggregate fresh. Sources the
-    // aggregate depends on (element.src assignment, currentSrc resolution,
-    // setMediaKeys landing after claim time) are not all observable through
-    // events, so a cheap 1s recompute closes the gaps. mediaElements is
-    // tiny (a handful of entries on typical pages).
-    //
-    // The same tick drives two hardening loops:
-    //  1. EME pending gate (v6.14): re-run the routing decision for unrouted
-    //     pending suspects. Evaluating the gate also OBSERVES currentTime
-    //     (the decryption-proof check), so this is the backup observation
-    //     point for elements whose timeupdate events are late or missing —
-    //     and it keeps freshly-restricted elements refusing.
-    //  2. Fallback audit (issue #71): verify every playing, unrouted,
-    //     audible element sits at the fallback volume the extension state
-    //     demands. Sites reset video.volume on track changes / replays; if
-    //     the corrective write was rate-limited and no further media event
-    //     fires, the reset would stick (1-10s of wrong volume on YouTube
-    //     auto-next, permanently on Facebook reels until manual action).
-    //     The audit bounds any drift to ~1s without needing events.
-    setInterval(() => {
-        updatePageMediaRestriction();
-
-        for (const element of Array.from(mediaElements)) {
-            const entry = mediaState.get(element);
-            if (!entry) continue;
-            if (mediaRoutes.has(element)) continue;
-
-            // 1. Pending EME suspect: re-run the routing decision (gate
-            //    evaluation observes currentTime; restricted elements keep
-            //    refusing via their evidence).
-            if (isPendingEmeSuspect(element)) {
-                applyMediaElementState(element);
-                continue;
-            }
-
-            // 2. Fallback audit: playing + audible + previously
-            //    fallback-managed + native volume drifted from the expected
-            //    scaled value → re-apply (rate limit still applies).
-            if (entry.lastFallbackWriteAt === undefined) continue;
-            if (!isMediaPlaying(element) || !isAudibleMediaElement(element)) continue;
-            const gain = effectiveGain();
-            const expected = Math.max(0, Math.min(1, entry.baseVolume * Math.min(gain, 1)));
-            if (Math.abs(readNativeVolume(element) - expected) > 0.02) {
-                applyMediaElementState(element);
-            }
-        }
-    }, 1000);
-
-    // Periodically sweep media elements that have been removed from the DOM.
-    // applyStateToMediaElements also does this on state changes, but on pages
-    // that create many short-lived <audio>/<video> elements without triggering
-    // state changes (e.g. a soundboard that fires many SFX), mediaElements
-    // would otherwise accumulate disconnected elements forever -- and each one
-    // keeps its (kept-for-replay) route's mediaAudioContext alive.
-    // Elements detached while still playing are NOT swept: they are still
-    // audible and must keep receiving gain updates (see isDetachedButAudible).
-    // They get dropped by applyStateToMediaElements once they pause or end.
-    setInterval(() => {
-        for (const element of Array.from(mediaElements)) {
-            if (!element.isConnected && !isDetachedButAudible(element)) {
-                const route = mediaRoutes.get(element);
-                if (route) disconnectMediaRouteOutput(route);
-                mediaElements.delete(element);
-            }
-        }
-        // After cleaning up dead elements, also try to release the media
-        // context if no live elements remain. This mirrors what
-        // suspendMediaContextIfIdle does, but is gated on actual DOM
-        // presence rather than waiting for a media event that may never
-        // come (e.g. an element that was removed while paused).
-        setTimeout(suspendMediaContextIfIdle, 0);
-    }, 30000);
-
-    // Heartbeat checker: if the content script hasn't pinged us recently,
-    // assume the extension has been disabled/updated and restore native behavior.
-    setInterval(() => {
-        if (state.extensionActive && Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT_MS) {
-            restoreNativeBehavior();
-        }
-    }, 2000);
-
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", () => {
-            scanMediaElements(document);
-        }, { once: true });
-    } else {
-        scanMediaElements(document);
-    }
-
-    watchForInjectedMediaElements();
-
-    // A media route context created before any user gesture (autoplay granted
-    // via the Media Engagement Index) can be born 'suspended' by the autoplay
-    // policy and stay that way — routed media would then be silent. Retry the
-    // resume on the first user interaction; resumeContext no-ops once the
-    // context is running.
-    const resumeMediaContextOnGesture = () => {
-        if (mediaAudioContext) resumeContext(mediaAudioContext);
-    };
-    document.addEventListener("pointerdown", resumeMediaContextOnGesture, { passive: true, capture: true });
-    document.addEventListener("keydown", resumeMediaContextOnGesture, { passive: true, capture: true });
 
     window.addEventListener("message", handleBridgeMessage);
 })();

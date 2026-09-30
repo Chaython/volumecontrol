@@ -256,6 +256,20 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
             return false;
         }
 
+        if (message.command === "frameBoostLimitReport") {
+            const tabId = sender && sender.tab && sender.tab.id;
+            const frameId = sender && Number.isInteger(sender.frameId) ? sender.frameId : 0;
+            if (Number.isInteger(tabId) && frameId > 0) {
+                tabsSendMessage(tabId, {
+                    command: "frameBoostLimitReport",
+                    frameId,
+                    reason: typeof message.reason === "string" ? message.reason : ""
+                }, TOP_FRAME_OPTIONS).catch(() => {});
+            }
+            sendResponse({});
+            return false;
+        }
+
         if (message.command === "topUrlChanged") {
             const tabId = sender && sender.tab && sender.tab.id;
             const url = typeof message.url === "string" && message.url

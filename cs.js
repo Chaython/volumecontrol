@@ -17,6 +17,18 @@ const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain
 const PAGE_BRIDGE_SOURCE = "volume-control-extension";
 const PAGE_BRIDGE_TARGET = "volume-control-page-audio";
 const PAGE_AUDIO_MANAGED_ATTR = "vcPageAudioManaged";
+// Per-document capability token. MAIN-world bridge messages must carry this
+// unpredictable token; ordinary page scripts no longer get to spoof setState,
+// heartbeat, navigation, or restriction messages just by knowing our strings.
+const PAGE_BRIDGE_TOKEN = (() => {
+    try {
+        const bytes = new Uint32Array(4);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes, value => value.toString(16).padStart(8, "0")).join("");
+    } catch (e) {
+        return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) + "-" + Math.random().toString(36).slice(2);
+    }
+})();
 const PAGE_BRIDGE_RESYNC_MS = 5000;
 const PAGE_BRIDGE_HEARTBEAT_MS = 3000;
 const BOOST_LIMIT_NOTES = {
@@ -63,6 +75,17 @@ function log(msg, level = 4) {
 if (browserAPI) {
     browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (!msg) return;
+        if (msg.command === "frameBoostLimitReport") {
+            if (!isTopFrame() || tc.vars.isBlocked) return;
+            const frameId = Number(msg.frameId);
+            if (!Number.isInteger(frameId) || frameId <= 0) return;
+            const reason = reasonSeverity(msg.reason) > 0 ? msg.reason : "";
+            const previous = frameLimitReports.get(frameId);
+            frameLimitReports.set(frameId, { reason, ts: Date.now() });
+            if (!previous || previous.reason !== reason) invalidateBoostLimitCache();
+            sendResponse({});
+            return;
+        }
         if (msg.command === "profileUrlChanged") {
             if (typeof msg.url === "string" && msg.url) profileControlUrl = msg.url;
             start();
@@ -150,24 +173,12 @@ function isLikelyCrossOriginMedia(element) {
 
     try {
         const url = new URL(src, document.baseURI);
-        return url.protocol.indexOf("http") === 0 && url.origin !== window.location.origin;
+        const pageOrigin = (typeof globalThis.origin === "string" && globalThis.origin) || window.location.origin;
+        if (!pageOrigin || pageOrigin === "null") return false;
+        return url.protocol.indexOf("http") === 0 && url.origin !== pageOrigin;
     } catch (e) {
         return false;
     }
-}
-
-function isLikelyRestrictedMedia(element) {
-    if (!element) return false;
-
-    try {
-        if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
-        if (element.mediaKeys) return true;
-        if (element.webkitKeys) return true;
-    } catch (e) {
-        return false;
-    }
-
-    return false;
 }
 
 function pageUsesEme() {
@@ -233,14 +244,6 @@ function elementEmeKeysAttached(element) {
         return false;
     }
     return false;
-}
-
-function pageCreatedMediaKeys() {
-    try {
-        return Boolean(document.documentElement && document.documentElement.dataset.vcPageEmeActive === "true");
-    } catch (e) {
-        return false;
-    }
 }
 
 // Pending EME suspect: the page was granted EME access (probe) and the
@@ -487,17 +490,14 @@ function getBoostLimitInfo() {
 }
 
 // ----- Cross-frame boost-limit aggregation --------------------------------
-// Popup/background state queries are answered by the TOP frame only (since
-// v6.9: an unframed tabs.sendMessage resolves with whichever frame responds
-// first, which made the DRM/boost-limit note flicker on udio.com). But DRM or
-// cross-origin media often plays inside an embedded iframe (widget players,
-// embedded players) whose document the top frame cannot scan. Each frame's
-// content script therefore posts its verdict up to the top frame, and the top
-// frame merges the most restrictive live report into its own verdict. Reports
-// expire, so frames that go away relax the verdict deterministically — no
-// response races, no flicker.
-const FRAME_REPORT_TTL_MS = 2500;
-const frameLimitReports = new Map(); // source window -> { reason, ts }
+// Child frames report through extension messaging instead of page
+// window.postMessage. Page scripts therefore cannot forge a DRM/CORS report
+// and clamp the whole tab. Reports expire so removed frames relax naturally.
+const FRAME_REPORT_TTL_MS = 15000;
+const FRAME_REPORT_REFRESH_MS = 5000;
+const frameLimitReports = new Map(); // frameId -> { reason, ts }
+let frameReportInterval = null;
+let frameReportPurgeInterval = null;
 
 function isTopFrame() {
     try {
@@ -511,77 +511,54 @@ function getAggregatedFrameLimit() {
     if (!isTopFrame() || frameLimitReports.size === 0) return null;
     const now = Date.now();
     let best = null;
-    for (const [source, entry] of Array.from(frameLimitReports)) {
-        if (!source || now - entry.ts > FRAME_REPORT_TTL_MS) {
-            frameLimitReports.delete(source);
+    for (const [frameId, entry] of Array.from(frameLimitReports)) {
+        if (!Number.isInteger(frameId) || now - entry.ts > FRAME_REPORT_TTL_MS) {
+            frameLimitReports.delete(frameId);
             continue;
         }
-        if (!best || reasonSeverity(entry.reason) > reasonSeverity(best.reason)) {
-            best = entry;
-        }
+        if (!best || reasonSeverity(entry.reason) > reasonSeverity(best.reason)) best = entry;
     }
     return best;
 }
 
-function handleFrameLimitReport(event) {
-    // Only the top frame aggregates. Reports come from child windows; a page
-    // script posting to its own window (source === window) is not a frame
-    // report and must not influence the verdict.
-    if (!isTopFrame() || !event.source || event.source === window) return;
-    const data = event.data;
-    if (!data || data.vcFrameBoostLimitVersion !== 1) return;
-    const report = data.vcFrameBoostLimit;
-    if (!report || typeof report.reason !== "string") return;
-
-    const reason = reasonSeverity(report.reason) > 0 ? report.reason : "";
-    const previous = frameLimitReports.get(event.source);
-    frameLimitReports.set(event.source, { reason, ts: Date.now() });
-    if (!previous || previous.reason !== reason) {
-        invalidateBoostLimitCache();
-    }
-}
-
-window.addEventListener("message", handleFrameLimitReport);
-
-// Non-top frames report their verdict to the top frame. Reports post
-// immediately when the verdict CHANGES and otherwise refresh the top frame's
-// TTL entry at half its lifetime (2.5s TTL / 2s heartbeat) — posting
-// unconditionally every second only burned CPU/postMessage volume on
-// iframe-heavy pages with stable verdicts.
 let lastPostedFrameReport = { reason: null, at: 0 };
-function reportFrameBoostLimit() {
-    if (isTopFrame()) return;
-    if (!controlProfileReady || tc.vars.isBlocked) return;
-    try {
-        const limit = getBoostLimitInfo();
-        const now = Date.now();
-        if (limit.reason === lastPostedFrameReport.reason && now - lastPostedFrameReport.at < 2000) return;
-        lastPostedFrameReport = { reason: limit.reason, at: now };
-        window.top.postMessage({
-            vcFrameBoostLimitVersion: 1,
-            vcFrameBoostLimit: {
-                reason: limit.reason,
-                maxDb: limit.maxDb,
-                boostLimited: limit.boostLimited
-            }
-        }, "*");
-    } catch (e) {
-        // window.top can be inaccessible in exotic frame setups; nothing to do.
+function reportFrameBoostLimit(force = false) {
+    if (isTopFrame() || !controlProfileReady || tc.vars.isBlocked) return;
+    const limit = getBoostLimitInfo();
+    const now = Date.now();
+    if (!force && limit.reason === lastPostedFrameReport.reason &&
+        now - lastPostedFrameReport.at < FRAME_REPORT_REFRESH_MS) return;
+    lastPostedFrameReport = { reason: limit.reason, at: now };
+    runtimeSendMessage({
+        command: "frameBoostLimitReport",
+        reason: limit.reason
+    }).catch(() => {});
+}
+
+function startFrameReporting() {
+    if (isTopFrame()) {
+        if (frameReportPurgeInterval === null) {
+            frameReportPurgeInterval = setInterval(() => getAggregatedFrameLimit(), FRAME_REPORT_REFRESH_MS);
+        }
+        return;
+    }
+    reportFrameBoostLimit(true);
+    if (frameReportInterval === null) {
+        frameReportInterval = setInterval(() => reportFrameBoostLimit(true), FRAME_REPORT_REFRESH_MS);
     }
 }
 
-if (!isTopFrame()) {
-    reportFrameBoostLimit();
-    setInterval(reportFrameBoostLimit, 1000);
-} else {
-    // Purge expired frame reports on a timer, not only when a verdict is
-    // requested. On a tab that is merely playing audio (no popup/hotkey
-    // activity) getAggregatedFrameLimit is never called; expired entries pin
-    // the REMOVED iframes' Window objects against GC for the tab's lifetime
-    // (ad-refresh loops churn iframes constantly).
-    setInterval(() => {
-        getAggregatedFrameLimit();
-    }, 2500);
+function stopFrameReporting() {
+    if (frameReportInterval !== null) {
+        clearInterval(frameReportInterval);
+        frameReportInterval = null;
+    }
+    if (frameReportPurgeInterval !== null) {
+        clearInterval(frameReportPurgeInterval);
+        frameReportPurgeInterval = null;
+    }
+    lastPostedFrameReport = { reason: null, at: 0 };
+    if (isTopFrame()) frameLimitReports.clear();
 }
 
 function setupBoostLimitObserver() {
@@ -776,6 +753,7 @@ function syncPageAudioHook() {
         window.postMessage({
             source: PAGE_BRIDGE_SOURCE,
             target: PAGE_BRIDGE_TARGET,
+            token: PAGE_BRIDGE_TOKEN,
             command: "setState",
             version: BRIDGE_VERSION,
             ...currentState
@@ -793,6 +771,7 @@ function sendPageAudioHeartbeat() {
         window.postMessage({
             source: PAGE_BRIDGE_SOURCE,
             target: PAGE_BRIDGE_TARGET,
+            token: PAGE_BRIDGE_TOKEN,
             command: "heartbeat",
             version: BRIDGE_VERSION
         }, "*");
@@ -938,6 +917,17 @@ function ensurePageBridgeHeartbeat() {
     // we've gone away during the gap between script load and first sync.
     sendPageAudioHeartbeat();
     pageBridgeHeartbeatInterval = setInterval(sendPageAudioHeartbeat, PAGE_BRIDGE_HEARTBEAT_MS);
+}
+
+function stopPageBridgeTimers() {
+    if (pageBridgeResyncInterval !== null) {
+        clearInterval(pageBridgeResyncInterval);
+        pageBridgeResyncInterval = null;
+    }
+    if (pageBridgeHeartbeatInterval !== null) {
+        clearInterval(pageBridgeHeartbeatInterval);
+        pageBridgeHeartbeatInterval = null;
+    }
 }
 
 function suspendAudioContextIfIdle() {
@@ -1392,13 +1382,14 @@ async function start() {
         // Ensure the content script's blocked flag reflects the current state (clear it when unblocked)
         tc.vars.isBlocked = blocked;
         controlProfileReady = true;
-        if (!isTopFrame()) reportFrameBoostLimit();
         if (blocked) {
             applyState();
-            ensurePageBridgeResync();
-            ensurePageBridgeHeartbeat();
+            stopPageBridgeTimers();
+            stopFrameReporting();
             return;
         }
+
+        startFrameReporting();
 
         if (siteSettingsKey) {
             const s = data.siteSettings[siteSettingsKey];
@@ -1429,10 +1420,13 @@ window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const data = event.data;
     if (!data || data.source !== PAGE_BRIDGE_TARGET || data.target !== PAGE_BRIDGE_SOURCE) return;
+    if (data.token !== PAGE_BRIDGE_TOKEN) return;
 
     if (data.command === "locationChanged") {
         if (isTopFrame()) {
-            profileControlUrl = typeof data.href === "string" && data.href ? data.href : window.location.href;
+            // Never trust a URL supplied by MAIN-world page code. The current
+            // document URL is authoritative and cannot be forged by postMessage.
+            profileControlUrl = window.location.href;
             start();
             runtimeSendMessage({ command: "topUrlChanged", url: profileControlUrl }).catch(() => {});
         }
@@ -1444,6 +1438,7 @@ window.addEventListener("message", (event) => {
     // verdict so the next state query reflects it immediately.
     if (data.command === "pageRestrictionChanged") {
         invalidateBoostLimitCache();
+        if (!isTopFrame()) reportFrameBoostLimit(true);
         return;
     }
 
