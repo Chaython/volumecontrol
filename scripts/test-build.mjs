@@ -420,3 +420,11 @@ test('exclusion teardown removes reversible per-element listeners without muting
     assert.match(source, /entry\.listenerCleanup = \(\) =>/);
     assert.match(source, /if \(!mediaRoutes\.has\(element\)\)/);
 });
+
+
+test('whitelist migration is seamless in popup and hotkeys before the one-time write completes', () => {
+    const background = readFileSync(join(root, 'background.js'), 'utf8');
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    assert.match(background, /!data\.whitelistSeparatedV1 && Boolean\(settingsKey\)/);
+    assert.match(popup, /legacyAllowed = !data\.whitelistSeparatedV1/);
+});

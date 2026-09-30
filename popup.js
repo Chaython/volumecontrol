@@ -177,11 +177,13 @@ function handleTabs(tabs) {
                 showError({ type: "exclusion" });
                 return;
             }
-            const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {} });
+            const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, whitelistSeparatedV1: false, siteSettings: {} });
             let isExcluded = false;
             let detail = null;
             if (data.whitelistMode) {
-                isExcluded = !(data.whitelist || []).some(entry => isUrlRememberedByEntry(currentTab.url, entry));
+                const explicitAllowed = (data.whitelist || []).some(entry => isUrlRememberedByEntry(currentTab.url, entry));
+                const legacyAllowed = !data.whitelistSeparatedV1 && Boolean(getSiteSettingsKey(data.siteSettings || {}, currentTab.url));
+                isExcluded = !(explicitAllowed || legacyAllowed);
                 if (isExcluded) detail = exclusionOverlayDetail(data, currentTab.url);
             } else {
                 detail = exclusionOverlayDetail(data, currentTab.url);
@@ -209,10 +211,12 @@ async function updateEnableSwitch(tab) {
     }
 
     try {
-        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {} });
+        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, whitelistSeparatedV1: false, siteSettings: {} });
 
         if (data.whitelistMode) {
-            const isAllowed = (data.whitelist || []).some(entry => isUrlRememberedByEntry(tab.url, entry));
+            const explicitAllowed = (data.whitelist || []).some(entry => isUrlRememberedByEntry(tab.url, entry));
+            const legacyAllowed = !data.whitelistSeparatedV1 && Boolean(getSiteSettingsKey(data.siteSettings || {}, tab.url));
+            const isAllowed = explicitAllowed || legacyAllowed;
             if (checkbox) checkbox.checked = isAllowed;
             if (switchLabel) {
                 switchLabel.style.display = '';

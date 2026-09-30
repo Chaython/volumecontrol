@@ -234,14 +234,17 @@ async function getActiveTab(commandTab) {
 async function getDomainState(tab) {
     if (!tab || !tab.url || isRestrictedUrl(tab.url)) return null;
 
-    const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {} });
+    const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, whitelistSeparatedV1: false, siteSettings: {} });
     const siteSettings = data.siteSettings || {};
     const settingsKey = getSiteSettingsKey(siteSettings, tab.url);
     // Path-aware blocklist matching (issue #69): legacy path entries like
     // "www.twitch.tv/*/clip/*" scope to their path instead of blocking the
     // whole domain.
     const blocked = data.whitelistMode
-        ? !(data.whitelist || []).some(entry => isUrlRememberedByEntry(tab.url, entry))
+        ? !(
+            (data.whitelist || []).some(entry => isUrlRememberedByEntry(tab.url, entry)) ||
+            (!data.whitelistSeparatedV1 && Boolean(settingsKey))
+        )
         : isUrlBlockedByEntries(tab.url, data.fqdns || []);
 
     return {
