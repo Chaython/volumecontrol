@@ -207,7 +207,8 @@ test('content scripts resolve iframe profiles from the top tab URL and refresh o
     assert.match(source, /const PAGE_BRIDGE_TOKEN/);
     assert.match(source, /data\.token !== PAGE_BRIDGE_TOKEN/);
     assert.match(source, /let pageHookActivated = false/);
-    assert.match(source, /if \(!currentState\.enabled && !pageHookActivated\) return/);
+    assert.match(source, /pageHookActivated = true/);
+    assert.doesNotMatch(source, /if \(!currentState\.enabled && !pageHookActivated\) return/);
     assert.match(source, /stopBoostLimitObserver\(\)/);
     assert.match(source, /command: "frameBoostLimitReport"/);
     assert.match(source, /if \(!reason && lastPostedFrameReport\.reason === null && !force\) return/);
@@ -287,7 +288,7 @@ test('popup only accepts a signed integer dB value and uses atomic URL settings 
     assert.match(source, /function parseDbText\(value\)/);
     assert.match(source, /type: "mergeForUrl"/);
     assert.match(source, /type: "removeForUrl"/);
-    assert.match(source, /type: "ensureForUrl"/);
+    assert.match(source, /type: "setSiteActive"/);
 });
 
 test('options queues a rerender requested during an active render', () => {
