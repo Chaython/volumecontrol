@@ -309,13 +309,14 @@ test('daily prerelease compares against stable releases and ignores test-only sc
 });
 
 
-test('CI uses a trusted local JavaScript action for downloadable build artifacts', () => {
+test('CI runs a real Chromium hook smoke test without an extra artifact dependency tree', () => {
     const workflow = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');
-    const action = readFileSync(join(root, '.github/actions/upload-build/action.yml'), 'utf8');
-    const implementation = readFileSync(join(root, '.github/actions/upload-build/index.mjs'), 'utf8');
-    assert.match(workflow, /uses: \.\/\.github\/actions\/upload-build/);
-    assert.match(action, /using: node24/);
-    assert.match(implementation, /ACTIONS_RUNTIME_TOKEN|@actions\/artifact/);
+    const smoke = readFileSync(join(root, 'scripts/browser-smoke.mjs'), 'utf8');
+    assert.match(workflow, /node scripts\/browser-smoke\.mjs/);
+    assert.doesNotMatch(workflow, /upload-build|@actions\/artifact/);
+    assert.match(smoke, /VC_BROWSER_SMOKE_PASS/);
+    assert.match(smoke, /disabledRestored/);
+    assert.match(smoke, /wrongTokenRejected/);
 });
 
 
@@ -376,4 +377,17 @@ test('whitelist changes propagate without remembered settings', () => {
     assert.match(popup, /isUrlRememberedByEntry/);
     assert.match(popup, /Allowed Sites/);
     assert.match(content, /changes\.whitelist \|\|/);
+});
+
+
+test('all-frame manifest keeps the earliest supported fallback injection flags', () => {
+    const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.content_scripts.length >= 2, true);
+    for (const script of manifest.content_scripts) {
+        assert.equal(script.run_at, 'document_start');
+        assert.equal(script.all_frames, true);
+        assert.equal(script.match_about_blank, true);
+        assert.equal(script.match_origin_as_fallback, true);
+    }
+    assert.equal(manifest.content_scripts[0].world, 'MAIN');
 });

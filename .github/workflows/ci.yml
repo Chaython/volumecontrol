@@ -44,6 +44,9 @@ jobs:
       - name: Run regression tests
         run: npm test
 
+      - name: Run Chromium audio-hook smoke test
+        run: node scripts/browser-smoke.mjs
+
       - name: Build Firefox and Chrome packages
         shell: powershell
         run: .\scripts\build.ps1
@@ -64,5 +67,3 @@ jobs:
           Write-Host "Firefox: $($firefox[0].Name) ($($firefox[0].Length) bytes)"
           Write-Host "Chrome:  $($chrome[0].Name) ($($chrome[0].Length) bytes)"
 
-      - name: Upload CI build artifacts
-        uses: ./.github/actions/upload-build
