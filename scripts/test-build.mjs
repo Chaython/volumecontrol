@@ -305,3 +305,13 @@ test('daily prerelease compares against stable releases and ignores test-only sc
     assert.match(source, /'scripts\/minify\.mjs'/);
     assert.doesNotMatch(source, /\$_ -like 'scripts\/\*'/);
 });
+
+
+test('CI uses a trusted local JavaScript action for downloadable build artifacts', () => {
+    const workflow = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');
+    const action = readFileSync(join(root, '.github/actions/upload-build/action.yml'), 'utf8');
+    const implementation = readFileSync(join(root, '.github/actions/upload-build/index.mjs'), 'utf8');
+    assert.match(workflow, /uses: \.\/\.github\/actions\/upload-build/);
+    assert.match(action, /using: node24/);
+    assert.match(implementation, /ACTIONS_RUNTIME_TOKEN|@actions\/artifact/);
+});

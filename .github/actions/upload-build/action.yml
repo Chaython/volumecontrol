@@ -1,0 +1,6 @@
+name: Upload Volume Control build artifact
+description: Upload the built Firefox and Chrome ZIPs using a trusted local JavaScript action.
+
+runs:
+  using: node24
+  main: index.mjs

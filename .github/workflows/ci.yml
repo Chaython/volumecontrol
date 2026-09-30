@@ -65,7 +65,4 @@ jobs:
           Write-Host "Chrome:  $($chrome[0].Name) ($($chrome[0].Length) bytes)"
 
       - name: Upload CI build artifacts
-        shell: pwsh
-        run: |
-          npm install --no-save --package-lock=false @actions/artifact@6.2.1
-          node scripts/upload-ci-artifact.mjs
+        uses: ./.github/actions/upload-build
