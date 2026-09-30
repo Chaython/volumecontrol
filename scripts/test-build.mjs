@@ -401,3 +401,13 @@ test('existing whitelist-mode users migrate remembered allow entries once', () =
     assert.match(background, /Object\.keys\(data\.siteSettings \|\| \{\}\)/);
     assert.match(content, /legacyAllowed = !data\.whitelistSeparatedV1/);
 });
+
+
+test('all blocklist/whitelist migrations share the serialized access-list queue', () => {
+    const background = readFileSync(join(root, 'background.js'), 'utf8');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(background, /accessListMutationChain = accessListMutationChain\.then\(run, run\)/);
+    assert.match(background, /async function purgeLegacyDefaultsOnce\(\)/);
+    assert.match(background, /async function migrateSeparatedWhitelistOnce\(\)/);
+    assert.doesNotMatch(content, /await storageSet\(Object\.assign\([\s\S]*legacyTwitchDefaultsPurged/);
+});

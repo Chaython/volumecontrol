@@ -588,9 +588,9 @@ async function initOptions() {
 
         const addFqdn = async () => {
             const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false });
-            // Blocklist and whitelist/remembered modes both support URL paths.
-            // Blocklist paths use block matching semantics; whitelist mode stores
-            // the path as a remembered profile.
+            // Blocklist and whitelist modes both support URL paths.
+            // Blocklist paths use exclusion semantics; whitelist paths use
+            // explicit allow-list matching independent from remembered audio.
             const v = data.whitelistMode
                 ? normalizeSiteSettingsEntryInput(newFqdnInput.value)
                 : normalizeBlocklistEntryInput(newFqdnInput.value);

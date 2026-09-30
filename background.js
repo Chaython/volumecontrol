@@ -411,7 +411,7 @@ if (browserApi && browserApi.commands && browserApi.commands.onCommand) {
 // closes that window: by the time cs.js start() or the options page sees the
 // storage, the flag is already set and hand-added entries are safe.
 async function migrateSeparatedWhitelistOnce() {
-    try {
+    const run = async () => {
         const data = await storageGet({
             whitelistSeparatedV1: false,
             whitelistMode: false,
@@ -429,13 +429,13 @@ async function migrateSeparatedWhitelistOnce() {
             )];
         }
         await storageSet(updates);
-    } catch (e) {
-        handleError(e);
-    }
+    };
+    accessListMutationChain = accessListMutationChain.then(run, run);
+    return accessListMutationChain.catch(handleError);
 }
 
 async function purgeLegacyDefaultsOnce() {
-    try {
+    const run = async () => {
         const data = await storageGet({ fqdns: [], legacyTwitchDefaultsPurged: false });
         if (data.legacyTwitchDefaultsPurged) return;
         const purged = purgeLegacyDefaultBlocklist(data.fqdns || []);
@@ -443,9 +443,9 @@ async function purgeLegacyDefaultsOnce() {
             purged.changed ? { fqdns: purged.list } : {},
             { legacyTwitchDefaultsPurged: true }
         ));
-    } catch (e) {
-        handleError(e);
-    }
+    };
+    accessListMutationChain = accessListMutationChain.then(run, run);
+    return accessListMutationChain.catch(handleError);
 }
 if (browserApi && browserApi.runtime && browserApi.runtime.onInstalled) {
     browserApi.runtime.onInstalled.addListener(() => { purgeLegacyDefaultsOnce(); });

@@ -1370,7 +1370,7 @@ function applyEffectiveDebugSettings(data, controlUrl) {
     tc.settings.debugRouteMode = normalizeDebugRouteMode(data.debugRouteMode);
 
     // A remembered site's optional debug object overrides those defaults only
-    // for URLs matched by the existing whitelist/memory lookup.
+    // for URLs matched by the existing remembered-profile lookup.
     const siteSettingsKey = getSiteSettingsKey(data.siteSettings || {}, controlUrl);
     const siteSettings = siteSettingsKey ? data.siteSettings[siteSettingsKey] : null;
     const siteDebug = siteSettings && siteSettings.debug && typeof siteSettings.debug === "object"
@@ -1415,16 +1415,11 @@ async function start() {
         // v6.11's www-stripping normalization they matched the whole
         // twitch.tv site, silently deactivating the extension there.
         if (!data.legacyTwitchDefaultsPurged) {
+            // Apply the migration view locally so this page is never blocked by
+            // obsolete defaults. The background owns the actual serialized
+            // storage mutation, avoiding a content-script vs Options race.
             const purged = purgeLegacyDefaultBlocklist(data.fqdns || []);
             data.fqdns = purged.list;
-            try {
-                await storageSet(Object.assign(
-                    purged.changed ? { fqdns: purged.list } : {},
-                    { legacyTwitchDefaultsPurged: true }
-                ));
-            } catch (e) {
-                if (tc.settings.debugMode) log(`legacy blocklist purge failed: ${e && e.message}`, 2);
-            }
         }
 
         if (generation !== startGeneration) return;

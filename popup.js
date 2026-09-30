@@ -561,7 +561,7 @@ function showError(error) {
         // generic line when the verdict came without storage data.
         const detail = exclusionMessage.querySelector(".exclusion-detail");
         if (detail) {
-            detail.textContent = error.detail || "This site is excluded in your blocklist, or not remembered in whitelist mode.";
+            detail.textContent = error.detail || "This site is excluded by your blocklist, or it is not in Allowed Sites while whitelist mode is active.";
         }
         // Make the exclusion message a live region so screen readers announce it,
         // and make it focusable so we can move focus to it.
