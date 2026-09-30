@@ -13,7 +13,7 @@ if (files.length !== 2) {
 }
 
 const artifact = new DefaultArtifactClient();
-const result = await artifact.uploadArtifact('volume-control-packages', files, {
+const result = await artifact.uploadArtifact('volume-control-packages', files, dist, {
     retentionDays: 14,
     compressionLevel: 0
 });
