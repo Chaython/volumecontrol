@@ -410,6 +410,30 @@ if (browserApi && browserApi.commands && browserApi.commands.onCommand) {
 // install/update/startup (BEFORE the user can add anything through the UI)
 // closes that window: by the time cs.js start() or the options page sees the
 // storage, the flag is already set and hand-added entries are safe.
+async function migrateSeparatedWhitelistOnce() {
+    try {
+        const data = await storageGet({
+            whitelistSeparatedV1: false,
+            whitelistMode: false,
+            whitelist: [],
+            siteSettings: {}
+        });
+        if (data.whitelistSeparatedV1) return;
+
+        const updates = { whitelistSeparatedV1: true };
+        if (data.whitelistMode && (!Array.isArray(data.whitelist) || data.whitelist.length === 0)) {
+            updates.whitelist = [...new Set(
+                Object.keys(data.siteSettings || {})
+                    .map(entry => normalizeSiteSettingsEntryInput(entry))
+                    .filter(Boolean)
+            )];
+        }
+        await storageSet(updates);
+    } catch (e) {
+        handleError(e);
+    }
+}
+
 async function purgeLegacyDefaultsOnce() {
     try {
         const data = await storageGet({ fqdns: [], legacyTwitchDefaultsPurged: false });
@@ -430,6 +454,7 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onStartup) {
     browserApi.runtime.onStartup.addListener(() => { purgeLegacyDefaultsOnce(); });
 }
 purgeLegacyDefaultsOnce(); // MV3 worker wake (e.g. after an update) before any user interaction
+migrateSeparatedWhitelistOnce();
 
 if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
     browserApi.runtime.onMessage.addListener((message, sender, sendResponse) => {

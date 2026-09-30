@@ -1406,7 +1406,7 @@ async function start() {
     const generation = ++startGeneration;
     controlProfileReady = false;
     try {
-        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, debugMode: false, forceDrmCapture: false, forceCorsCapture: false, debugRouteMode: "auto", legacyTwitchDefaultsPurged: false });
+        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, whitelistSeparatedV1: false, siteSettings: {}, debugMode: false, forceDrmCapture: false, forceCorsCapture: false, debugRouteMode: "auto", legacyTwitchDefaultsPurged: false });
         if (generation !== startGeneration) return;
 
         // One-time migration (issue #69): V4-era builds seeded default
@@ -1444,7 +1444,9 @@ async function start() {
             // Whitelist authorization is independent from Remembered Settings.
             // This lets users allow a site while keeping each tab/navigation at
             // its own ephemeral 0 dB state (issue #72).
-            const allowed = (data.whitelist || []).some(entry => isUrlRememberedByEntry(controlUrl, entry));
+            const explicitAllowed = (data.whitelist || []).some(entry => isUrlRememberedByEntry(controlUrl, entry));
+            const legacyAllowed = !data.whitelistSeparatedV1 && Boolean(siteSettingsKey);
+            const allowed = explicitAllowed || legacyAllowed;
             if (tc.settings.debugMode) log(`start(): whitelist samples=[${(data.whitelist || []).slice(0,5).join(',')}]`, 4);
             if (!allowed) blocked = true;
         } else {
@@ -1551,6 +1553,7 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
         // change must not overwrite a remembered site's explicit override.
         if (
             changes.whitelistMode ||
+            changes.whitelistSeparatedV1 ||
             changes.whitelist ||
             changes.fqdns ||
             changes.siteSettings ||

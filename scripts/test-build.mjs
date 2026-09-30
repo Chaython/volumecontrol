@@ -391,3 +391,13 @@ test('all-frame manifest keeps the earliest supported fallback injection flags',
     }
     assert.equal(manifest.content_scripts[0].world, 'MAIN');
 });
+
+
+test('existing whitelist-mode users migrate remembered allow entries once', () => {
+    const background = readFileSync(join(root, 'background.js'), 'utf8');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(background, /async function migrateSeparatedWhitelistOnce\(\)/);
+    assert.match(background, /whitelistSeparatedV1: true/);
+    assert.match(background, /Object\.keys\(data\.siteSettings \|\| \{\}\)/);
+    assert.match(content, /legacyAllowed = !data\.whitelistSeparatedV1/);
+});
