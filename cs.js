@@ -69,7 +69,9 @@ const tc = {
 
 const logTypes = ["ERROR", "WARNING", "INFO", "DEBUG"];
 function log(msg, level = 4) {
-  if (tc.settings.logLevel >= level) console.log(`[VolumeControl] ${logTypes[level-2]}: ${msg}`);
+  if (tc.settings.logLevel < level) return;
+  const index = Math.max(0, Math.min(logTypes.length - 1, Number(level) - 2));
+  console.log(`[VolumeControl] ${logTypes[index]}: ${msg}`);
 }
 
 if (browserAPI) {
@@ -1216,7 +1218,7 @@ function connectOutput(element) {
         }
 
     } catch (e) {
-        log(`connectOutput outer failure: ${e && e.message}`, 1);
+        log(`connectOutput outer failure: ${e && e.message}`, 2);
         applyFallbackVolume(element, "route-failed");
         if (tc.settings.debugMode) element.style.border = "5px solid red";
     }

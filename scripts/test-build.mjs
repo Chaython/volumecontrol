@@ -34,9 +34,51 @@ function runBuild(...args) {
 const build = runBuild();
 assert.ifError(build.error);
 assert.equal(build.status, 0, build.stdout + build.stderr);
+const baseManifest = JSON.parse(readFileSync(join(fixtureRoot, 'manifest.json'), 'utf8'));
+
+function listZipEntries(zipPath) {
+    const escaped = zipPath.replace(/'/g, "''");
+    const command = [
+        'Add-Type -AssemblyName System.IO.Compression.FileSystem',
+        `$archive = [System.IO.Compression.ZipFile]::OpenRead('${escaped}')`,
+        'try { $archive.Entries | ForEach-Object { $_.FullName } } finally { $archive.Dispose() }'
+    ].join('; ');
+    const result = spawnSync(powershell, ['-NoProfile', '-Command', command], { encoding: 'utf8' });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return result.stdout.split(/\r?\n/).map(value => value.trim()).filter(Boolean).sort();
+}
 
 for (const browser of ['chrome', 'firefox']) {
     const packageDir = join(fixtureRoot, 'dist', browser);
+    const packageManifest = JSON.parse(readFileSync(join(packageDir, 'manifest.json'), 'utf8'));
+
+    test(`${browser}: manifest contains only browser-valid background metadata`, () => {
+        if (browser === 'chrome') {
+            assert.equal(packageManifest.minimum_chrome_version, baseManifest.minimum_chrome_version);
+            assert.equal(packageManifest.background.service_worker, 'background.js');
+            assert.equal('scripts' in packageManifest.background, false);
+            assert.equal('browser_specific_settings' in packageManifest, false);
+            assert.deepEqual(packageManifest.icons, { '128': 'chrome.png' });
+        } else {
+            assert.equal('minimum_chrome_version' in packageManifest, false);
+            assert.equal('service_worker' in packageManifest.background, false);
+            assert.deepEqual(packageManifest.background.scripts, ['shared.js', 'background.js']);
+            assert.ok(packageManifest.browser_specific_settings?.gecko);
+            assert.deepEqual(packageManifest.icons, { '96': 'ico.svg' });
+        }
+    });
+
+    test(`${browser}: ZIP contains exactly the packaged extension files`, () => {
+        const icon = browser === 'chrome' ? 'chrome.png' : 'ico.svg';
+        const zipPath = join(
+            fixtureRoot,
+            'dist',
+            `volume-control-${browser}-v${baseManifest.version}.zip`
+        );
+        const expected = [...assets, 'build-regression.js', 'manifest.json', icon].sort();
+        assert.deepEqual(listZipEntries(zipPath), expected);
+    });
 
     test(`${browser}: packaging preserves JavaScript behavior`, () => {
         const context = {};
@@ -143,9 +185,14 @@ for (const browser of ['chrome', 'firefox']) {
     });
 }
 
-test('background hotkeys preserve remembered debug/profile fields', () => {
+test('background serializes hotkeys and remembered-setting mutations', () => {
     const source = readFileSync(join(root, 'background.js'), 'utf8');
-    assert.match(source, /\.\.\.\(current \|\| \{\}\)/);
+    assert.match(source, /const commandChains = new Map\(\)/);
+    assert.match(source, /let siteSettingsMutationChain = Promise\.resolve\(\)/);
+    assert.match(source, /type === "mergeForUrl"/);
+    assert.match(source, /type === "ensureForUrl"/);
+    assert.match(source, /if \(!domainState \|\| domainState\.blocked\) return/);
+    assert.match(source, /enqueueCommand\(command, tab\)/);
     assert.match(source, /message\.command === "getTopTabUrl"/);
 });
 
@@ -157,6 +204,9 @@ test('content scripts resolve iframe profiles from the top tab URL and refresh o
     assert.match(source, /let startGeneration = 0/);
     assert.match(source, /generation !== startGeneration/);
     assert.match(source, /command: "topUrlChanged"/);
+    assert.match(source, /const PAGE_BRIDGE_TOKEN/);
+    assert.match(source, /data\.token !== PAGE_BRIDGE_TOKEN/);
+    assert.match(source, /command: "frameBoostLimitReport"/);
     assert.match(source, /getSiteSettingsKey\(data\.siteSettings \|\| \{\}, controlUrl\)/);
     assert.match(source, /isUrlBlockedByEntries\(controlUrl, data\.fqdns \|\| \[\]\)/);
 });
@@ -170,6 +220,12 @@ test('page hook captures MediaStream/srcObject call audio and watches SPA histor
     assert.match(source, /function patchSpaNavigation\(\)/);
     assert.match(source, /"pushState", "replaceState"/);
     assert.match(source, /postToContentScript\("locationChanged"/);
+    assert.match(source, /extensionActive: false/);
+    assert.match(source, /function ensurePageHooksInstalled\(\)/);
+    assert.match(source, /data\.token !== bridgeToken/);
+    assert.match(source, /recorded destination rollback failed/);
+    assert.match(source, /unroute rollback failed/);
+    assert.match(source, /n < 0 \|\| n > 1/);
 });
 
 test('build refuses to delete or use the repository root as output', () => {
@@ -218,4 +274,30 @@ test('a missing build helper fails before replacing the existing release', () =>
     assert.match(result.stdout + result.stderr, /Required build helper is missing/);
     assert.ok(existsSync(existingFile));
     assert.ok(readFileSync(existingFile).equals(existingBytes));
+});
+
+
+test('popup only accepts a signed integer dB value and uses atomic URL settings mutations', () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    assert.match(source, /function parseDbText\(value\)/);
+    assert.match(source, /type: "mergeForUrl"/);
+    assert.match(source, /type: "removeForUrl"/);
+    assert.match(source, /type: "ensureForUrl"/);
+});
+
+test('options queues a rerender requested during an active render', () => {
+    const source = readFileSync(join(root, 'options.js'), 'utf8');
+    assert.match(source, /memoryListRenderPending = true/);
+    assert.match(source, /fqdnListRenderPending = true/);
+    assert.match(source, /queueMicrotask\(\(\) => renderMemoryList\(\)\)/);
+    assert.match(source, /command: "mutateSiteSettings"/);
+});
+
+test('daily prerelease compares against stable releases and ignores test-only script changes', () => {
+    const source = readFileSync(join(root, '.github/workflows/daily-prerelease.yml'), 'utf8');
+    assert.match(source, /git tag --list "V\*"/);
+    assert.match(source, /'LICENSE'/);
+    assert.match(source, /'scripts\/build\.ps1'/);
+    assert.match(source, /'scripts\/minify\.mjs'/);
+    assert.doesNotMatch(source, /\$_ -like 'scripts\/\*'/);
 });

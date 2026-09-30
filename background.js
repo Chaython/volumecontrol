@@ -34,10 +34,23 @@ function mutateSiteSettings(mutation = {}) {
         const data = await storageGet({ siteSettings: {} });
         const siteSettings = { ...(data.siteSettings || {}) };
         const type = String(mutation.type || "");
-        const key = normalizeSiteSettingsEntryInput(mutation.key);
+        const rawKey = String(mutation.key == null ? "" : mutation.key).trim();
+        const normalizedKey = normalizeSiteSettingsEntryInput(rawKey);
+        let key = rawKey && Object.prototype.hasOwnProperty.call(siteSettings, rawKey)
+            ? rawKey
+            : normalizedKey;
+
+        if (type === "mergeForUrl" || type === "removeForUrl" || type === "ensureForUrl") {
+            const url = String(mutation.url || "");
+            const defaultKey = normalizeSiteSettingsEntryInput(mutation.defaultKey || url);
+            key = getSiteSettingsKey(siteSettings, url) || defaultKey;
+        }
+
         if (!key) return { ok: false, reason: "invalid-key" };
 
         if (type === "create") {
+            key = normalizedKey;
+            if (!key) return { ok: false, reason: "invalid-key" };
             if (Object.prototype.hasOwnProperty.call(siteSettings, key)) return { ok: false, reason: "exists", key };
             siteSettings[key] = {
                 volume: 0,
@@ -45,13 +58,24 @@ function mutateSiteSettings(mutation = {}) {
                 muted: false,
                 ...(mutation.value && typeof mutation.value === "object" ? mutation.value : {})
             };
-        } else if (type === "merge") {
+        } else if (type === "ensureForUrl") {
+            const existing = getSiteSettingsKey(siteSettings, String(mutation.url || ""));
+            if (existing) return { ok: true, key: existing, created: false };
+            siteSettings[key] = {
+                volume: 0,
+                mono: false,
+                muted: false,
+                ...(mutation.value && typeof mutation.value === "object" ? mutation.value : {})
+            };
+            await storageSet({ siteSettings });
+            return { ok: true, key, created: true };
+        } else if (type === "merge" || type === "mergeForUrl") {
             const current = siteSettings[key] || { volume: 0, mono: false, muted: false };
             const patch = mutation.patch && typeof mutation.patch === "object" ? mutation.patch : {};
             const next = { ...current, ...patch };
             if (Object.prototype.hasOwnProperty.call(patch, "debug") && patch.debug == null) delete next.debug;
             siteSettings[key] = next;
-        } else if (type === "remove") {
+        } else if (type === "remove" || type === "removeForUrl") {
             delete siteSettings[key];
         } else if (type === "rename") {
             const newKey = normalizeSiteSettingsEntryInput(mutation.newKey);

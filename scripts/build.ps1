@@ -132,6 +132,9 @@ function New-ManifestVariant {
     }
     else {
         $manifest.icons = [ordered]@{ "96" = $IconFile }
+        if ($manifest.PSObject.Properties.Name -contains "minimum_chrome_version") {
+            $manifest.PSObject.Properties.Remove("minimum_chrome_version")
+        }
         if ($manifest.PSObject.Properties.Name -contains "background") {
             $backgroundScript = "background.js"
             if ($manifest.background.PSObject.Properties.Name -contains "service_worker") {

@@ -63,3 +63,9 @@ jobs:
 
           Write-Host "Firefox: $($firefox[0].Name) ($($firefox[0].Length) bytes)"
           Write-Host "Chrome:  $($chrome[0].Name) ($($chrome[0].Length) bytes)"
+
+      - name: Upload CI build artifacts
+        shell: pwsh
+        run: |
+          npm install --no-save --package-lock=false @actions/artifact@6.2.2
+          node scripts/upload-ci-artifact.mjs

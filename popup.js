@@ -257,20 +257,19 @@ async function toggleSitePermission(domain, shouldExclude, tabId, tabUrl) {
         const newData = {};
 
         if (data.whitelistMode) {
-            // Edit remembered sites instead of an arbitrary whitelist
-            const sd = await storageGet({ siteSettings: {} });
-            const settings = sd.siteSettings || {};
-            const settingsKey = getSiteSettingsKey(settings, tabUrl || domain);
-            const defaultKey = normalizeSiteSettingsEntryInput(tabUrl || domain) || domain;
+            // Edit remembered sites through the background's serialized writer.
+            const url = tabUrl || domain;
+            const defaultKey = normalizeSiteSettingsEntryInput(url) || domain;
             if (shouldExclude) {
-                if (settingsKey) await mutateSiteSettings({ type: "remove", key: settingsKey });
-            } else if (!settingsKey && defaultKey) {
-                const created = await mutateSiteSettings({
-                    type: "create",
-                    key: defaultKey,
+                await mutateSiteSettings({ type: "removeForUrl", url });
+            } else if (defaultKey) {
+                const result = await mutateSiteSettings({
+                    type: "ensureForUrl",
+                    url,
+                    defaultKey,
                     value: { volume: 0, mono: false, muted: false }
                 });
-                if (created && created.ok && tabId) {
+                if (result && result.ok && tabId) {
                     try {
                         tabsSendMessage(tabId, { command: "setVolume", dB: 0 }).catch(() => {});
                         tabsSendMessage(tabId, { command: "setMono", mono: false }).catch(() => {});
@@ -436,14 +435,17 @@ async function saveSiteSettingsNow(tab) {
         const monoCheckbox = cached.monoCheckbox || document.getElementById("mono-checkbox");
         const muteBtn = cached.muteBtn || document.getElementById("mute-btn");
 
-        const data = await storageGet({ siteSettings: {} });
-        const settingsKey = getSiteSettingsKey(data.siteSettings || {}, tab.url) || defaultSettingsKey;
         const patch = {
             volume: normalizeControlDb(volumeSlider?.value),
             mono: Boolean(monoCheckbox?.checked),
             muted: Boolean(muteBtn && muteBtn.classList.contains("muted"))
         };
-        await mutateSiteSettings({ type: "merge", key: settingsKey, patch });
+        await mutateSiteSettings({
+            type: "mergeForUrl",
+            url: tab.url,
+            defaultKey: defaultSettingsKey,
+            patch
+        });
 
         if (tab && tab.id) {
             try {
@@ -546,9 +548,7 @@ async function toggleRemember(tab) {
         if (rememberCheckbox && rememberCheckbox.checked) {
             await saveSiteSettings(tab);
         } else {
-            const data = await storageGet({ siteSettings: {} });
-            const settingsKey = getSiteSettingsKey(data.siteSettings || {}, tab.url);
-            if (settingsKey) await mutateSiteSettings({ type: "remove", key: settingsKey });
+            await mutateSiteSettings({ type: "removeForUrl", url: tab.url });
         }
     } catch (e) {
         handleError(e);
