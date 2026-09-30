@@ -340,3 +340,30 @@ test('isolated fallback never reuses a GainNode from a closed AudioContext', () 
     assert.match(source, /Previously hooked media lost its AudioContext/);
     assert.match(source, /syncPageAudioHook\(\);\s*\n\s*stopPageBridgeTimers\(\)/);
 });
+
+
+test('whitelist authorization is independent from remembered site settings', () => {
+    const background = readFileSync(join(root, 'background.js'), 'utf8');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const options = readFileSync(join(root, 'options.js'), 'utf8');
+    assert.match(background, /let accessListMutationChain = Promise\.resolve\(\)/);
+    assert.match(background, /type === "setWhitelistMode"/);
+    assert.match(background, /type === "setSiteActive"/);
+    assert.match(content, /\(data\.whitelist \|\| \[\]\)\.some/);
+    assert.doesNotMatch(content, /Whitelist is derived from remembered sites/);
+    assert.match(options, /type: "addWhitelist"/);
+});
+
+test('non-remembered SPA navigation resets ephemeral tab controls', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(source, /lastResolvedControlUrl/);
+    assert.match(source, /controlUrl !== lastResolvedControlUrl/);
+    assert.match(source, /tc\.vars\.dB = 0/);
+});
+
+test('popup ignores stale async volume responses', () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    assert.match(source, /let volumeRequestGeneration = 0/);
+    assert.match(source, /requestGeneration !== volumeRequestGeneration/);
+    assert.match(source, /command: "mutateAccessLists"/);
+});

@@ -18,7 +18,10 @@ const {
     actionSetTitle,
     extractRootDomain,
     normalizeSiteSettingsEntryInput,
+    normalizeBlocklistEntryInput,
     domainMatchesSaved,
+    isUrlRememberedByEntry,
+    isUrlBlockedByEntry,
     isUrlBlockedByEntries,
     purgeLegacyDefaultBlocklist,
     getSiteSettingsKey,
@@ -28,6 +31,7 @@ const {
 const HOTKEY_STEP_DB = 1;
 const commandChains = new Map();
 let siteSettingsMutationChain = Promise.resolve();
+let accessListMutationChain = Promise.resolve();
 
 function mutateSiteSettings(mutation = {}) {
     const run = async () => {
@@ -101,6 +105,109 @@ function mutateSiteSettings(mutation = {}) {
     return siteSettingsMutationChain;
 }
 
+function mutateAccessLists(mutation = {}) {
+    const run = async () => {
+        const data = await storageGet({
+            fqdns: [],
+            whitelist: [],
+            archivedFqdns: [],
+            whitelistMode: false,
+            siteSettings: {}
+        });
+        let fqdns = Array.isArray(data.fqdns) ? [...data.fqdns] : [];
+        let whitelist = Array.isArray(data.whitelist) ? [...data.whitelist] : [];
+        let archivedFqdns = Array.isArray(data.archivedFqdns) ? [...data.archivedFqdns] : [];
+        let whitelistMode = Boolean(data.whitelistMode);
+        const type = String(mutation.type || "");
+        const url = String(mutation.url || "");
+
+        const save = async () => {
+            await storageSet({ fqdns, whitelist, archivedFqdns, whitelistMode });
+            return { ok: true, fqdns, whitelist, archivedFqdns, whitelistMode };
+        };
+
+        if (type === "setSiteActive") {
+            const active = Boolean(mutation.active);
+            if (whitelistMode) {
+                if (active) {
+                    const entry = normalizeSiteSettingsEntryInput(mutation.entry || url);
+                    if (!entry) return { ok: false, reason: "invalid-entry" };
+                    if (!whitelist.includes(entry)) whitelist.push(entry);
+                } else {
+                    whitelist = whitelist.filter(entry => !isUrlRememberedByEntry(url, entry));
+                }
+            } else if (active) {
+                fqdns = fqdns.filter(entry => !isUrlBlockedByEntry(url, entry));
+            } else {
+                const entry = normalizeBlocklistEntryInput(mutation.entry || url);
+                if (!entry) return { ok: false, reason: "invalid-entry" };
+                if (!fqdns.includes(entry)) fqdns.push(entry);
+            }
+            return save();
+        }
+
+        if (type === "addBlocklist") {
+            const entry = normalizeBlocklistEntryInput(mutation.entry);
+            if (!entry) return { ok: false, reason: "invalid-entry" };
+            if (fqdns.includes(entry)) return { ok: false, reason: "exists", entry };
+            fqdns.push(entry);
+            return save();
+        }
+
+        if (type === "removeBlocklist") {
+            const raw = String(mutation.entry || "");
+            fqdns = fqdns.filter(entry => entry !== raw);
+            return save();
+        }
+
+        if (type === "addWhitelist") {
+            const entry = normalizeSiteSettingsEntryInput(mutation.entry);
+            if (!entry) return { ok: false, reason: "invalid-entry" };
+            if (whitelist.includes(entry)) return { ok: false, reason: "exists", entry };
+            whitelist.push(entry);
+            return save();
+        }
+
+        if (type === "removeWhitelist") {
+            const raw = String(mutation.entry || "");
+            whitelist = whitelist.filter(entry => entry !== raw);
+            return save();
+        }
+
+        if (type === "setWhitelistMode") {
+            const enabled = Boolean(mutation.enabled);
+            if (enabled === whitelistMode) return { ok: true, fqdns, whitelist, archivedFqdns, whitelistMode };
+
+            if (enabled) {
+                if (fqdns.length) {
+                    archivedFqdns = [...fqdns];
+                    fqdns = [];
+                }
+                // One-time compatibility bridge: users upgrading from the old
+                // model had "allowed" sites encoded only as remembered profiles.
+                // Seed the explicit whitelist once when entering whitelist mode.
+                if (!whitelist.length) {
+                    whitelist = Object.keys(data.siteSettings || {})
+                        .map(entry => normalizeSiteSettingsEntryInput(entry))
+                        .filter(Boolean);
+                    whitelist = [...new Set(whitelist)];
+                }
+                whitelistMode = true;
+            } else {
+                if (!fqdns.length && archivedFqdns.length) fqdns = [...archivedFqdns];
+                archivedFqdns = [];
+                whitelistMode = false;
+            }
+            return save();
+        }
+
+        return { ok: false, reason: "invalid-operation" };
+    };
+
+    accessListMutationChain = accessListMutationChain.then(run, run);
+    return accessListMutationChain;
+}
+
 function enqueueCommand(command, commandTab) {
     const key = commandTab && Number.isInteger(commandTab.id) ? commandTab.id : "active";
     const previous = commandChains.get(key) || Promise.resolve();
@@ -127,14 +234,14 @@ async function getActiveTab(commandTab) {
 async function getDomainState(tab) {
     if (!tab || !tab.url || isRestrictedUrl(tab.url)) return null;
 
-    const data = await storageGet({ fqdns: [], whitelistMode: false, siteSettings: {} });
+    const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {} });
     const siteSettings = data.siteSettings || {};
     const settingsKey = getSiteSettingsKey(siteSettings, tab.url);
     // Path-aware blocklist matching (issue #69): legacy path entries like
     // "www.twitch.tv/*/clip/*" scope to their path instead of blocking the
     // whole domain.
     const blocked = data.whitelistMode
-        ? !settingsKey
+        ? !(data.whitelist || []).some(entry => isUrlRememberedByEntry(tab.url, entry))
         : isUrlBlockedByEntries(tab.url, data.fqdns || []);
 
     return {
@@ -330,6 +437,16 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
 
         if (message.command === "mutateSiteSettings") {
             mutateSiteSettings(message.mutation)
+                .then((result) => sendResponse(result))
+                .catch((error) => {
+                    handleError(error);
+                    sendResponse({ ok: false, reason: "storage-error" });
+                });
+            return true;
+        }
+
+        if (message.command === "mutateAccessLists") {
+            mutateAccessLists(message.mutation)
                 .then((result) => sendResponse(result))
                 .catch((error) => {
                     handleError(error);

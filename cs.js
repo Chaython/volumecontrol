@@ -7,6 +7,7 @@ const {
     storageSet,
     runtimeSendMessage,
     domainMatchesSaved,
+    isUrlRememberedByEntry,
     isUrlBlockedByEntries,
     purgeLegacyDefaultBlocklist,
     getSiteSettingsKey,
@@ -40,6 +41,7 @@ const BOOST_LIMIT_NOTES = {
 let pageBridgeResyncInterval = null;
 let controlProfileReady = false;
 let profileControlUrl = "";
+let lastResolvedControlUrl = "";
 let startGeneration = 0;
 
 const tc = {
@@ -1439,10 +1441,12 @@ async function start() {
 
         let blocked = false;
         if (data.whitelistMode) {
-            // Whitelist is derived from remembered sites (siteSettings)
-            const remembered = Object.keys(data.siteSettings || {});
-            if (tc.settings.debugMode) log(`start(): remembered samples=[${remembered.slice(0,5).join(',')}]`, 4);
-            if (!siteSettingsKey) blocked = true;
+            // Whitelist authorization is independent from Remembered Settings.
+            // This lets users allow a site while keeping each tab/navigation at
+            // its own ephemeral 0 dB state (issue #72).
+            const allowed = (data.whitelist || []).some(entry => isUrlRememberedByEntry(controlUrl, entry));
+            if (tc.settings.debugMode) log(`start(): whitelist samples=[${(data.whitelist || []).slice(0,5).join(',')}]`, 4);
+            if (!allowed) blocked = true;
         } else {
             // Path-aware matching (issue #69): legacy path entries like
             // "www.twitch.tv/*/clip/*" scope to their path and no longer
@@ -1475,12 +1479,18 @@ async function start() {
             const s = data.siteSettings[siteSettingsKey];
             if (s.volume !== undefined) tc.vars.dB = normalizeDb(s.volume);
             if (s.mono !== undefined) tc.vars.mono = s.mono;
-            // Restore the remembered mute too: "muted" is persisted as part of
-            // the remembered triple (and re-applied when the popup opens), so
-            // leaving it out here meant a remembered-muted site audibly played
-            // after every navigation until the popup happened to be opened.
             if (s.muted !== undefined) tc.vars.muted = Boolean(s.muted);
+        } else if (lastResolvedControlUrl && controlUrl && controlUrl !== lastResolvedControlUrl) {
+            // "Remember" off means the control state is ephemeral. Reset when
+            // an SPA moves to a new video/page instead of carrying the previous
+            // video's dB/mute/mono state forward. Separate tabs already have
+            // separate content-script state; this also gives issue #72 the
+            // expected new-video default on URL-changing players such as YouTube.
+            tc.vars.dB = 0;
+            tc.vars.mono = false;
+            tc.vars.muted = false;
         }
+        lastResolvedControlUrl = controlUrl;
 
         applyState();
         ensurePageBridgeResync();

@@ -24,9 +24,14 @@ const {
 const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
 const WHEEL_STEP_DB = 1;  // volume change per wheel notch (matches hotkey step)
 let siteSettingsSaveChain = Promise.resolve();
+let volumeRequestGeneration = 0;
 
 function mutateSiteSettings(mutation) {
   return runtimeSendMessage({ command: "mutateSiteSettings", mutation });
+}
+
+function mutateAccessLists(mutation) {
+  return runtimeSendMessage({ command: "mutateAccessLists", mutation });
 }
 
 function parseDbText(value) {
@@ -206,16 +211,19 @@ async function updateEnableSwitch(tab) {
     try {
         const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {} });
 
-        // When whitelist mode is active, remembered sites determine which pages are allowed.
-        // Hide the enable/active switch to avoid duplicate controls and potential user confusion.
         if (data.whitelistMode) {
-            if (switchLabel) switchLabel.style.display = 'none';
-            // v6.15: a non-remembered site is just as inactive as a blocklisted
-            // one — show the overlay explaining why (same verdict the content
-            // script enforces).
-            if (!getSiteSettingsKey(data.siteSettings || {}, tab.url)) {
-                showError({ type: "exclusion", detail: exclusionOverlayDetail(data, tab.url) });
+            const isAllowed = (data.whitelist || []).some(entry => isUrlRememberedByEntry(tab.url, entry));
+            if (checkbox) checkbox.checked = isAllowed;
+            if (switchLabel) {
+                switchLabel.style.display = '';
+                switchLabel.title = isAllowed
+                    ? "This site is explicitly allowed in whitelist mode."
+                    : "This site is not in your whitelist. Turning Active on adds it and reloads the page.";
             }
+            if (!isAllowed) showError({ type: "exclusion", detail: exclusionOverlayDetail(data, tab.url) });
+            checkbox.onchange = (e) => {
+                toggleSitePermission(domain, !e.target.checked, tab.id, tab.url);
+            };
             return;
         }
 
@@ -253,42 +261,14 @@ async function updateEnableSwitch(tab) {
 
 async function toggleSitePermission(domain, shouldExclude, tabId, tabUrl) {
     try {
-        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false });
-        const newData = {};
-
-        if (data.whitelistMode) {
-            // Edit remembered sites through the background's serialized writer.
-            const url = tabUrl || domain;
-            const defaultKey = normalizeSiteSettingsEntryInput(url) || domain;
-            if (shouldExclude) {
-                await mutateSiteSettings({ type: "removeForUrl", url });
-            } else if (defaultKey) {
-                const result = await mutateSiteSettings({
-                    type: "ensureForUrl",
-                    url,
-                    defaultKey,
-                    value: { volume: 0, mono: false, muted: false }
-                });
-                if (result && result.ok && tabId) {
-                    try {
-                        tabsSendMessage(tabId, { command: "setVolume", dB: 0 }).catch(() => {});
-                        tabsSendMessage(tabId, { command: "setMono", mono: false }).catch(() => {});
-                    } catch (e) { /* ignore */ }
-                }
-            }
-        } else {
-            newData.fqdns = data.fqdns || [];
-            if (shouldExclude) {
-                if (!newData.fqdns.includes(domain)) newData.fqdns.push(domain);
-            } else {
-                // Remove EVERY entry that keeps this URL inactive — including
-                // legacy raw entries like "www.twitch.tv/*/clip/*" that an
-                // exact indexOf(domain) could never find (issue #69: toggling
-                // Active reloaded the page but stayed off).
-                newData.fqdns = newData.fqdns.filter(entry => !isUrlBlockedByEntry(tabUrl, entry));
-            }
-            await storageSet({ fqdns: newData.fqdns });
-        }
+        const url = tabUrl || domain;
+        const result = await mutateAccessLists({
+            type: "setSiteActive",
+            url,
+            entry: domain || url,
+            active: !shouldExclude
+        });
+        if (!result || !result.ok) throw new Error(result && result.reason ? result.reason : "Could not update site access");
 
         await tabsReload(tabId);
         window.close();
@@ -468,6 +448,7 @@ function saveSiteSettings(tab) {
 }
 
 async function setVolume(dB, tab, options = {}) {
+  const requestGeneration = ++volumeRequestGeneration;
   let normalizedDb = setDisplayedVolume(dB);
 
   if (tab) {
@@ -486,6 +467,11 @@ async function setVolume(dB, tab, options = {}) {
       const response = await tabsSendMessage(tab.id, {
           command: "getAudioControlState"
       }, TOP_FRAME_OPTIONS).catch(handleError);
+
+      // A newer slider/text request has already been issued. The newer message
+      // is authoritative; do not let this older response snap the UI backward,
+      // overwrite its remembered value, or repaint the badge.
+      if (requestGeneration !== volumeRequestGeneration) return;
 
       if (response && response.response) {
           applyAudioControlState(response.response);

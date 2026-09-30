@@ -14,8 +14,8 @@
             Enable Whitelist Mode
         </label>
         <span class="hint">
-            <strong>Checked:</strong> Extension ONLY runs on sites you have remembered (in Remembered Settings). Enabling whitelist mode will move your current blacklist into an archive (so it can be restored if you switch back).<br>
-            <strong>Unchecked:</strong> Extension runs everywhere EXCEPT sites listed below.
+            <strong>Checked:</strong> Extension ONLY runs on sites in the Allowed Sites list below. Whitelist authorization is independent from Remembered Settings, so you can allow a site without sharing its saved volume between tabs. Enabling whitelist mode archives your current blocklist so it can be restored later.<br>
+            <strong>Unchecked:</strong> Extension runs everywhere EXCEPT sites in the Blocked Sites list below.
         </span>
     </div>
 
@@ -26,7 +26,7 @@
     </div>
     <div id="addFqdnStatus" class="add-status" hidden></div>
     <div class="hint">
-        <strong>Optional path:</strong> an entry with a path blocks only that part of a site (e.g. <em>example.com/videos</em>). Use <em>*</em> to match anything except a <em>/</em> (e.g. <em>example.com/*/season/*</em>). Without a path, the whole site (including subdomains) is blocked. Press <strong>Enter</strong> to add.
+        <strong>Optional path:</strong> the list is a blocklist normally and an allow-list in Whitelist Mode. A path scopes the entry (e.g. <em>example.com/videos</em>); <em>*</em> matches within a path segment. Without a path, the whole site including subdomains is matched. Press <strong>Enter</strong> to add.
     </div>
     <div id="fqdnList" class="list-container">
         </div>

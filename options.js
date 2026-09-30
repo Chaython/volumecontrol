@@ -20,6 +20,10 @@ function mutateSiteSettings(mutation) {
     return runtimeSendMessage({ command: "mutateSiteSettings", mutation });
 }
 
+function mutateAccessLists(mutation) {
+    return runtimeSendMessage({ command: "mutateAccessLists", mutation });
+}
+
 function normalizeDebugRouteMode(value) {
     return value === 'webaudio' || value === 'native' ? value : 'auto';
 }
@@ -352,19 +356,7 @@ async function renderFqdnList() {
         container.innerHTML = '';
 
         const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, siteSettings: {}, archivedFqdns: [] });
-        const fqdns = data.fqdns || [];
-        let list;
-        if (data.whitelistMode) {
-            // When whitelist mode is active we hide the blocklist; show an informational message about archived sites
-            const archivedCount = (data.archivedFqdns || []).length;
-            const empty = document.createElement('div');
-            empty.className = 'empty-msg';
-            empty.textContent = `Blocklist is hidden while whitelist mode is active. Archived ${archivedCount} site${archivedCount === 1 ? '' : 's'}. Manage allowed sites in Remembered Settings.`;
-            container.appendChild(empty);
-            return;
-        } else {
-            list = fqdns;
-        }
+        const list = data.whitelistMode ? (data.whitelist || []) : (data.fqdns || []);
 
         if (!list.length) {
             const empty = document.createElement('div');
@@ -389,9 +381,10 @@ async function renderFqdnList() {
             removeBtn.className = 'remove-btn';
             removeBtn.textContent = '×';
             removeBtn.addEventListener('click', async () => {
-                const idx = fqdns.indexOf(d);
-                if (idx > -1) fqdns.splice(idx, 1);
-                await storageSet({ fqdns });
+                await mutateAccessLists({
+                    type: data.whitelistMode ? "removeWhitelist" : "removeBlocklist",
+                    entry: d
+                });
             });
 
             controls.appendChild(removeBtn);
@@ -519,40 +512,22 @@ async function initOptions() {
         const fqdnAddGroup = newFqdnInput ? newFqdnInput.parentElement : null;
         const fqdnListContainer = document.getElementById('fqdnList');
 
-        // Helper to show/hide the blocklist UI
-        function setBlocklistVisible(show) {
-            if (listTitle) listTitle.style.display = show ? 'block' : 'none';
-            if (fqdnAddGroup) fqdnAddGroup.style.display = show ? 'flex' : 'none';
-            if (fqdnListContainer) fqdnListContainer.style.display = show ? 'block' : 'none';
+        function updateAccessListLabels(enabled) {
+            if (listTitle) listTitle.textContent = enabled ? 'Allowed Sites' : 'Blocked Sites';
+            if (fqdnAddGroup) fqdnAddGroup.style.display = 'flex';
+            if (fqdnListContainer) fqdnListContainer.style.display = 'block';
         }
 
-        // Initialize visibility
-        setBlocklistVisible(!data.whitelistMode);
+        updateAccessListLabels(Boolean(data.whitelistMode));
 
         whitelistModeCheckbox.addEventListener('change', async (e) => {
             const enabled = e.target.checked;
-            if (enabled) {
-                // Archive current blacklist instead of deleting it
-                const d = await storageGet({ fqdns: [], archivedFqdns: [] });
-                if (d.fqdns && d.fqdns.length) {
-                    await storageSet({ archivedFqdns: d.fqdns, fqdns: [] });
-                } else {
-                    // ensure archivedFqdns exists
-                    await storageSet({ archivedFqdns: d.archivedFqdns || [] });
-                }
-                await storageSet({ whitelistMode: true });
-                setBlocklistVisible(false);
-            } else {
-                // Restore archived blacklist if current list is empty
-                const d = await storageGet({ fqdns: [], archivedFqdns: [] });
-                if ((!d.fqdns || d.fqdns.length === 0) && d.archivedFqdns && d.archivedFqdns.length) {
-                    await storageSet({ fqdns: d.archivedFqdns, archivedFqdns: [], whitelistMode: false });
-                } else {
-                    await storageSet({ whitelistMode: false });
-                }
-                setBlocklistVisible(true);
+            const result = await mutateAccessLists({ type: "setWhitelistMode", enabled });
+            if (!result || !result.ok) {
+                e.target.checked = !enabled;
+                return;
             }
-            // Immediately update displayed list so UI reflects mode change without waiting for storage.onChanged
+            updateAccessListLabels(enabled);
             await renderFqdnList();
         });
     }
@@ -621,26 +596,17 @@ async function initOptions() {
                 : normalizeBlocklistEntryInput(newFqdnInput.value);
             if (!v) return;
             if (data.whitelistMode) {
-                // Add as a remembered site so whitelist contains only remembered sites.
-                const result = await mutateSiteSettings({
-                    type: "create",
-                    key: v,
-                    value: { volume: 0, mono: false, muted: false }
-                });
+                const result = await mutateAccessLists({ type: "addWhitelist", entry: v });
                 if (!result || !result.ok) {
-                    showStatus(`"${v}" is already a remembered site.`);
+                    showStatus(`"${v}" is already in your whitelist.`);
                     return;
                 }
             } else {
-                data.fqdns = data.fqdns || [];
-                if (data.fqdns.includes(v)) {
-                    // v6.15: say so instead of a silent no-op; keep the typed
-                    // text so it can be edited into a path/wildcard variant.
+                const result = await mutateAccessLists({ type: "addBlocklist", entry: v });
+                if (!result || !result.ok) {
                     showStatus(`"${v}" is already in your blocklist.`);
                     return;
                 }
-                data.fqdns.push(v);
-                await storageSet({ fqdns: data.fqdns });
             }
             // Refresh list immediately so the UI reflects the addition without waiting for storage.onChanged
             await renderFqdnList();
