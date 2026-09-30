@@ -65,7 +65,12 @@ const tc = {
     // All known media elements on the page (hooked, fallback, or page-managed).
     // Populated by registerMediaElement and init. Used by applyState to avoid
     // querySelectorAll on every state change.
-    knownMediaElements: new Set()
+    knownMediaElements: new Set(),
+    audioSuspendPromise: null,
+    hasRememberedSettings: false,
+    ephemeralActiveElement: null,
+    ephemeralSourceKeys: new WeakMap(),
+    ephemeralBoundaryPending: new WeakSet()
   }
 };
 
@@ -902,7 +907,7 @@ function applyState() {
 
             if (el.dataset.vcHooked === "true") {
                 if (routeNeeded && isMediaPlaying(el) && tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
-                    tc.vars.audioCtx.resume().then(applyState);
+                    resumeAudioContext();
                 }
                 continue;
             }
@@ -991,6 +996,21 @@ function stopPageBridgeTimers() {
     }
 }
 
+function resumeAudioContext() {
+    const context = tc.vars.audioCtx;
+    if (!context || typeof context.resume !== "function") return Promise.resolve();
+    const resumeNow = async () => {
+        try {
+            if (context.state === "suspended") await context.resume();
+            applyState();
+        } catch (e) {
+            if (tc.settings.debugMode) log(`audio context resume failed: ${e && e.message}`, 2);
+        }
+    };
+    const pending = tc.vars.audioSuspendPromise;
+    return pending ? pending.catch(() => {}).then(resumeNow) : resumeNow();
+}
+
 function suspendAudioContextIfIdle() {
     if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') return;
     if (tc.vars.audioCtx.state !== 'running') return;
@@ -1035,16 +1055,58 @@ function suspendAudioContextIfIdle() {
     // alive lets already-hooked elements resume on the same context, and
     // lets new elements reuse the suspended context instead of creating a
     // wasteful new one.
+    if (tc.vars.audioSuspendPromise) return;
+    const context = tc.vars.audioCtx;
+    let promise;
+    promise = Promise.resolve()
+        .then(() => context.suspend())
+        .then(() => {
+            if (tc.settings.debugMode) {
+                log(hasHooked
+                    ? "audio context suspended (media paused) — device handle released"
+                    : "audio context suspended (no hooked media) — device handle released", 4);
+            }
+        })
+        .catch((e) => {
+            if (tc.settings.debugMode) log(`audio context suspend failed: ${e && e.message}`, 2);
+        })
+        .finally(() => {
+            if (tc.vars.audioSuspendPromise === promise) tc.vars.audioSuspendPromise = null;
+        });
+    tc.vars.audioSuspendPromise = promise;
+}
+
+function mediaSourceKey(element) {
     try {
-        tc.vars.audioCtx.suspend();
-        if (tc.settings.debugMode) {
-            log(hasHooked
-                ? "audio context suspended (media paused) — device handle released"
-                : "audio context suspended (no hooked media) — device handle released", 4);
-        }
+        if (!element) return "";
+        if (element.srcObject) return "stream:" + String(element.srcObject.id || "");
+        return String(element.currentSrc || element.src || "");
     } catch (e) {
-        if (tc.settings.debugMode) log(`audio context suspend failed: ${e && e.message}`, 2);
+        return "";
     }
+}
+
+function resetEphemeralControlsForMediaBoundary(element) {
+    if (tc.vars.hasRememberedSettings || tc.vars.isBlocked || !element) return;
+    const previousElement = tc.vars.ephemeralActiveElement;
+    const previousSource = tc.vars.ephemeralSourceKeys.get(element) || "";
+    const currentSource = mediaSourceKey(element);
+    const pendingBoundary = tc.vars.ephemeralBoundaryPending.has(element);
+    const changedElement = Boolean(previousElement && previousElement !== element);
+    const changedSource = Boolean(previousSource && currentSource && previousSource !== currentSource);
+
+    if (previousElement && (changedElement || changedSource || pendingBoundary)) {
+        tc.vars.dB = 0;
+        tc.vars.mono = false;
+        tc.vars.muted = false;
+        lastSyncedPageAudioState = null;
+        applyState();
+        syncPageAudioHook();
+    }
+
+    tc.vars.ephemeralActiveElement = element;
+    tc.vars.ephemeralSourceKeys.set(element, currentSource);
+    tc.vars.ephemeralBoundaryPending.delete(element);
 }
 
 function registerMediaElement(element) {
@@ -1075,6 +1137,7 @@ function registerMediaElement(element) {
     element.dataset.vcWatched = "true";
 
     const hookIfPlaying = () => {
+        if (isMediaPlaying(element)) resetEphemeralControlsForMediaBoundary(element);
         if (isPageAudioManaged(element)) {
             if (element.dataset.vcFallback === 'true') clearFallbackVolume(element);
             return;
@@ -1110,7 +1173,13 @@ function registerMediaElement(element) {
         hookIfPlaying();
     }, { passive: true });
     // v6.14: a new source must re-earn its EME decryption proof.
-    element.addEventListener('emptied', () => resetEmePending(element), { passive: true });
+    element.addEventListener('emptied', () => {
+        resetEmePending(element);
+        tc.vars.ephemeralBoundaryPending.add(element);
+    }, { passive: true });
+    element.addEventListener('loadstart', () => {
+        if (tc.vars.ephemeralActiveElement === element) tc.vars.ephemeralBoundaryPending.add(element);
+    }, { passive: true });
     const scheduleSuspend = () => setTimeout(suspendAudioContextIfIdle, 250);
     for (const evt of ['pause', 'ended', 'emptied']) {
         element.addEventListener(evt, scheduleSuspend, { passive: true });
@@ -1139,7 +1208,7 @@ function connectOutput(element) {
         }
         if (tc.vars.mediaElements) tc.vars.mediaElements.add(element);
         if (isMediaPlaying(element) && tc.vars.audioCtx.state === 'suspended') {
-            tc.vars.audioCtx.resume().then(applyState);
+            resumeAudioContext();
         }
         return;
     }
@@ -1257,7 +1326,7 @@ function connectOutput(element) {
             // Wake up the AudioContext when media starts playing
             element.addEventListener('play', () => {
                 if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
-                    tc.vars.audioCtx.resume().then(applyState);
+                    resumeAudioContext();
                 }
             });
 
@@ -1428,6 +1497,7 @@ async function start() {
         if (!isTopFrame() && controlUrl) profileControlUrl = controlUrl;
         const currentDomain = extractRootDomain(controlUrl);
         const siteSettingsKey = applyEffectiveDebugSettings(data, controlUrl);
+        tc.vars.hasRememberedSettings = Boolean(siteSettingsKey);
 
         // Debug: show state used to decide blocking
         if (tc.settings.debugMode) {

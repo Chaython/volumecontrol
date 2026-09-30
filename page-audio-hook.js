@@ -37,6 +37,11 @@
     let maintenanceTimerIds = [];
     let howlerPollId = null;
     let gestureListenersInstalled = false;
+    let authorizationResolved = false;
+    let preflightReleaseTimer = null;
+    const preflightMutedElements = new Set();
+    const preflightOriginalMuted = new WeakMap();
+    const pendingContextSuspends = new WeakMap();
 
     const graphs = new WeakMap();
     const contexts = new Set();
@@ -201,6 +206,30 @@
         }
     }
 
+    function takeDestinationConnections(source, predicate) {
+        const matches = [];
+        for (const entry of Array.from(destinationConnections)) {
+            if (nodeFromRef(entry.sourceRef) !== source) continue;
+            if (!predicate(entry)) continue;
+            destinationConnections.delete(entry);
+            matches.push(entry);
+        }
+        return matches;
+    }
+
+    function disconnectTrackedRouteEntry(source, entry) {
+        if (!entry || !entry.routed) return false;
+        const graph = graphs.get(nodeFromRef(entry.contextRef));
+        if (!graph) return false;
+        try {
+            disconnectNative(source, graph.gain, entry.outputIndex, 0);
+            return true;
+        } catch (e) {
+            log(`tracked route disconnect failed: ${e && e.message}`);
+            return false;
+        }
+    }
+
     function sweepDeadDestinationConnections() {
         // Periodically remove entries whose source or destination has been GC'd.
         // This prevents the Set from growing unboundedly on pages that create
@@ -221,14 +250,69 @@
     }
 
     function resumeContext(context) {
-        try {
-            if (context && context.state === "suspended" && typeof context.resume === "function") {
-                context.resume();
+        if (!context || typeof context.resume !== "function") return Promise.resolve();
+        const resumeNow = async () => {
+            try {
+                if (context.state === "suspended") await context.resume();
+                selfSuspendedContexts.delete(context);
+            } catch (e) {
+                log(`context resume failed: ${e && e.message}`);
             }
-        } catch (e) {
-            log(`context resume failed: ${e && e.message}`);
+        };
+        const pending = pendingContextSuspends.get(context);
+        return pending ? pending.catch(() => {}).then(resumeNow) : resumeNow();
+    }
+
+    function suspendContext(context, { trackSelf = false, label = "context" } = {}) {
+        if (!context || typeof context.suspend !== "function") return Promise.resolve();
+        const existing = pendingContextSuspends.get(context);
+        if (existing) return existing;
+        if (context.state !== "running") return Promise.resolve();
+
+        let promise;
+        promise = Promise.resolve()
+            .then(() => context.suspend())
+            .then(() => {
+                if (trackSelf && context.state === "suspended") selfSuspendedContexts.add(context);
+            })
+            .catch((e) => {
+                log(`${label} suspend failed: ${e && e.message}`);
+            })
+            .finally(() => {
+                if (pendingContextSuspends.get(context) === promise) pendingContextSuspends.delete(context);
+            });
+        pendingContextSuspends.set(context, promise);
+        return promise;
+    }
+
+    function preflightMuteMedia(element) {
+        if (authorizationResolved || !isMediaElement(element) || preflightMutedElements.has(element)) return;
+        try {
+            preflightOriginalMuted.set(element, Boolean(element.muted));
+            preflightMutedElements.add(element);
+            element.muted = true;
+        } catch (e) {}
+    }
+
+    function releasePreflightMediaMute() {
+        authorizationResolved = true;
+        if (preflightReleaseTimer !== null) {
+            clearTimeout(preflightReleaseTimer);
+            preflightReleaseTimer = null;
+        }
+        for (const element of Array.from(preflightMutedElements)) {
+            try { element.muted = Boolean(preflightOriginalMuted.get(element)); } catch (e) {}
+            preflightMutedElements.delete(element);
         }
     }
+
+    function preflightPlaybackCapture(event) {
+        if (!authorizationResolved) preflightMuteMedia(event && event.target);
+    }
+
+    document.addEventListener("play", preflightPlaybackCapture, true);
+    document.addEventListener("playing", preflightPlaybackCapture, true);
+    preflightReleaseTimer = setTimeout(releasePreflightMediaMute, 250);
 
     function isMediaPlaying(element) {
         return Boolean(element && !element.paused && !element.ended);
@@ -300,16 +384,11 @@
         // hasAnyRoute is preserved here as documentation; suspend() works for
         // both branches (with routes -> keep routes alive but idle; without
         // routes -> just release the device handle).
-        try {
-            if (typeof mediaAudioContext.suspend === "function") {
-                mediaAudioContext.suspend();
-                log(hasAnyRoute
-                    ? "media context suspended (idle routes kept) — device handle released"
-                    : "media context suspended (no routes) — device handle released");
-            }
-        } catch (e) {
-            log(`media context suspend failed: ${e && e.message}`);
-        }
+        suspendContext(mediaAudioContext, { label: "media context" }).then(() => {
+            log(hasAnyRoute
+                ? "media context suspended (idle routes kept) — device handle released"
+                : "media context suspended (no routes) — device handle released");
+        });
     }
 
     // Iterate every tracked page context, pruning dead/closed entries.
@@ -342,9 +421,8 @@
     // my game audio".
     function resumeIfSelfSuspended(context) {
         try {
-            if (context && selfSuspendedContexts.has(context)) {
+            if (context && (selfSuspendedContexts.has(context) || pendingContextSuspends.has(context))) {
                 resumeContext(context);
-                if (context.state === "running") selfSuspendedContexts.delete(context);
             }
         } catch (e) {}
     }
@@ -376,18 +454,9 @@
             }
             if (hasTrackedConnection) return;
 
-            try {
-                if (typeof ctx.suspend === "function") {
-                    ctx.suspend();
-                    // Remember that WE suspended this context so a later
-                    // destination connection resumes it (see
-                    // resumeIfSelfSuspended).
-                    selfSuspendedContexts.add(ctx);
-                    log(`page context suspended (idle): state=${ctx.state}`);
-                }
-            } catch (e) {
-                log(`page context suspend failed: ${e && e.message}`);
-            }
+            suspendContext(ctx, { trackSelf: true, label: "page context" }).then(() => {
+                log(`page context suspended (idle): state=${ctx.state}`);
+            });
         });
     }
 
@@ -1766,16 +1835,40 @@
 
         if (nativeDisconnect) {
             AudioNodePrototype.disconnect = function patchedDisconnect(destination) {
-                if (arguments.length === 0 && !vcNodes.has(this)) {
+                if (vcNodes.has(this)) return nativeDisconnect.apply(this, arguments);
+
+                if (arguments.length === 0) {
                     removeDestinationConnectionsForSource(this);
                     return nativeDisconnect.apply(this, arguments);
                 }
 
-                if (isContextDestination(destination) && !vcNodes.has(this)) {
-                    const entry = removeDestinationConnection(this, destination, arguments[1], arguments[2]);
-                    if (entry && entry.routed) {
-                        const graph = graphs.get(nodeFromRef(entry.contextRef));
-                        if (graph) return disconnectNative(this, graph.gain, entry.outputIndex, 0);
+                // Standard overload: disconnect(outputIndex)
+                if (typeof destination === "number") {
+                    const outputIndex = destination;
+                    takeDestinationConnections(this, entry => entry.outputIndex === outputIndex);
+                    return nativeDisconnect.apply(this, arguments);
+                }
+
+                if (isContextDestination(destination)) {
+                    const outputIndex = arguments[1];
+                    const inputIndex = arguments[2];
+                    const matches = takeDestinationConnections(this, entry => {
+                        if (nodeFromRef(entry.destinationRef) !== destination) return false;
+                        if (arguments.length >= 2 && entry.outputIndex !== outputIndex) return false;
+                        if (arguments.length >= 3 && entry.inputIndex !== inputIndex) return false;
+                        return true;
+                    });
+
+                    if (matches.length) {
+                        let hadNative = false;
+                        for (const entry of matches) {
+                            if (entry.routed) disconnectTrackedRouteEntry(this, entry);
+                            else hadNative = true;
+                        }
+                        // Routed connections no longer point at the page's
+                        // destination, so calling native disconnect(destination)
+                        // for an all-routed set can throw InvalidAccessError.
+                        if (!hadNative) return undefined;
                     }
                 }
 
@@ -1941,6 +2034,9 @@
 
     function patchAudioConstructor() {
         if (!nativeAudioConstructor || nativeAudioConstructor.__volumeControlPatched) return;
+        // If the page installed its own Audio constructor wrapper while we were
+        // disabled, do not overwrite it on re-enable.
+        if (window.Audio !== nativeAudioConstructor && !(window.Audio && window.Audio.__volumeControlPatched)) return;
 
         try {
             function VolumeControlAudio(src) {
@@ -2051,34 +2147,31 @@
         // Only restore a method when OUR wrapper is still installed. If the page
         // replaced it after us, leave the page's newer implementation alone.
         if (AudioNodePrototype) {
-            if (AudioNodePrototype.connect && AudioNodePrototype.connect.name === "patchedConnect" && nativeConnect) {
-                AudioNodePrototype.connect = nativeConnect;
-            }
-            if (AudioNodePrototype.disconnect && AudioNodePrototype.disconnect.name === "patchedDisconnect" && nativeDisconnect) {
-                AudioNodePrototype.disconnect = nativeDisconnect;
-            }
-            deletePatchMarker(AudioNodePrototype, "__volumeControlPatched");
+            const ownsConnect = Boolean(AudioNodePrototype.connect && AudioNodePrototype.connect.name === "patchedConnect");
+            const ownsDisconnect = Boolean(!nativeDisconnect || (AudioNodePrototype.disconnect && AudioNodePrototype.disconnect.name === "patchedDisconnect"));
+            if (ownsConnect && nativeConnect) AudioNodePrototype.connect = nativeConnect;
+            if (ownsDisconnect && nativeDisconnect) AudioNodePrototype.disconnect = nativeDisconnect;
+            if (ownsConnect && ownsDisconnect) deletePatchMarker(AudioNodePrototype, "__volumeControlPatched");
         }
 
         if (window.HTMLMediaElement && window.HTMLMediaElement.prototype) {
             const proto = window.HTMLMediaElement.prototype;
             const volumeDescriptor = Object.getOwnPropertyDescriptor(proto, "volume");
-            if (volumeDescriptor && volumeDescriptor.set && volumeDescriptor.set.name === "patchedVolumeSetter" && nativeVolumeDescriptor) {
-                Object.defineProperty(proto, "volume", nativeVolumeDescriptor);
-            }
+            const ownsVolume = Boolean(volumeDescriptor && volumeDescriptor.set && volumeDescriptor.set.name === "patchedVolumeSetter");
+            if (ownsVolume && nativeVolumeDescriptor) Object.defineProperty(proto, "volume", nativeVolumeDescriptor);
             const srcObjectDescriptor = Object.getOwnPropertyDescriptor(proto, "srcObject");
-            if (srcObjectDescriptor && srcObjectDescriptor.set && srcObjectDescriptor.set.name === "patchedSrcObjectSetter" && nativeSrcObjectDescriptor) {
-                Object.defineProperty(proto, "srcObject", nativeSrcObjectDescriptor);
-            }
-            if (proto.play && proto.play.name === "patchedPlay" && nativePlay) proto.play = nativePlay;
-            if (proto.setMediaKeys && proto.setMediaKeys.name === "patchedSetMediaKeys" && nativeSetMediaKeys) proto.setMediaKeys = nativeSetMediaKeys;
-            if (proto.webkitSetMediaKeys && proto.webkitSetMediaKeys.name === "patchedWebkitSetMediaKeys" && nativeWebkitSetMediaKeys) {
-                proto.webkitSetMediaKeys = nativeWebkitSetMediaKeys;
-            }
-            deletePatchMarker(proto, "__volumeControlVolumePatched");
-            deletePatchMarker(proto, "__volumeControlSrcObjectPatched");
-            deletePatchMarker(proto, "__volumeControlPlayPatched");
-            deletePatchMarker(proto, "__volumeControlSetMediaKeysPatched");
+            const ownsSrcObject = Boolean(srcObjectDescriptor && srcObjectDescriptor.set && srcObjectDescriptor.set.name === "patchedSrcObjectSetter");
+            if (ownsSrcObject && nativeSrcObjectDescriptor) Object.defineProperty(proto, "srcObject", nativeSrcObjectDescriptor);
+            const ownsPlay = Boolean(proto.play && proto.play.name === "patchedPlay");
+            if (ownsPlay && nativePlay) proto.play = nativePlay;
+            const ownsSetMediaKeys = Boolean(!nativeSetMediaKeys || (proto.setMediaKeys && proto.setMediaKeys.name === "patchedSetMediaKeys"));
+            const ownsWebkitSetMediaKeys = Boolean(!nativeWebkitSetMediaKeys || (proto.webkitSetMediaKeys && proto.webkitSetMediaKeys.name === "patchedWebkitSetMediaKeys"));
+            if (ownsSetMediaKeys && nativeSetMediaKeys) proto.setMediaKeys = nativeSetMediaKeys;
+            if (ownsWebkitSetMediaKeys && nativeWebkitSetMediaKeys) proto.webkitSetMediaKeys = nativeWebkitSetMediaKeys;
+            if (ownsVolume) deletePatchMarker(proto, "__volumeControlVolumePatched");
+            if (ownsSrcObject) deletePatchMarker(proto, "__volumeControlSrcObjectPatched");
+            if (ownsPlay) deletePatchMarker(proto, "__volumeControlPlayPatched");
+            if (ownsSetMediaKeys && ownsWebkitSetMediaKeys) deletePatchMarker(proto, "__volumeControlSetMediaKeysPatched");
         }
 
         if (window.Audio && window.Audio.name === "VolumeControlAudio" && nativeAudioConstructor) {
@@ -2086,13 +2179,11 @@
         }
 
         if (DocumentPrototype) {
-            if (DocumentPrototype.createElement && DocumentPrototype.createElement.name === "patchedCreateElement" && nativeCreateElement) {
-                DocumentPrototype.createElement = nativeCreateElement;
-            }
-            if (DocumentPrototype.createElementNS && DocumentPrototype.createElementNS.name === "patchedCreateElementNS" && nativeCreateElementNS) {
-                DocumentPrototype.createElementNS = nativeCreateElementNS;
-            }
-            deletePatchMarker(DocumentPrototype, "__volumeControlCreateElementPatched");
+            const ownsCreateElement = Boolean(DocumentPrototype.createElement && DocumentPrototype.createElement.name === "patchedCreateElement");
+            const ownsCreateElementNS = Boolean(!nativeCreateElementNS || (DocumentPrototype.createElementNS && DocumentPrototype.createElementNS.name === "patchedCreateElementNS"));
+            if (ownsCreateElement && nativeCreateElement) DocumentPrototype.createElement = nativeCreateElement;
+            if (ownsCreateElementNS && nativeCreateElementNS) DocumentPrototype.createElementNS = nativeCreateElementNS;
+            if (ownsCreateElement && ownsCreateElementNS) deletePatchMarker(DocumentPrototype, "__volumeControlCreateElementPatched");
         }
 
         if (NavigatorPrototype &&
@@ -2112,13 +2203,11 @@
         }
 
         if (window.history) {
-            if (window.history.pushState && window.history.pushState.name === "patchedHistoryMethod" && nativeHistoryPushState) {
-                window.history.pushState = nativeHistoryPushState;
-            }
-            if (window.history.replaceState && window.history.replaceState.name === "patchedHistoryMethod" && nativeHistoryReplaceState) {
-                window.history.replaceState = nativeHistoryReplaceState;
-            }
-            deletePatchMarker(window.history, "__volumeControlNavigationPatched");
+            const ownsPushState = Boolean(window.history.pushState && window.history.pushState.name === "patchedHistoryMethod");
+            const ownsReplaceState = Boolean(window.history.replaceState && window.history.replaceState.name === "patchedHistoryMethod");
+            if (ownsPushState && nativeHistoryPushState) window.history.pushState = nativeHistoryPushState;
+            if (ownsReplaceState && nativeHistoryReplaceState) window.history.replaceState = nativeHistoryReplaceState;
+            if (ownsPushState && ownsReplaceState) deletePatchMarker(window.history, "__volumeControlNavigationPatched");
         }
         if (spaNavigationNotify) {
             window.removeEventListener("popstate", spaNavigationNotify);
@@ -2214,6 +2303,7 @@
         }
         applyStateToGraphs();
         applyStateToMediaElements();
+        releasePreflightMediaMute();
         if (!state.enabled) restorePatchedPageApis();
     }
 

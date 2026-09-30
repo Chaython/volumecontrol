@@ -428,3 +428,41 @@ test('whitelist migration is seamless in popup and hotkeys before the one-time w
     assert.match(background, /!data\.whitelistSeparatedV1 && Boolean\(settingsKey\)/);
     assert.match(popup, /legacyAllowed = !data\.whitelistSeparatedV1/);
 });
+
+
+test('AudioNode disconnect overloads keep route tracking in sync', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(source, /typeof destination === "number"/);
+    assert.match(source, /takeDestinationConnections\(this, entry => entry\.outputIndex === outputIndex\)/);
+    assert.match(source, /if \(arguments\.length >= 3 && entry\.inputIndex !== inputIndex\) return false/);
+});
+
+test('AudioContext suspend and resume operations are serialized', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(page, /const pendingContextSuspends = new WeakMap\(\)/);
+    assert.match(page, /pendingContextSuspends\.get\(context\)/);
+    assert.match(content, /audioSuspendPromise/);
+    assert.match(content, /function resumeAudioContext\(\)/);
+});
+
+test('page wrapper ownership survives exclusion and re-enable', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(source, /if \(ownsConnect && ownsDisconnect\) deletePatchMarker/);
+    assert.match(source, /if \(ownsPushState && ownsReplaceState\) deletePatchMarker/);
+    assert.match(source, /window\.Audio !== nativeAudioConstructor/);
+});
+
+test('non-remembered controls reset on same-URL media boundaries', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(source, /function resetEphemeralControlsForMediaBoundary\(element\)/);
+    assert.match(source, /ephemeralBoundaryPending/);
+    assert.match(source, /element\.addEventListener\('loadstart'/);
+});
+
+test('startup preflight bounds native-media burst before authorization resolves', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(source, /preflightMutedElements/);
+    assert.match(source, /document\.addEventListener\("play", preflightPlaybackCapture, true\)/);
+    assert.match(source, /setTimeout\(releasePreflightMediaMute, 250\)/);
+});
