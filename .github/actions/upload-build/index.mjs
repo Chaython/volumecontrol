@@ -3,13 +3,18 @@ import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-
-const install = spawnSync(
-    npm,
-    ['install', '--no-save', '--package-lock=false', '@actions/artifact@6.2.1'],
-    { cwd: workspace, stdio: 'inherit', env: process.env }
-);
+const installArgs = ['install', '--no-save', '--package-lock=false', '@actions/artifact@6.2.1'];
+const install = process.platform === 'win32'
+    ? spawnSync(
+        process.env.ComSpec || 'cmd.exe',
+        ['/d', '/s', '/c', 'npm ' + installArgs.join(' ')],
+        { cwd: workspace, stdio: 'inherit', env: process.env }
+    )
+    : spawnSync(
+        'npm',
+        installArgs,
+        { cwd: workspace, stdio: 'inherit', env: process.env }
+    );
 
 if (install.error) throw install.error;
 if (install.status !== 0) {
