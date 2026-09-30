@@ -1,0 +1,167 @@
+name: Daily prerelease
+
+on:
+  schedule:
+    # Runs once per day. GitHub Actions cron uses UTC.
+    - cron: "17 09 * * *"
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: "Create a prerelease even if no releasable files changed"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-prerelease
+  cancel-in-progress: false
+
+jobs:
+  prerelease:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for releasable changes
+        id: changes
+        shell: pwsh
+        env:
+          FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_release || 'false' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $head = (git rev-parse HEAD).Trim()
+          $shortSha = $head.Substring(0, 7)
+          $lastTag = git tag --list "vc-daily-*" --sort=-creatordate | Select-Object -First 1
+          $force = $env:FORCE_RELEASE -eq "true"
+          $shouldRelease = $false
+
+          if ($force) {
+              Write-Host "Manual force_release requested."
+              $shouldRelease = $true
+          }
+          elseif (-not $lastTag) {
+              Write-Host "No previous automated prerelease tag exists; creating the first one."
+              $shouldRelease = $true
+          }
+          else {
+              $lastSha = (git rev-list -n 1 $lastTag).Trim()
+
+              if ($lastSha -eq $head) {
+                  Write-Host "HEAD is already the commit used by $lastTag."
+              }
+              else {
+                  $changedFiles = @(git diff --name-only "$lastTag..HEAD")
+                  $releasableFiles = @(
+                      $changedFiles | Where-Object {
+                          $_ -match '^[^/]+\.(js|html|css)$' -or
+                          $_ -in @('manifest.json', 'ico.svg', 'chrome.png', 'package.json', 'package-lock.json') -or
+                          $_ -like 'scripts/*'
+                      }
+                  )
+
+                  if ($changedFiles.Count -gt 0) {
+                      Write-Host "Changes since $($lastTag):"
+                      $changedFiles | ForEach-Object { Write-Host "  $_" }
+                  }
+
+                  if ($releasableFiles.Count -gt 0) {
+                      Write-Host "Releasable changes detected:"
+                      $releasableFiles | ForEach-Object { Write-Host "  $_" }
+                      $shouldRelease = $true
+                  }
+                  else {
+                      Write-Host "Only documentation/workflow/non-package changes were made; skipping prerelease."
+                  }
+              }
+          }
+
+          "should_release=$($shouldRelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "last_tag=$lastTag" >> $env:GITHUB_OUTPUT
+          "head=$head" >> $env:GITHUB_OUTPUT
+          "short_sha=$shortSha" >> $env:GITHUB_OUTPUT
+
+      - name: Set up Node.js
+        if: steps.changes.outputs.should_release == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install pinned build dependencies
+        if: steps.changes.outputs.should_release == 'true'
+        run: npm ci
+
+      - name: Validate minifier toolchain
+        if: steps.changes.outputs.should_release == 'true'
+        run: node scripts/minify.mjs --check
+
+      - name: Run regression tests
+        if: steps.changes.outputs.should_release == 'true'
+        run: npm test
+
+      - name: Build and minify Firefox and Chrome packages
+        if: steps.changes.outputs.should_release == 'true'
+        shell: powershell
+        run: .\scripts\build.ps1
+
+      - name: Create SHA-256 checksums
+        if: steps.changes.outputs.should_release == 'true'
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath dist -Filter '*.zip' |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            } | Set-Content -LiteralPath dist\SHA256SUMS.txt -Encoding utf8
+
+      - name: Prepare prerelease metadata
+        if: steps.changes.outputs.should_release == 'true'
+        id: meta
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+          $utcNow = (Get-Date).ToUniversalTime()
+          $dateTag = $utcNow.ToString("yyyyMMdd")
+          $dateDisplay = $utcNow.ToString("yyyy-MM-dd")
+          $shortSha = "${{ steps.changes.outputs.short_sha }}"
+          $tag = "vc-daily-v$($manifest.version)-$dateTag.$env:GITHUB_RUN_NUMBER-$shortSha"
+          $title = "Volume Control v$($manifest.version) daily $dateDisplay ($shortSha)"
+
+          "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "title=$title" >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub prerelease
+        if: steps.changes.outputs.should_release == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $title = "${{ steps.meta.outputs.title }}"
+          $assets = @(
+              Get-ChildItem -LiteralPath dist -Filter '*.zip' | Sort-Object Name | ForEach-Object { $_.FullName }
+          )
+          $assets += (Resolve-Path dist\SHA256SUMS.txt).Path
+
+          if ($assets.Count -lt 3) {
+              throw "Expected Firefox ZIP, Chrome ZIP, and SHA256SUMS.txt before publishing."
+          }
+
+          gh release create $tag @assets `
+            --repo "${{ github.repository }}" `
+            --target "$env:GITHUB_SHA" `
+            --prerelease `
+            --title "$title" `
+            --generate-notes
