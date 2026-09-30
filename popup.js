@@ -24,6 +24,17 @@ const {
 const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
 const WHEEL_STEP_DB = 1;  // volume change per wheel notch (matches hotkey step)
 let siteSettingsSaveChain = Promise.resolve();
+
+function mutateSiteSettings(mutation) {
+  return runtimeSendMessage({ command: "mutateSiteSettings", mutation });
+}
+
+function parseDbText(value) {
+  const raw = String(value == null ? "" : value).trim();
+  if (!/^[+-]?\d+$/.test(raw)) return null;
+  return normalizeDb(Number(raw));
+}
+
 const cached = {
   slider: null,
   volumeText: null,
@@ -252,21 +263,18 @@ async function toggleSitePermission(domain, shouldExclude, tabId, tabUrl) {
             const settingsKey = getSiteSettingsKey(settings, tabUrl || domain);
             const defaultKey = normalizeSiteSettingsEntryInput(tabUrl || domain) || domain;
             if (shouldExclude) {
-                if (settingsKey) {
-                    delete settings[settingsKey];
-                    await storageSet({ siteSettings: settings });
-                }
-            } else {
-                if (!settingsKey && defaultKey) {
-                    settings[defaultKey] = { volume: 0, mono: false, muted: false };
-                    await storageSet({ siteSettings: settings });
-                    // Try to apply settings immediately to the tab that requested the change
-                    if (tabId) {
-                        try {
-                            tabsSendMessage(tabId, { command: "setVolume", dB: settings[defaultKey].volume }).catch(() => {});
-                            tabsSendMessage(tabId, { command: "setMono", mono: Boolean(settings[defaultKey].mono) }).catch(() => {});
-                        } catch (e) { /* ignore */ }
-                    }
+                if (settingsKey) await mutateSiteSettings({ type: "remove", key: settingsKey });
+            } else if (!settingsKey && defaultKey) {
+                const created = await mutateSiteSettings({
+                    type: "create",
+                    key: defaultKey,
+                    value: { volume: 0, mono: false, muted: false }
+                });
+                if (created && created.ok && tabId) {
+                    try {
+                        tabsSendMessage(tabId, { command: "setVolume", dB: 0 }).catch(() => {});
+                        tabsSendMessage(tabId, { command: "setMono", mono: false }).catch(() => {});
+                    } catch (e) { /* ignore */ }
                 }
             }
         } else {
@@ -429,27 +437,19 @@ async function saveSiteSettingsNow(tab) {
         const muteBtn = cached.muteBtn || document.getElementById("mute-btn");
 
         const data = await storageGet({ siteSettings: {} });
-        data.siteSettings = data.siteSettings || {};
-        const settingsKey = getSiteSettingsKey(data.siteSettings, tab.url) || defaultSettingsKey;
-        // Preserve optional per-site debug overrides when the popup updates
-        // volume/mono/mute. Older code replaced the whole remembered record,
-        // which would silently erase the debug profile on every volume change.
-        data.siteSettings[settingsKey] = {
-            ...(data.siteSettings[settingsKey] || {}),
+        const settingsKey = getSiteSettingsKey(data.siteSettings || {}, tab.url) || defaultSettingsKey;
+        const patch = {
             volume: normalizeControlDb(volumeSlider?.value),
             mono: Boolean(monoCheckbox?.checked),
             muted: Boolean(muteBtn && muteBtn.classList.contains("muted"))
         };
-        await storageSet({ siteSettings: data.siteSettings });
+        await mutateSiteSettings({ type: "merge", key: settingsKey, patch });
 
-        // Notify the content script in this tab immediately so volume/mono/mute are applied without waiting
         if (tab && tab.id) {
             try {
-                tabsSendMessage(tab.id, { command: "setVolume", dB: data.siteSettings[settingsKey].volume }).catch(() => {
-                    // It's possible the content script hasn't injected into the page yet; ignore harmless errors.
-                });
-                tabsSendMessage(tab.id, { command: "setMono", mono: Boolean(data.siteSettings[settingsKey].mono) }).catch(() => {});
-                tabsSendMessage(tab.id, { command: "setMute", muted: Boolean(data.siteSettings[settingsKey].muted) }).catch(() => {});
+                tabsSendMessage(tab.id, { command: "setVolume", dB: patch.volume }).catch(() => {});
+                tabsSendMessage(tab.id, { command: "setMono", mono: patch.mono }).catch(() => {});
+                tabsSendMessage(tab.id, { command: "setMute", muted: patch.muted }).catch(() => {});
             } catch (e) {
                 // ignore messaging errors
             }
@@ -547,11 +547,8 @@ async function toggleRemember(tab) {
             await saveSiteSettings(tab);
         } else {
             const data = await storageGet({ siteSettings: {} });
-            const settingsKey = getSiteSettingsKey(data.siteSettings, tab.url);
-            if (data.siteSettings && settingsKey) {
-                delete data.siteSettings[settingsKey];
-                await storageSet({ siteSettings: data.siteSettings });
-            }
+            const settingsKey = getSiteSettingsKey(data.siteSettings || {}, tab.url);
+            if (settingsKey) await mutateSiteSettings({ type: "remove", key: settingsKey });
         }
     } catch (e) {
         handleError(e);
@@ -677,21 +674,20 @@ async function initializeControls(tab) {
       // (e.g. "-15") before we commit, avoiding partial-number jumps.
       let textCommitTimer = null;
       volumeText.addEventListener("input", () => {
-           const val = volumeText.value.match(/-?\d+/)?.[0];
-           if (val === undefined) return;          // ignore "-", "+", "", etc.
-           if (textCommitTimer) clearTimeout(textCommitTimer);
-           const parsed = Number(val);
-           textCommitTimer = setTimeout(() => {
-               textCommitTimer = null;
-               setVolume(normalizeDb(parsed), tab);
-           }, 300);
-      });
+            const parsed = parseDbText(volumeText.value);
+            if (parsed === null) return;
+            if (textCommitTimer) clearTimeout(textCommitTimer);
+            textCommitTimer = setTimeout(() => {
+                textCommitTimer = null;
+                setVolume(parsed, tab);
+            }, 300);
+       });
       // Commit immediately on Enter so the user does not have to wait
       // for the debounce, and reformat the field on blur.
       volumeText.addEventListener("change", () => {
            if (textCommitTimer) { clearTimeout(textCommitTimer); textCommitTimer = null; }
-           const val = volumeText.value.match(/-?\d+/)?.[0];
-           if (val) setVolume(normalizeDb(val), tab);
+           const parsed = parseDbText(volumeText.value);
+            if (parsed !== null) setVolume(parsed, tab);
       });
       // Suppress the global keydown-to-slider-focus handler while the user
       // is editing the dB field so arrow keys edit the number, not the slider.

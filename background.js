@@ -17,6 +17,7 @@ const {
     actionSetBadgeBackgroundColor,
     actionSetTitle,
     extractRootDomain,
+    normalizeSiteSettingsEntryInput,
     domainMatchesSaved,
     isUrlBlockedByEntries,
     purgeLegacyDefaultBlocklist,
@@ -25,6 +26,69 @@ const {
     handleError
 } = globalThis.VolumeControlShared;
 const HOTKEY_STEP_DB = 1;
+const commandChains = new Map();
+let siteSettingsMutationChain = Promise.resolve();
+
+function mutateSiteSettings(mutation = {}) {
+    const run = async () => {
+        const data = await storageGet({ siteSettings: {} });
+        const siteSettings = { ...(data.siteSettings || {}) };
+        const type = String(mutation.type || "");
+        const key = normalizeSiteSettingsEntryInput(mutation.key);
+        if (!key) return { ok: false, reason: "invalid-key" };
+
+        if (type === "create") {
+            if (Object.prototype.hasOwnProperty.call(siteSettings, key)) return { ok: false, reason: "exists", key };
+            siteSettings[key] = {
+                volume: 0,
+                mono: false,
+                muted: false,
+                ...(mutation.value && typeof mutation.value === "object" ? mutation.value : {})
+            };
+        } else if (type === "merge") {
+            const current = siteSettings[key] || { volume: 0, mono: false, muted: false };
+            const patch = mutation.patch && typeof mutation.patch === "object" ? mutation.patch : {};
+            const next = { ...current, ...patch };
+            if (Object.prototype.hasOwnProperty.call(patch, "debug") && patch.debug == null) delete next.debug;
+            siteSettings[key] = next;
+        } else if (type === "remove") {
+            delete siteSettings[key];
+        } else if (type === "rename") {
+            const newKey = normalizeSiteSettingsEntryInput(mutation.newKey);
+            if (!newKey) return { ok: false, reason: "invalid-key" };
+            if (!Object.prototype.hasOwnProperty.call(siteSettings, key)) return { ok: false, reason: "missing", key };
+            if (newKey !== key && Object.prototype.hasOwnProperty.call(siteSettings, newKey)) {
+                return { ok: false, reason: "exists", key: newKey };
+            }
+            if (newKey !== key) {
+                siteSettings[newKey] = siteSettings[key];
+                delete siteSettings[key];
+            }
+            await storageSet({ siteSettings });
+            return { ok: true, key: newKey };
+        } else {
+            return { ok: false, reason: "invalid-operation" };
+        }
+
+        await storageSet({ siteSettings });
+        return { ok: true, key };
+    };
+    siteSettingsMutationChain = siteSettingsMutationChain.then(run, run);
+    return siteSettingsMutationChain;
+}
+
+function enqueueCommand(command, commandTab) {
+    const key = commandTab && Number.isInteger(commandTab.id) ? commandTab.id : "active";
+    const previous = commandChains.get(key) || Promise.resolve();
+    const next = previous.then(
+        () => handleCommand(command, commandTab),
+        () => handleCommand(command, commandTab)
+    ).finally(() => {
+        if (commandChains.get(key) === next) commandChains.delete(key);
+    });
+    commandChains.set(key, next);
+    return next;
+}
 
 async function getActiveTab(commandTab) {
     // Always re-query instead of trusting the tab object passed by onCommand.
@@ -92,22 +156,11 @@ async function getContentState(tab) {
 
 async function saveRememberedSettings(domainState, updates) {
     if (!domainState || !domainState.settingsKey) return;
-
-    // Re-read the latest siteSettings instead of writing back the snapshot
-    // taken at the start of the command. Hotkey auto-repeat (Alt+Shift+Up held
-    // down) and a popup in another window interleave writes; writing a stale
-    // snapshot silently reverts the other writer's change (remembered mute
-    // lost on reload, increments swallowed).
-    const fresh = await storageGet({ siteSettings: {} }).catch(() => null);
-    const siteSettings = (fresh && fresh.siteSettings) || domainState.siteSettings || {};
-    const current = siteSettings[domainState.settingsKey] || { volume: 0, mono: false, muted: false };
-    siteSettings[domainState.settingsKey] = {
-        ...(current || {}),
-        volume: updates.volume !== undefined ? normalizeDb(updates.volume) : normalizeDb(current.volume),
-        mono: updates.mono !== undefined ? Boolean(updates.mono) : Boolean(current.mono),
-        muted: updates.muted !== undefined ? Boolean(updates.muted) : Boolean(current.muted)
-    };
-    await storageSet({ siteSettings });
+    const patch = {};
+    if (updates.volume !== undefined) patch.volume = normalizeDb(updates.volume);
+    if (updates.mono !== undefined) patch.mono = Boolean(updates.mono);
+    if (updates.muted !== undefined) patch.muted = Boolean(updates.muted);
+    await mutateSiteSettings({ type: "merge", key: domainState.settingsKey, patch });
 }
 
 async function getFallbackState(domainState) {
@@ -133,7 +186,10 @@ async function setVolume(tab, domainState, dB) {
         ? normalizeDb(response.response.volume)
         : requestedVolume;
 
-    await showNativeVolumeFeedback(tab.id, appliedVolume);
+    const muted = response && response.response && response.response.muted !== undefined
+        ? Boolean(response.response.muted)
+        : false;
+    await showNativeVolumeFeedback(tab.id, appliedVolume, muted);
     await saveRememberedSettings(domainState, { volume: appliedVolume });
 }
 
@@ -160,7 +216,7 @@ async function handleCommand(command, commandTab) {
     if (!tab || tab.id === undefined) return;
 
     const domainState = await getDomainState(tab);
-    if (domainState && domainState.blocked) return;
+    if (!domainState || domainState.blocked) return;
 
     const contentState = await getContentState(tab);
     const fallbackState = await getFallbackState(domainState);
@@ -211,7 +267,7 @@ async function showNativeVolumeFeedback(tabId, dB, muted) {
 
 if (browserApi && browserApi.commands && browserApi.commands.onCommand) {
     browserApi.commands.onCommand.addListener((command, tab) => {
-        handleCommand(command, tab).catch(handleError);
+        enqueueCommand(command, tab).catch(handleError);
     });
 }
 
@@ -247,6 +303,16 @@ purgeLegacyDefaultsOnce(); // MV3 worker wake (e.g. after an update) before any 
 if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
     browserApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!message) return false;
+
+        if (message.command === "mutateSiteSettings") {
+            mutateSiteSettings(message.mutation)
+                .then((result) => sendResponse(result))
+                .catch((error) => {
+                    handleError(error);
+                    sendResponse({ ok: false, reason: "storage-error" });
+                });
+            return true;
+        }
 
         // Content scripts in cross-origin iframes cannot read window.top.location.
         // sender.tab.url is the authoritative top-level tab URL, so every frame
@@ -298,6 +364,8 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
 if (browserApi && browserApi.tabs && browserApi.tabs.onUpdated) {
     browserApi.tabs.onUpdated.addListener((tabId, changeInfo) => {
         if (!changeInfo || !changeInfo.url) return;
+        actionSetBadgeText({ tabId, text: "" }).catch(handleError);
+        actionSetTitle({ tabId, title: "Volume Control" }).catch(handleError);
         tabsSendMessage(tabId, {
             command: "profileUrlChanged",
             url: changeInfo.url
