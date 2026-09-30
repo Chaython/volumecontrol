@@ -1127,6 +1127,7 @@
                 applyingVolume: false,
                 ignoreVolumeEventsUntil: 0,
                 listenersInstalled: false,
+                listenerCleanup: null,
                 streamBacked: isMediaStreamLike(readMediaSrcObject(element)),
                 streamCleanup: null
             };
@@ -1521,14 +1522,25 @@
         writeFallbackVolume(element, entry, fallbackVolume, Boolean(options.immediateFallback));
     }
 
+    function detachMediaElementListeners(element) {
+        const entry = mediaState.get(element);
+        if (!entry) return;
+        if (entry.listenerCleanup) {
+            try { entry.listenerCleanup(); } catch (e) {}
+            entry.listenerCleanup = null;
+        }
+        entry.listenersInstalled = false;
+        if (entry.streamCleanup) {
+            try { entry.streamCleanup(); } catch (e) {}
+            entry.streamCleanup = null;
+        }
+        entry.streamBacked = false;
+    }
+
     function cleanupTrackedMediaElement(element) {
         const entry = mediaState.get(element);
         if (entry) {
-            if (entry.streamCleanup) {
-                try { entry.streamCleanup(); } catch (e) {}
-                entry.streamCleanup = null;
-            }
-            entry.streamBacked = false;
+            detachMediaElementListeners(element);
             if (entry.fallbackCorrectionTimer) {
                 clearTimeout(entry.fallbackCorrectionTimer);
                 entry.fallbackCorrectionTimer = null;
@@ -1585,10 +1597,16 @@
         updatePageMediaRestriction();
         const entry = getMediaState(element);
         if (!entry.listenersInstalled && typeof element.addEventListener === "function") {
+            const listenerCleanup = [];
+            const listen = (type, handler, options) => {
+                element.addEventListener(type, handler, options);
+                listenerCleanup.push(() => element.removeEventListener(type, handler, options));
+            };
+
             // DRM detection: the moment the pipeline reports encrypted init
             // data, flag the element (sticky) so neither this hook nor the
             // content script ever routes it through WebAudio.
-            element.addEventListener("encrypted", () => {
+            listen("encrypted", () => {
                 markElementRestricted(element);
                 log("encrypted event: element marked DRM-restricted (WebAudio routing blocked)");
             }, { passive: true });
@@ -1600,7 +1618,7 @@
             // timer (v6.13's 3s, the source of the "boost takes 3 seconds
             // to kick in on Plex" report). Cheap guards keep this a no-op
             // for routed/restricted/non-suspect elements.
-            element.addEventListener("timeupdate", () => {
+            listen("timeupdate", () => {
                 if (mediaRoutes.has(element)) return;      // already routed
                 if (!isPendingEmeSuspect(element)) return; // cheap probe+src gate
                 if (!state.forceDrmCapture && elementDrmEvidence(element)) return;
@@ -1608,9 +1626,9 @@
             }, { passive: true });
             // Keep the aggregate page restriction fresh as this element's
             // lifecycle (src assignment, play, pause, ended) progresses.
-            element.addEventListener("loadedmetadata", updatePageMediaRestriction, { passive: true });
-            element.addEventListener("play", updatePageMediaRestriction, { passive: true });
-            element.addEventListener("emptied", updatePageMediaRestriction, { passive: true });
+            listen("loadedmetadata", updatePageMediaRestriction, { passive: true });
+            listen("play", updatePageMediaRestriction, { passive: true });
+            listen("emptied", updatePageMediaRestriction, { passive: true });
             const applyOnPlay = () => {
                 mediaElements.add(element);
                 applyMediaElementState(element, { immediateFallback: true, eagerRoute: true });
@@ -1647,13 +1665,18 @@
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
 
-            element.addEventListener("play", applyOnPlay, { passive: true });
-            element.addEventListener("playing", applyOnPlay, { passive: true });
-            element.addEventListener("volumechange", applyOnVolumeChange, { passive: true });
-            element.addEventListener("pause", suspendWhenIdle, { passive: true });
-            element.addEventListener("ended", sourceBoundary, { passive: true });
-            element.addEventListener("emptied", sourceBoundary, { passive: true });
-            element.addEventListener("error", sourceBoundary, { passive: true });
+            listen("play", applyOnPlay, { passive: true });
+            listen("playing", applyOnPlay, { passive: true });
+            listen("volumechange", applyOnVolumeChange, { passive: true });
+            listen("pause", suspendWhenIdle, { passive: true });
+            listen("ended", sourceBoundary, { passive: true });
+            listen("emptied", sourceBoundary, { passive: true });
+            listen("error", sourceBoundary, { passive: true });
+            entry.listenerCleanup = () => {
+                for (const cleanup of listenerCleanup.splice(0)) {
+                    try { cleanup(); } catch (e) {}
+                }
+            };
             entry.listenersInstalled = true;
         }
         applyMediaElementState(element, options);
@@ -2107,6 +2130,13 @@
             document.removeEventListener("pointerdown", resumeMediaContextOnGesture, true);
             document.removeEventListener("keydown", resumeMediaContextOnGesture, true);
             gestureListenersInstalled = false;
+        }
+
+        for (const element of Array.from(mediaElements)) {
+            if (!mediaRoutes.has(element)) {
+                detachMediaElementListeners(element);
+                mediaElements.delete(element);
+            }
         }
 
         hooksInstalled = false;

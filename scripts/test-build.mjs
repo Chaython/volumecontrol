@@ -411,3 +411,12 @@ test('all blocklist/whitelist migrations share the serialized access-list queue'
     assert.match(background, /async function migrateSeparatedWhitelistOnce\(\)/);
     assert.doesNotMatch(content, /await storageSet\(Object\.assign\([\s\S]*legacyTwitchDefaultsPurged/);
 });
+
+
+test('exclusion teardown removes reversible per-element listeners without muting captured routes', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(source, /listenerCleanup: null/);
+    assert.match(source, /function detachMediaElementListeners\(element\)/);
+    assert.match(source, /entry\.listenerCleanup = \(\) =>/);
+    assert.match(source, /if \(!mediaRoutes\.has\(element\)\)/);
+});
