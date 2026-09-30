@@ -83,6 +83,11 @@ if (browserAPI) {
             if (!Number.isInteger(frameId) || frameId <= 0) return;
             const reason = reasonSeverity(msg.reason) > 0 ? msg.reason : "";
             const previous = frameLimitReports.get(frameId);
+            if (!reason) {
+                if (frameLimitReports.delete(frameId)) invalidateBoostLimitCache();
+                sendResponse({});
+                return;
+            }
             frameLimitReports.set(frameId, { reason, ts: Date.now() });
             ensureFrameReportPurge();
             if (!previous || previous.reason !== reason) invalidateBoostLimitCache();
@@ -552,7 +557,7 @@ function reportFrameBoostLimit(force = false) {
     // An unrestricted child has nothing to contribute until it previously
     // reported a restriction. Avoid waking the service worker every five
     // seconds for the common case of harmless iframes.
-    if (!reason && lastPostedFrameReport.reason === null) return;
+    if (!reason && lastPostedFrameReport.reason === null && !force) return;
     if (!reason && lastPostedFrameReport.reason === "") return;
     if (!force && reason === lastPostedFrameReport.reason &&
         now - lastPostedFrameReport.at < FRAME_REPORT_REFRESH_MS) return;
@@ -582,7 +587,10 @@ function scheduleFrameBoostLimitReport() {
 
 function startFrameReporting() {
     if (isTopFrame()) return;
-    reportFrameBoostLimit();
+    // One initial report (including "unrestricted") clears a stale report for
+    // the same frameId after iframe navigation. Only real restrictions get a
+    // periodic refresh afterwards.
+    reportFrameBoostLimit(true);
 }
 
 function stopFrameReporting() {
