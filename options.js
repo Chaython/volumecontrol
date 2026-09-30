@@ -674,7 +674,7 @@ async function initOptions() {
                 renderMemoryList();
                 memoryListRenderTimeout = null;
             }, 50);
-            // Also refresh fqdn list because whitelist mode displays remembered sites
+            // Remembered settings are independent from the explicit access list.
             if (fqdnListRenderTimeout) clearTimeout(fqdnListRenderTimeout);
             fqdnListRenderTimeout = setTimeout(() => {
                 renderFqdnList();

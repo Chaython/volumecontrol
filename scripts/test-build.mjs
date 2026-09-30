@@ -367,3 +367,12 @@ test('popup ignores stale async volume responses', () => {
     assert.match(source, /requestGeneration !== volumeRequestGeneration/);
     assert.match(source, /command: "mutateAccessLists"/);
 });
+
+
+test('whitelist changes propagate without remembered settings', () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(popup, /isUrlRememberedByEntry/);
+    assert.match(popup, /Allowed Sites/);
+    assert.match(content, /changes\.whitelist \|\|/);
+});

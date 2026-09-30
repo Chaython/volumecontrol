@@ -1551,6 +1551,7 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
         // change must not overwrite a remembered site's explicit override.
         if (
             changes.whitelistMode ||
+            changes.whitelist ||
             changes.fqdns ||
             changes.siteSettings ||
             changes.debugMode ||

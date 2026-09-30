@@ -14,6 +14,7 @@ const {
   tabsReload,
   openOptionsPage,
   domainMatchesSaved,
+  isUrlRememberedByEntry,
   isUrlBlockedByEntry,
   isUrlBlockedByEntries,
   entriesBlockingUrl,
@@ -67,8 +68,7 @@ function extractRootDomain(url) {
 // callers can use it as the verdict itself.
 function exclusionOverlayDetail(data, tabUrl) {
     if (data.whitelistMode) {
-        // Whitelist mode: the page is inactive because it is not remembered.
-        return "Whitelist mode is active, so only remembered sites are controlled. Use Settings to remember this site or turn whitelist mode off.";
+        return "Whitelist mode is active, so only sites in Allowed Sites are controlled. Turn the Active switch on to allow this page, add it in Settings, or turn whitelist mode off.";
     }
     const blocking = entriesBlockingUrl(tabUrl, data.fqdns || []);
     if (!blocking.length) return null;
@@ -181,7 +181,7 @@ function handleTabs(tabs) {
             let isExcluded = false;
             let detail = null;
             if (data.whitelistMode) {
-                isExcluded = !getSiteSettingsKey(data.siteSettings || {}, currentTab.url);
+                isExcluded = !(data.whitelist || []).some(entry => isUrlRememberedByEntry(currentTab.url, entry));
                 if (isExcluded) detail = exclusionOverlayDetail(data, currentTab.url);
             } else {
                 detail = exclusionOverlayDetail(data, currentTab.url);
