@@ -495,3 +495,22 @@ test('access-list changes clear stale toolbar feedback', () => {
     assert.match(source, /changes\.fqdns \|\| changes\.whitelist \|\| changes\.whitelistMode/);
     assert.match(source, /actionSetBadgeText\(\{ tabId, text: "" \}\)/);
 });
+
+
+test('CI requires both Chromium and Firefox runtime smoke tests', () => {
+    const workflow = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');
+    const chromium = readFileSync(join(root, 'scripts/browser-smoke.mjs'), 'utf8');
+    const firefox = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
+    assert.match(workflow, /REQUIRE_BROWSER_SMOKE: "1"/);
+    assert.match(workflow, /node scripts\/firefox-smoke\.mjs/);
+    assert.match(chromium, /throw new Error\(message\)/);
+    assert.match(firefox, /Firefox smoke passed/);
+});
+
+test('browser smoke covers startup mute restoration and page wrapper ownership', () => {
+    const source = readFileSync(join(root, 'scripts/browser-smoke.mjs'), 'utf8');
+    assert.match(source, /preflightMuted/);
+    assert.match(source, /preflightRestored/);
+    assert.match(source, /siteWrapperPreservedOnDisable/);
+    assert.match(source, /siteWrapperPreservedOnReenable/);
+});

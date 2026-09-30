@@ -45,7 +45,14 @@ jobs:
         run: npm test
 
       - name: Run Chromium audio-hook smoke test
+        env:
+          REQUIRE_BROWSER_SMOKE: "1"
         run: node scripts/browser-smoke.mjs
+
+      - name: Run Firefox audio-hook smoke test
+        env:
+          REQUIRE_BROWSER_SMOKE: "1"
+        run: node scripts/firefox-smoke.mjs
 
       - name: Build Firefox and Chrome packages
         shell: powershell
