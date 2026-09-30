@@ -206,7 +206,11 @@ test('content scripts resolve iframe profiles from the top tab URL and refresh o
     assert.match(source, /command: "topUrlChanged"/);
     assert.match(source, /const PAGE_BRIDGE_TOKEN/);
     assert.match(source, /data\.token !== PAGE_BRIDGE_TOKEN/);
+    assert.match(source, /let pageHookActivated = false/);
+    assert.match(source, /if \(!currentState\.enabled && !pageHookActivated\) return/);
+    assert.match(source, /stopBoostLimitObserver\(\)/);
     assert.match(source, /command: "frameBoostLimitReport"/);
+    assert.match(source, /if \(!reason && lastPostedFrameReport\.reason === null\) return/);
     assert.match(source, /getSiteSettingsKey\(data\.siteSettings \|\| \{\}, controlUrl\)/);
     assert.match(source, /isUrlBlockedByEntries\(controlUrl, data\.fqdns \|\| \[\]\)/);
 });

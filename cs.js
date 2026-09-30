@@ -84,6 +84,7 @@ if (browserAPI) {
             const reason = reasonSeverity(msg.reason) > 0 ? msg.reason : "";
             const previous = frameLimitReports.get(frameId);
             frameLimitReports.set(frameId, { reason, ts: Date.now() });
+            ensureFrameReportPurge();
             if (!previous || previous.reason !== reason) invalidateBoostLimitCache();
             sendResponse({});
             return;
@@ -426,10 +427,12 @@ function getBoostLimitReason(element) {
 // and by a TTL to catch async state changes (e.g., mediaKeys being set).
 let boostLimitCache = null;
 let boostLimitCacheTime = 0;
+let boostLimitObserver = null;
 const BOOST_LIMIT_CACHE_TTL_MS = 1000;
 
 function invalidateBoostLimitCache() {
     boostLimitCache = null;
+    scheduleFrameBoostLimitReport();
 }
 
 function getBoostLimitInfo() {
@@ -500,6 +503,7 @@ const FRAME_REPORT_REFRESH_MS = 5000;
 const frameLimitReports = new Map(); // frameId -> { reason, ts }
 let frameReportInterval = null;
 let frameReportPurgeInterval = null;
+let frameReportScheduled = false;
 
 function isTopFrame() {
     try {
@@ -520,34 +524,65 @@ function getAggregatedFrameLimit() {
         }
         if (!best || reasonSeverity(entry.reason) > reasonSeverity(best.reason)) best = entry;
     }
+    if (frameLimitReports.size === 0 && frameReportPurgeInterval !== null) {
+        clearInterval(frameReportPurgeInterval);
+        frameReportPurgeInterval = null;
+    }
     return best;
+}
+
+function ensureFrameReportPurge() {
+    if (!isTopFrame() || frameReportPurgeInterval !== null || frameLimitReports.size === 0) return;
+    frameReportPurgeInterval = setInterval(() => getAggregatedFrameLimit(), FRAME_REPORT_REFRESH_MS);
+}
+
+function ensureFrameReportRefresh() {
+    if (isTopFrame() || frameReportInterval !== null) return;
+    frameReportInterval = setInterval(() => reportFrameBoostLimit(true), FRAME_REPORT_REFRESH_MS);
 }
 
 let lastPostedFrameReport = { reason: null, at: 0 };
 function reportFrameBoostLimit(force = false) {
     if (isTopFrame() || !controlProfileReady || tc.vars.isBlocked) return;
+
     const limit = getBoostLimitInfo();
+    const reason = limit.reason || "";
     const now = Date.now();
-    if (!force && limit.reason === lastPostedFrameReport.reason &&
+
+    // An unrestricted child has nothing to contribute until it previously
+    // reported a restriction. Avoid waking the service worker every five
+    // seconds for the common case of harmless iframes.
+    if (!reason && lastPostedFrameReport.reason === null) return;
+    if (!reason && lastPostedFrameReport.reason === "") return;
+    if (!force && reason === lastPostedFrameReport.reason &&
         now - lastPostedFrameReport.at < FRAME_REPORT_REFRESH_MS) return;
-    lastPostedFrameReport = { reason: limit.reason, at: now };
+
+    lastPostedFrameReport = { reason, at: now };
     runtimeSendMessage({
         command: "frameBoostLimitReport",
-        reason: limit.reason
+        reason
     }).catch(() => {});
+
+    if (reason) {
+        ensureFrameReportRefresh();
+    } else if (frameReportInterval !== null) {
+        clearInterval(frameReportInterval);
+        frameReportInterval = null;
+    }
+}
+
+function scheduleFrameBoostLimitReport() {
+    if (isTopFrame() || !controlProfileReady || tc.vars.isBlocked || frameReportScheduled) return;
+    frameReportScheduled = true;
+    queueMicrotask(() => {
+        frameReportScheduled = false;
+        reportFrameBoostLimit();
+    });
 }
 
 function startFrameReporting() {
-    if (isTopFrame()) {
-        if (frameReportPurgeInterval === null) {
-            frameReportPurgeInterval = setInterval(() => getAggregatedFrameLimit(), FRAME_REPORT_REFRESH_MS);
-        }
-        return;
-    }
-    reportFrameBoostLimit(true);
-    if (frameReportInterval === null) {
-        frameReportInterval = setInterval(() => reportFrameBoostLimit(true), FRAME_REPORT_REFRESH_MS);
-    }
+    if (isTopFrame()) return;
+    reportFrameBoostLimit();
 }
 
 function stopFrameReporting() {
@@ -560,13 +595,14 @@ function stopFrameReporting() {
         frameReportPurgeInterval = null;
     }
     lastPostedFrameReport = { reason: null, at: 0 };
+    frameReportScheduled = false;
     if (isTopFrame()) frameLimitReports.clear();
 }
 
 function setupBoostLimitObserver() {
     // Invalidate the boost limit cache when audio/video elements are added or
     // removed from the DOM, so the next call to getBoostLimitInfo recomputes.
-    if (typeof MutationObserver === 'undefined') return;
+    if (boostLimitObserver || typeof MutationObserver === 'undefined') return;
     const observer = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
             for (const node of mutation.addedNodes) {
@@ -585,7 +621,9 @@ function setupBoostLimitObserver() {
             }
         }
     });
+    boostLimitObserver = observer;
     const startObserving = () => {
+        if (boostLimitObserver !== observer) return;
         observer.observe(document.documentElement || document, { childList: true, subtree: true });
     };
     if (document.documentElement) {
@@ -593,6 +631,12 @@ function setupBoostLimitObserver() {
     } else {
         document.addEventListener('DOMContentLoaded', startObserving, { once: true });
     }
+}
+
+function stopBoostLimitObserver() {
+    if (!boostLimitObserver) return;
+    boostLimitObserver.disconnect();
+    boostLimitObserver = null;
 }
 
 function normalizeDbForCurrentMedia(value) {
@@ -724,6 +768,7 @@ function clearFallbackVolume(element) {
 // slider movements from triggering unnecessary applyStateToGraphs() /
 // applyStateToMediaElements() cycles on the page, which can cause audio dropouts.
 let lastSyncedPageAudioState = null;
+let pageHookActivated = false;
 
 function syncPageAudioHook() {
     const currentState = {
@@ -749,6 +794,11 @@ function syncPageAudioHook() {
         lastSyncedPageAudioState.debugRouteMode === currentState.debugRouteMode) {
         return;
     }
+    // A document that starts excluded should remain completely untouched by
+    // the MAIN-world hook. Do not even send the token until this page has been
+    // enabled at least once.
+    if (!currentState.enabled && !pageHookActivated) return;
+
     lastSyncedPageAudioState = currentState;
 
     try {
@@ -760,6 +810,7 @@ function syncPageAudioHook() {
             version: BRIDGE_VERSION,
             ...currentState
         }, "*");
+        if (currentState.enabled) pageHookActivated = true;
     } catch (e) {
         if (tc.settings.debugMode) log(`page audio sync failed: ${e.message}`, 3);
     }
@@ -1385,12 +1436,14 @@ async function start() {
         tc.vars.isBlocked = blocked;
         controlProfileReady = true;
         if (blocked) {
-            applyState();
+            if (pageHookActivated) applyState();
             stopPageBridgeTimers();
             stopFrameReporting();
+            stopBoostLimitObserver();
             return;
         }
 
+        setupBoostLimitObserver();
         startFrameReporting();
 
         if (siteSettingsKey) {
@@ -1413,7 +1466,6 @@ async function start() {
     }
 }
 
-setupBoostLimitObserver();
 start();
 
 // Listen for requests from the page-audio hook (e.g., when it reactivates
