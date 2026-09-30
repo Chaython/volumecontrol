@@ -53,7 +53,8 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           $shortSha = $head.Substring(0, 7)
           $lastTag = git tag --list "V*" --sort=-creatordate |
-            Where-Object { $_ -match '^V\d+(?:\.\d+)+(?:-pre\..+)?
+            Where-Object { $_ -match '^V\d+(?:\.\d+)+(?:-pre\..+)?$' } |
+            Select-Object -First 1
           $force = $env:FORCE_RELEASE -eq "true"
           $shouldRelease = $false
 
@@ -100,153 +101,7 @@ jobs:
                       $shouldRelease = $true
                   }
                   else {
-                      Write-Host "Only documentation/workflow/non-package changes were made; skipping prerelease."
-                  }
-              }
-          }
-
-          "should_release=$($shouldRelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          "last_tag=$lastTag" >> $env:GITHUB_OUTPUT
-          "head=$head" >> $env:GITHUB_OUTPUT
-          "short_sha=$shortSha" >> $env:GITHUB_OUTPUT
-
-      - name: Show toolchain versions
-        if: steps.changes.outputs.should_release == 'true'
-        shell: pwsh
-        run: |
-          node --version
-          npm --version
-          git --version
-          gh --version
-          powershell -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
-
-      - name: Install pinned build dependencies
-        if: steps.changes.outputs.should_release == 'true'
-        run: npm ci
-
-      - name: Validate minifier toolchain
-        if: steps.changes.outputs.should_release == 'true'
-        run: node scripts/minify.mjs --check
-
-      - name: Run regression tests
-        if: steps.changes.outputs.should_release == 'true'
-        run: npm test
-
-      - name: Build and minify Firefox and Chrome packages
-        if: steps.changes.outputs.should_release == 'true'
-        shell: powershell
-        run: .\scripts\build.ps1
-
-      - name: Create SHA-256 checksums
-        if: steps.changes.outputs.should_release == 'true'
-        shell: pwsh
-        run: |
-          $packages = @(Get-ChildItem -LiteralPath dist -Filter '*.zip' | Sort-Object Name)
-          if ($packages.Count -ne 2) {
-              throw "Expected exactly two extension ZIPs, found $($packages.Count)."
-          }
-
-          $packages |
-            ForEach-Object {
-              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-              "$hash  $($_.Name)"
-            } | Set-Content -LiteralPath dist\SHA256SUMS.txt -Encoding utf8
-
-      - name: Prepare prerelease metadata
-        if: steps.changes.outputs.should_release == 'true'
-        id: meta
-        shell: pwsh
-        run: |
-          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
-          $utcNow = (Get-Date).ToUniversalTime()
-          $dateTag = $utcNow.ToString("yyyyMMdd")
-          $dateDisplay = $utcNow.ToString("yyyy-MM-dd")
-          $shortSha = "${{ steps.changes.outputs.short_sha }}"
-          $tag = "V$($manifest.version)-pre.$dateTag.$env:GITHUB_RUN_NUMBER-$shortSha"
-          $title = "V$($manifest.version): Pre-release $dateDisplay ($shortSha)"
-
-          "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "title=$title" >> $env:GITHUB_OUTPUT
-
-      - name: Publish GitHub prerelease
-        if: steps.changes.outputs.should_release == 'true'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $tag = "${{ steps.meta.outputs.tag }}"
-          $title = "${{ steps.meta.outputs.title }}"
-          $assets = @(
-              Get-ChildItem -LiteralPath dist -Filter '*.zip' |
-                Sort-Object Name |
-                ForEach-Object { $_.FullName }
-          )
-          $assets += (Resolve-Path dist\SHA256SUMS.txt).Path
-
-          if ($assets.Count -ne 3) {
-              throw "Expected Firefox ZIP, Chrome ZIP, and SHA256SUMS.txt before publishing."
-          }
-
-          gh release create $tag @assets `
-            --repo "$env:GITHUB_REPOSITORY" `
-            --target "$env:GITHUB_SHA" `
-            --prerelease `
-            --title "$title" `
-            --generate-notes
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "GitHub prerelease creation failed."
-          }
- } |
-            Select-Object -First 1
-          $force = $env:FORCE_RELEASE -eq "true"
-          $shouldRelease = $false
-
-          if ($force) {
-              Write-Host "Manual force_release requested."
-              $shouldRelease = $true
-          }
-          elseif (-not $lastTag) {
-              Write-Host "No previous automated prerelease tag exists; creating the first one."
-              $shouldRelease = $true
-          }
-          else {
-              $lastSha = (git rev-list -n 1 $lastTag).Trim()
-
-              if ($lastSha -eq $head) {
-                  Write-Host "HEAD is already the commit used by $lastTag."
-              }
-              else {
-                  $changedFiles = @(git diff --name-only "$lastTag..HEAD")
-                  $releasableFiles = @(
-                      $changedFiles | Where-Object {
-                          $_ -match '^[^/]+\.(js|html|css)$' -or
-                          $_ -in @(
-                              'manifest.json',
-                              'ico.svg',
-                              'chrome.png',
-                              'package.json',
-                              'package-lock.json'
-                          ) -or
-                          $_ -like 'scripts/*'
-                      }
-                  )
-
-                  if ($changedFiles.Count -gt 0) {
-                      Write-Host "Changes since $($lastTag):"
-                      $changedFiles | ForEach-Object { Write-Host "  $_" }
-                  }
-
-                  if ($releasableFiles.Count -gt 0) {
-                      Write-Host "Releasable changes detected:"
-                      $releasableFiles | ForEach-Object { Write-Host "  $_" }
-                      $shouldRelease = $true
-                  }
-                  else {
-                      Write-Host "Only documentation/workflow/non-package changes were made; skipping prerelease."
+                      Write-Host "Only documentation/workflow/test-only changes were made; skipping prerelease."
                   }
               }
           }
