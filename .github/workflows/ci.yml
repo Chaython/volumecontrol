@@ -14,14 +14,29 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
+          git init .
+          git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
+          git fetch --force --no-tags --depth=1 origin "$env:GITHUB_REF"
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not fetch $env:GITHUB_REF"
+          }
+          git checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not check out the workflow revision."
+          }
+
+      - name: Show toolchain versions
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          git --version
+          powershell -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
 
       - name: Install pinned build dependencies
         run: npm ci
@@ -33,11 +48,18 @@ jobs:
         shell: powershell
         run: .\scripts\build.ps1
 
-      - name: Upload extension packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: volume-control-${{ github.sha }}
-          path: |
-            dist/volume-control-firefox-v*.zip
-            dist/volume-control-chrome-v*.zip
-          if-no-files-found: error
+      - name: Verify package outputs
+        shell: pwsh
+        run: |
+          $firefox = @(Get-ChildItem -LiteralPath dist -Filter 'volume-control-firefox-v*.zip')
+          $chrome = @(Get-ChildItem -LiteralPath dist -Filter 'volume-control-chrome-v*.zip')
+
+          if ($firefox.Count -ne 1) {
+              throw "Expected exactly one Firefox package, found $($firefox.Count)."
+          }
+          if ($chrome.Count -ne 1) {
+              throw "Expected exactly one Chrome package, found $($chrome.Count)."
+          }
+
+          Write-Host "Firefox: $($firefox[0].Name) ($($firefox[0].Length) bytes)"
+          Write-Host "Chrome:  $($chrome[0].Name) ($($chrome[0].Length) bytes)"
