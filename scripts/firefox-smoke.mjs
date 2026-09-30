@@ -162,11 +162,32 @@ window.__vcNativeVolume = Object.getOwnPropertyDescriptor(HTMLMediaElement.proto
     if (!result.pass) throw new Error('Firefox smoke failed: ' + result.detail);
     console.log('Firefox smoke passed: preflight mute, exclusion teardown, and re-enable.');
 } finally {
-    if (child && !child.killed) {
+    if (child && child.exitCode === null) {
         try { child.kill(); } catch (e) {}
+        await Promise.race([
+            new Promise(resolve => child.once('exit', resolve)),
+            new Promise(resolve => setTimeout(resolve, 3000))
+        ]);
     }
     if (server) {
-        try { server.close(); } catch (e) {}
+        await new Promise(resolve => {
+            try { server.close(() => resolve()); }
+            catch (e) { resolve(); }
+        });
     }
-    rmSync(work, { recursive: true, force: true });
+
+    // Firefox can hold profile SQLite files briefly after the browser process
+    // reports exit on Windows. Retry cleanup; a leftover temp profile must not
+    // turn a successful runtime test into a false CI failure.
+    let cleaned = false;
+    for (let attempt = 0; attempt < 6 && !cleaned; attempt++) {
+        try {
+            rmSync(work, { recursive: true, force: true });
+            cleaned = true;
+        } catch (e) {
+            if (!e || (e.code !== 'EBUSY' && e.code !== 'EPERM')) throw e;
+            await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+        }
+    }
+    if (!cleaned) console.warn('Firefox smoke passed, but its temporary profile is still locked and will be left for runner cleanup.');
 }
