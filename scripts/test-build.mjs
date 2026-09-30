@@ -466,3 +466,32 @@ test('startup preflight bounds native-media burst before authorization resolves'
     assert.match(source, /document\.addEventListener\("play", preflightPlaybackCapture, true\)/);
     assert.match(source, /setTimeout\(releasePreflightMediaMute, 250\)/);
 });
+
+
+test('queued hotkeys remain bound to their originating tab', () => {
+    const shared = readFileSync(join(root, 'shared.js'), 'utf8');
+    const background = readFileSync(join(root, 'background.js'), 'utf8');
+    assert.match(shared, /function tabsGet\(tabId\)/);
+    assert.match(background, /await tabsGet\(commandTab\.id\)/);
+    assert.match(background, /const key = commandTab && Number\.isInteger\(commandTab\.id\)/);
+});
+
+test('empty explicit whitelist stays empty after mode toggles', () => {
+    const source = readFileSync(join(root, 'background.js'), 'utf8');
+    assert.doesNotMatch(source, /if \(!whitelist\.length\) \{[\s\S]*Object\.keys\(data\.siteSettings/);
+    assert.match(source, /intentionally empty whitelist must stay empty/);
+});
+
+test('Options synchronizes whitelist checkbox and heading across windows', () => {
+    const source = readFileSync(join(root, 'options.js'), 'utf8');
+    assert.match(source, /changes\.whitelistMode && whitelistModeCheckbox/);
+    assert.match(source, /whitelistModeCheckbox\.checked = enabled/);
+    assert.match(source, /updateAccessListLabels\(enabled\)/);
+});
+
+test('access-list changes clear stale toolbar feedback', () => {
+    const source = readFileSync(join(root, 'background.js'), 'utf8');
+    assert.match(source, /async function clearAllTabFeedback\(\)/);
+    assert.match(source, /changes\.fqdns \|\| changes\.whitelist \|\| changes\.whitelistMode/);
+    assert.match(source, /actionSetBadgeText\(\{ tabId, text: "" \}\)/);
+});

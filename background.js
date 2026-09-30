@@ -11,6 +11,7 @@ const {
     storageGet,
     storageSet,
     tabsQuery,
+    tabsGet,
     tabsSendMessage,
     TOP_FRAME_OPTIONS,
     actionSetBadgeText,
@@ -111,8 +112,7 @@ function mutateAccessLists(mutation = {}) {
             fqdns: [],
             whitelist: [],
             archivedFqdns: [],
-            whitelistMode: false,
-            siteSettings: {}
+            whitelistMode: false
         });
         let fqdns = Array.isArray(data.fqdns) ? [...data.fqdns] : [];
         let whitelist = Array.isArray(data.whitelist) ? [...data.whitelist] : [];
@@ -183,15 +183,9 @@ function mutateAccessLists(mutation = {}) {
                     archivedFqdns = [...fqdns];
                     fqdns = [];
                 }
-                // One-time compatibility bridge: users upgrading from the old
-                // model had "allowed" sites encoded only as remembered profiles.
-                // Seed the explicit whitelist once when entering whitelist mode.
-                if (!whitelist.length) {
-                    whitelist = Object.keys(data.siteSettings || {})
-                        .map(entry => normalizeSiteSettingsEntryInput(entry))
-                        .filter(Boolean);
-                    whitelist = [...new Set(whitelist)];
-                }
+                // Migration from the historical Remembered Settings allow-list
+                // is handled exactly once by migrateSeparatedWhitelistOnce().
+                // An intentionally empty whitelist must stay empty.
                 whitelistMode = true;
             } else {
                 if (!fqdns.length && archivedFqdns.length) fqdns = [...archivedFqdns];
@@ -222,11 +216,19 @@ function enqueueCommand(command, commandTab) {
 }
 
 async function getActiveTab(commandTab) {
-    // Always re-query instead of trusting the tab object passed by onCommand.
-    // Firefox (and some Chrome versions) may pass an incomplete tab (missing
-    // .url) without the full tabs permission. Re-querying with our existing
-    // host_permissions guarantees a complete tab object including url.
-    // The performance cost is negligible (one async tabs.query per hotkey press).
+    // Keep a queued hotkey bound to the tab that originated the command. If the
+    // user changes tabs while earlier key-repeat commands are still queued,
+    // re-querying "active" at execution time would retarget those later presses.
+    if (commandTab && Number.isInteger(commandTab.id)) {
+        try {
+            const tab = await tabsGet(commandTab.id);
+            if (tab) return tab;
+        } catch (e) {
+            // The original tab may have closed; fall through to the active tab.
+        }
+    }
+
+    if (commandTab && commandTab.url && Number.isInteger(commandTab.id)) return commandTab;
     const tabs = await tabsQuery({ active: true, currentWindow: true });
     return tabs && tabs[0] ? tabs[0] : null;
 }
@@ -511,6 +513,8 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
                 ? message.url
                 : (sender && sender.tab && sender.tab.url ? sender.tab.url : "");
             if (Number.isInteger(tabId)) {
+                actionSetBadgeText({ tabId, text: "" }).catch(handleError);
+                actionSetTitle({ tabId, title: "Volume Control" }).catch(handleError);
                 tabsSendMessage(tabId, { command: "profileUrlChanged", url }).catch(() => {});
             }
             sendResponse({});
@@ -529,6 +533,29 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
     });
 }
 
+
+async function clearAllTabFeedback() {
+    try {
+        const tabs = await tabsQuery({});
+        await Promise.all((tabs || [])
+            .filter(tab => Number.isInteger(tab.id))
+            .map(tab => Promise.all([
+                actionSetBadgeText({ tabId: tab.id, text: "" }).catch(handleError),
+                actionSetTitle({ tabId: tab.id, title: "Volume Control" }).catch(handleError)
+            ])));
+    } catch (e) {
+        handleError(e);
+    }
+}
+
+if (browserApi && browserApi.storage && browserApi.storage.onChanged) {
+    browserApi.storage.onChanged.addListener((changes, area) => {
+        if (area !== "local") return;
+        if (changes.fqdns || changes.whitelist || changes.whitelistMode || changes.whitelistSeparatedV1) {
+            clearAllTabFeedback();
+        }
+    });
+}
 
 if (browserApi && browserApi.tabs && browserApi.tabs.onUpdated) {
     browserApi.tabs.onUpdated.addListener((tabId, changeInfo) => {

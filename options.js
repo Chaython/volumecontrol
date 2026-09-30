@@ -504,20 +504,18 @@ async function initOptions() {
     const debugRouteModeSelect = document.getElementById('debugRouteMode');
     const addBtn = document.getElementById('addFqdn');
     const newFqdnInput = document.getElementById('newFqdn');
+    const listTitle = document.getElementById('listTitle');
+    const fqdnAddGroup = newFqdnInput ? newFqdnInput.parentElement : null;
+    const fqdnListContainer = document.getElementById('fqdnList');
+    const updateAccessListLabels = (enabled) => {
+        if (listTitle) listTitle.textContent = enabled ? 'Allowed Sites' : 'Blocked Sites';
+        if (fqdnAddGroup) fqdnAddGroup.style.display = 'flex';
+        if (fqdnListContainer) fqdnListContainer.style.display = 'block';
+    };
 
     if (whitelistModeCheckbox) {
         const data = await storageGet({ whitelistMode: false, archivedFqdns: [] });
         whitelistModeCheckbox.checked = !!data.whitelistMode;
-        const listTitle = document.getElementById('listTitle');
-        const fqdnAddGroup = newFqdnInput ? newFqdnInput.parentElement : null;
-        const fqdnListContainer = document.getElementById('fqdnList');
-
-        function updateAccessListLabels(enabled) {
-            if (listTitle) listTitle.textContent = enabled ? 'Allowed Sites' : 'Blocked Sites';
-            if (fqdnAddGroup) fqdnAddGroup.style.display = 'flex';
-            if (fqdnListContainer) fqdnListContainer.style.display = 'block';
-        }
-
         updateAccessListLabels(Boolean(data.whitelistMode));
 
         whitelistModeCheckbox.addEventListener('change', async (e) => {
@@ -681,7 +679,12 @@ async function initOptions() {
                 fqdnListRenderTimeout = null;
             }, 50);
         }
-        if (changes.fqdns || changes.whitelist || changes.whitelistMode) {
+        if (changes.whitelistMode && whitelistModeCheckbox) {
+            const enabled = Boolean(changes.whitelistMode.newValue);
+            whitelistModeCheckbox.checked = enabled;
+            updateAccessListLabels(enabled);
+        }
+        if (changes.fqdns || changes.whitelist || changes.whitelistMode || changes.archivedFqdns) {
             if (fqdnListRenderTimeout) clearTimeout(fqdnListRenderTimeout);
             fqdnListRenderTimeout = setTimeout(() => {
                 renderFqdnList();

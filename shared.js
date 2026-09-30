@@ -85,6 +85,10 @@
         return callApi(browserApi.tabs.query.bind(browserApi.tabs), [queryInfo]);
     }
 
+    function tabsGet(tabId) {
+        return callApi(browserApi.tabs.get.bind(browserApi.tabs), [tabId]);
+    }
+
     // options may carry { frameId } to target a specific frame. Without it the
     // message is delivered to EVERY frame in the tab and the promise resolves
     // with whichever frame responds FIRST — a race between the top frame (where
@@ -467,6 +471,7 @@
         storageGet,
         storageSet,
         tabsQuery,
+        tabsGet,
         tabsSendMessage,
         TOP_FRAME_OPTIONS,
         runtimeSendMessage,
