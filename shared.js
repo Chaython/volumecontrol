@@ -129,17 +129,48 @@
         return callApi(browserApi.action.setTitle.bind(browserApi.action), [details]).then(() => undefined);
     }
 
+    function canonicalizeHostname(hostname) {
+        let host = String(hostname == null ? "" : hostname).trim();
+        if (!host) return "";
+        try {
+            // URL.hostname canonicalizes Unicode IDNs to ASCII/punycode and
+            // preserves bracketed IPv6 literals instead of truncating on ':'.
+            host = new URL(`http://${host}`).hostname;
+        } catch (e) {
+            host = host.toLowerCase();
+        }
+        host = host.toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
+        return host;
+    }
+
+    function parseSiteLikeInput(value) {
+        const raw = String(value == null ? "" : value).trim();
+        if (!raw) return null;
+        if (/^(?:local file|file)$/i.test(raw) || /^file:/i.test(raw)) {
+            return { file: true, domain: "file", path: "", query: "" };
+        }
+
+        const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+        try {
+            const parsed = new URL(candidate);
+            if (!parsed.hostname) return null;
+            let path = parsed.pathname || "";
+            while (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+            if (path === "/") path = "";
+            return {
+                file: false,
+                domain: canonicalizeHostname(parsed.hostname),
+                path,
+                query: parsed.search ? parsed.search.slice(1) : ""
+            };
+        } catch (e) {
+            return null;
+        }
+    }
+
     function normalizeDomainInput(value) {
-        if (!value) return "";
-        let domain = String(value).trim().toLowerCase();
-        domain = domain.replace(/^(https?|ftp):\/\/(www\.)?/, '');
-        domain = domain.split('/')[0].split(':')[0];
-        // Strip a bare leading "www." too: a user-typed "www.foo.com" in the
-        // options page previously saved as "www.foo.com", which could never
-        // match a real page (every URL normalizes to "foo.com") — a silently
-        // dead entry. Both spellings now canonicalize to the same key.
-        domain = domain.replace(/^www\./, '');
-        return domain;
+        const parsed = parseSiteLikeInput(value);
+        return parsed && !parsed.file ? parsed.domain : "";
     }
 
     function extractRootDomain(url, options = {}) {
@@ -152,43 +183,37 @@
     }
 
     function domainMatchesSaved(domain, savedDomain) {
+        const current = normalizeDomainInput(domain);
         const saved = normalizeDomainInput(savedDomain);
-        return Boolean(domain && saved && (domain === saved || domain.endsWith(`.${saved}`)));
+        return Boolean(current && saved && (current === saved || current.endsWith(`.${saved}`)));
     }
 
-    // Remembered settings may be scoped to a whole site or to a URL path.
-    // Existing domain-only keys remain fully compatible. Queries/fragments are
-    // deliberately ignored because they are commonly transient player state.
-    function normalizeSiteSettingsEntryInput(value) {
-        let raw = String(value == null ? "" : value).trim();
-        if (!raw) return "";
-        if (/^(?:local file|file)$/i.test(raw) || /^file:/i.test(raw)) return "file";
-
-        raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/i, "");
-        const suffix = raw.search(/[?#]/);
-        if (suffix !== -1) raw = raw.slice(0, suffix);
-
-        const slash = raw.indexOf("/");
-        let domain = (slash === -1 ? raw : raw.slice(0, slash)).toLowerCase();
-        domain = domain.split(":")[0].replace(/^www\./, "");
-        if (!domain) return "";
-
-        let path = slash === -1 ? "" : raw.slice(slash);
-        while (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
-        if (path === "/") path = "";
-        return domain + path;
+    // Remembered settings are path-scoped by default. A caller that represents
+    // explicit/manual profile input can opt into query preservation, allowing
+    // entries such as "youtube.com/watch?v=dQw4w9WgXcQ" without changing the
+    // popup's normal per-site/per-directory Remember behavior.
+    function normalizeSiteSettingsEntryInput(value, options = {}) {
+        const parsed = parseSiteLikeInput(value);
+        if (!parsed) return "";
+        if (parsed.file) return "file";
+        const query = options.includeQuery && parsed.query ? `?${parsed.query}` : "";
+        return parsed.domain + parsed.path + query;
     }
 
     function splitSiteSettingsEntry(entry) {
-        const normalized = normalizeSiteSettingsEntryInput(entry);
+        const normalized = normalizeSiteSettingsEntryInput(entry, { includeQuery: true });
         if (!normalized) return null;
-        if (normalized === "file") return { file: true, domain: "file", path: "" };
+        if (normalized === "file") return { file: true, domain: "file", path: "", query: "" };
 
-        const slash = normalized.indexOf("/");
+        const queryIndex = normalized.indexOf("?");
+        const withoutQuery = queryIndex === -1 ? normalized : normalized.slice(0, queryIndex);
+        const query = queryIndex === -1 ? "" : normalized.slice(queryIndex + 1);
+        const slash = withoutQuery.indexOf("/");
         return {
             file: false,
-            domain: slash === -1 ? normalized : normalized.slice(0, slash),
-            path: slash === -1 ? "" : normalized.slice(slash)
+            domain: slash === -1 ? withoutQuery : withoutQuery.slice(0, slash),
+            path: slash === -1 ? "" : withoutQuery.slice(slash),
+            query
         };
     }
 
@@ -208,8 +233,9 @@
                 const parsed = new URL(rawUrl);
                 if (!/^https?:$/.test(parsed.protocol)) return false;
                 current = {
-                    domain: parsed.hostname.toLowerCase().replace(/^www\./, ""),
-                    path: parsed.pathname || "/"
+                    domain: canonicalizeHostname(parsed.hostname),
+                    path: parsed.pathname || "/",
+                    query: parsed.search ? parsed.search.slice(1) : ""
                 };
             }
         } catch (e) {
@@ -217,33 +243,48 @@
         }
 
         if (!current) {
-            const normalizedCurrent = normalizeSiteSettingsEntryInput(rawUrl);
+            const normalizedCurrent = normalizeSiteSettingsEntryInput(rawUrl, { includeQuery: true });
             if (!normalizedCurrent || normalizedCurrent === "file") return false;
-            const slash = normalizedCurrent.indexOf("/");
+            const split = splitSiteSettingsEntry(normalizedCurrent);
+            if (!split) return false;
             current = {
-                domain: slash === -1 ? normalizedCurrent : normalizedCurrent.slice(0, slash),
-                path: slash === -1 ? "/" : normalizedCurrent.slice(slash)
+                domain: split.domain,
+                path: split.path || "/",
+                query: split.query || ""
             };
         }
 
         if (!(current.domain === saved.domain || current.domain.endsWith(`.${saved.domain}`))) {
             return false;
         }
-        if (!saved.path) return true;
+        let pathMatches = true;
+        if (saved.path) {
+            if (saved.path.includes("*")) {
+                const pattern = "^" + saved.path.split("*").map(escapeRegExp).join("[^/]*") + "$";
+                try {
+                    pathMatches = new RegExp(pattern).test(current.path);
+                } catch (e) {
+                    return false;
+                }
+            } else {
+                // A remembered path applies to that path and descendants.
+                pathMatches = current.path === saved.path || current.path.startsWith(saved.path + "/");
+            }
+        }
+        if (!pathMatches) return false;
 
-        if (saved.path.includes("*")) {
-            const pattern = "^" + saved.path.split("*").map(escapeRegExp).join("[^/]*") + "$";
+        // Query matching is opt-in: legacy/default profiles have no saved.query
+        // and therefore continue to ignore transient query parameters.
+        if (!saved.query) return true;
+        if (saved.query.includes("*")) {
+            const pattern = "^" + saved.query.split("*").map(escapeRegExp).join(".*") + "$";
             try {
-                return new RegExp(pattern).test(current.path);
+                return new RegExp(pattern).test(current.query || "");
             } catch (e) {
                 return false;
             }
         }
-
-        // A remembered path applies to that path and descendants. This makes
-        // "example.com/videos" a useful URL+directory profile while allowing
-        // more-specific entries to override it.
-        return current.path === saved.path || current.path.startsWith(saved.path + "/");
+        return (current.query || "") === saved.query;
     }
 
     // ---- Path-aware blocklist matching (issue #69) --------------------------
@@ -271,22 +312,13 @@
     }
 
     function splitBlocklistEntry(entry) {
-        let raw = String(entry == null ? "" : entry).trim();
-        if (!raw) return null;
-        // Preserve path case: URL paths can be case-sensitive. Only the host is
-        // canonicalized to lower case.
-        raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/i, ""); // tolerate stored URLs
-        const suffix = raw.search(/[?#]/);
-        if (suffix !== -1) raw = raw.slice(0, suffix);
-
-        const slash = raw.indexOf('/');
-        let domainPart = slash === -1 ? raw : raw.slice(0, slash);
-        let pathPart = slash === -1 ? "" : raw.slice(slash);
-        domainPart = domainPart.split(':')[0].toLowerCase().replace(/^www\./, '');
-        while (pathPart.length > 1 && pathPart.endsWith('/')) pathPart = pathPart.slice(0, -1);
-        if (pathPart === '/') pathPart = "";
-        if (!domainPart) return null;
-        return { domain: domainPart, path: pathPart };
+        const normalized = normalizeBlocklistEntryInput(entry);
+        if (!normalized) return null;
+        const slash = normalized.indexOf('/');
+        return {
+            domain: slash === -1 ? normalized : normalized.slice(0, slash),
+            path: slash === -1 ? "" : normalized.slice(slash)
+        };
     }
 
     // Normalize user-typed BLOCKLIST input for storage (v6.14). Unlike
@@ -302,21 +334,9 @@
     // sites request "/clips", not "/clips/"), so it is trimmed; a lone "/"
     // degrades to the bare-domain entry.
     function normalizeBlocklistEntryInput(value) {
-        let raw = String(value == null ? "" : value).trim();
-        if (!raw) return "";
-        raw = raw.replace(/^[a-z][a-z0-9+.-]*:[/]{2}/i, ""); // strip a leading protocol
-        const suffix = raw.search(/[?#]/);
-        if (suffix !== -1) raw = raw.slice(0, suffix);
-
-        const slash = raw.indexOf('/');
-        let domain = slash === -1 ? raw : raw.slice(0, slash);
-        domain = domain.split(':')[0].toLowerCase(); // host is case-insensitive; strip a port
-        if (!domain) return "";
-        domain = domain.replace(/^www\./, '');
-        let path = slash === -1 ? "" : raw.slice(slash);
-        while (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
-        if (path === '/') path = "";
-        return domain + path;
+        const parsed = parseSiteLikeInput(value);
+        if (!parsed || parsed.file) return "";
+        return parsed.domain + parsed.path;
     }
 
     function isUrlBlockedByEntry(url, savedEntry) {
@@ -334,7 +354,7 @@
         let parsed = null;
         try { parsed = new URL(String(url)); } catch (e) { parsed = null; }
         if (!parsed || !/^https?:$/.test(parsed.protocol)) return false;
-        const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+        const host = canonicalizeHostname(parsed.hostname);
         if (!(host === parts.domain || host.endsWith(`.${parts.domain}`))) return false;
         if (!parts.path.includes("*")) {
             return parsed.pathname === parts.path || parsed.pathname.startsWith(parts.path + "/");
@@ -382,19 +402,22 @@
         let currentDomain = "";
         try {
             const parsed = new URL(String(url));
-            currentDomain = parsed.hostname.toLowerCase().replace(/^www\./, "");
+            currentDomain = canonicalizeHostname(parsed.hostname);
         } catch (e) {
             const normalized = normalizeSiteSettingsEntryInput(url);
             const slash = normalized.indexOf("/");
             currentDomain = slash === -1 ? normalized : normalized.slice(0, slash);
         }
 
-        const wildcardCount = (saved.path.match(/\*/g) || []).length;
-        const literalPathLength = saved.path.replace(/\*/g, "").length;
+        const wildcardCount = ((saved.path || "").match(/\*/g) || []).length +
+            ((saved.query || "").match(/\*/g) || []).length;
+        const literalLength = (saved.path || "").replace(/\*/g, "").length +
+            (saved.query || "").replace(/\*/g, "").length;
         return [
+            saved.query ? 1 : 0,
             saved.path ? 1 : 0,
             currentDomain === saved.domain ? 1 : 0,
-            literalPathLength,
+            literalLength,
             -wildcardCount,
             saved.domain.split(".").length,
             saved.domain.length
@@ -412,6 +435,9 @@
 
     function getSiteSettingsKey(siteSettings, url) {
         if (!siteSettings || !url) return null;
+
+        const normalizedWithQuery = normalizeSiteSettingsEntryInput(url, { includeQuery: true });
+        if (normalizedWithQuery && siteSettings[normalizedWithQuery]) return normalizedWithQuery;
 
         const normalized = normalizeSiteSettingsEntryInput(url);
         if (normalized && siteSettings[normalized]) return normalized;
@@ -481,6 +507,7 @@
         actionSetBadgeBackgroundColor,
         actionSetTitle,
         normalizeDomainInput,
+        canonicalizeHostname,
         normalizeSiteSettingsEntryInput,
         normalizeBlocklistEntryInput,
         extractRootDomain,
