@@ -4,7 +4,10 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const root = resolve(import.meta.dirname, '..');
-const hookSource = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+const extensionRoot = process.env.VC_EXTENSION_DIR ? resolve(process.env.VC_EXTENSION_DIR) : root;
+const hookPath = join(extensionRoot, 'page-audio-hook.js');
+if (!existsSync(hookPath)) throw new Error(`Browser smoke hook not found: ${hookPath}`);
+const hookSource = readFileSync(hookPath, 'utf8');
 
 function findChromium() {
     const candidates = [
