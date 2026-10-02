@@ -98,20 +98,26 @@ try {
         // hosted Windows runner before web-ext can even start.
         shell: process.platform === 'win32',
         windowsHide: true,
-        stdio: ['ignore', 'ignore', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe']
     });
-    child.stderr?.on('data', chunk => {
+    const appendDiagnostic = chunk => {
         stderr += String(chunk);
-        if (stderr.length > 16000) stderr = stderr.slice(-16000);
-    });
+        if (stderr.length > 24000) stderr = stderr.slice(-24000);
+    };
+    child.stdout?.on('data', appendDiagnostic);
+    child.stderr?.on('data', appendDiagnostic);
     child.once('error', rejectResult);
     child.once('exit', code => {
         if (code && code !== 0) rejectResult(new Error(`web-ext/Firefox exited early with code ${code}.\n${stderr}`));
     });
 
+    // A clean hosted runner may spend close to a minute downloading the
+    // pinned web-ext package through npx before Firefox even starts. Keep that
+    // bootstrap inside the test for reproducibility, but do not mistake it for
+    // a browser failure.
     const timeout = setTimeout(() => {
         rejectResult(new Error('Firefox temporary-addon smoke timed out.\n' + stderr));
-    }, 60000);
+    }, 180000);
 
     const result = await resultPromise;
     clearTimeout(timeout);
