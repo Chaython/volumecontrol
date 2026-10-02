@@ -30,6 +30,7 @@ const {
     handleError
 } = globalThis.VolumeControlShared;
 const HOTKEY_STEP_DB = 1;
+const HOTKEY_DELIVERY_RETRY_MS = 120;
 const commandChains = new Map();
 let siteSettingsMutationChain = Promise.resolve();
 let accessListMutationChain = Promise.resolve();
@@ -383,41 +384,82 @@ async function getFallbackState(domainState) {
     };
 }
 
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function sendHotkeyCommandAndConfirm(tab, message) {
+    if (!tab || !Number.isInteger(tab.id)) return null;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+        let delivered = false;
+        try {
+            // Broadcast the absolute requested state so embedded players receive
+            // it too. Repeating an absolute command on retry is idempotent.
+            await tabsSendMessage(tab.id, message);
+            delivered = true;
+        } catch (e) {
+            if (attempt > 0) handleError(e);
+        }
+
+        if (delivered) {
+            const response = await tabsSendMessage(
+                tab.id,
+                { command: "getAudioControlState" },
+                TOP_FRAME_OPTIONS
+            ).catch(() => null);
+            if (response && response.response) return response.response;
+        }
+
+        if (attempt === 0) await delay(HOTKEY_DELIVERY_RETRY_MS);
+    }
+
+    return null;
+}
+
 async function setVolume(tab, domainState, dB) {
     const requestedVolume = normalizeDb(dB);
-    // Broadcast to every frame so embedded players in iframes are also
-    // controlled. The broadcast response is a cross-frame race and is ignored.
-    await tabsSendMessage(tab.id, { command: "setVolume", dB: requestedVolume }).catch(handleError);
-    // The authoritative applied volume (verdict-clamped by the top frame)
-    // comes from a frame-targeted query.
-    const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(handleError);
-    const appliedVolume = response && response.response && response.response.volume !== undefined
-        ? normalizeDb(response.response.volume)
-        : requestedVolume;
+    const state = await sendHotkeyCommandAndConfirm(tab, {
+        command: "setVolume",
+        dB: requestedVolume
+    });
+    if (!state) return false;
 
-    const muted = response && response.response && response.response.muted !== undefined
-        ? Boolean(response.response.muted)
-        : false;
+    const appliedVolume = state.volume !== undefined
+        ? normalizeDb(state.volume)
+        : requestedVolume;
+    const muted = state.muted !== undefined ? Boolean(state.muted) : false;
     await showNativeVolumeFeedback(tab.id, appliedVolume, muted);
     await saveRememberedSettings(domainState, { volume: appliedVolume });
+    return true;
 }
 
 async function setMono(tab, domainState, mono) {
     const enabled = Boolean(mono);
-    await tabsSendMessage(tab.id, { command: "setMono", mono: enabled }).catch(handleError);
-    await saveRememberedSettings(domainState, { mono: enabled });
+    const state = await sendHotkeyCommandAndConfirm(tab, {
+        command: "setMono",
+        mono: enabled
+    });
+    if (!state) return false;
+    await saveRememberedSettings(domainState, {
+        mono: state.mono !== undefined ? Boolean(state.mono) : enabled
+    });
+    return true;
 }
 
 async function setMute(tab, domainState, muted) {
     const enabled = Boolean(muted);
-    // Broadcast the mute toggle to every frame; the racy response is ignored.
-    await tabsSendMessage(tab.id, { command: "setMute", muted: enabled }).catch(handleError);
-    // Authoritative volume for the badge feedback comes from the top frame.
-    const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(handleError);
-    const dB = (response && response.response && response.response.volume !== undefined)
-        ? normalizeDb(response.response.volume) : 0;
-    await showNativeVolumeFeedback(tab.id, dB, enabled);
-    await saveRememberedSettings(domainState, { muted: enabled });
+    const state = await sendHotkeyCommandAndConfirm(tab, {
+        command: "setMute",
+        muted: enabled
+    });
+    if (!state) return false;
+
+    const appliedMuted = state.muted !== undefined ? Boolean(state.muted) : enabled;
+    const dB = state.volume !== undefined ? normalizeDb(state.volume) : 0;
+    await showNativeVolumeFeedback(tab.id, dB, appliedMuted);
+    await saveRememberedSettings(domainState, { muted: appliedMuted });
+    return true;
 }
 
 async function handleCommand(command, commandTab) {
