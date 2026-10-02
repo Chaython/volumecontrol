@@ -138,6 +138,9 @@ for (const browser of ['chrome', 'firefox']) {
         runInNewContext(readFileSync(join(packageDir, 'shared.js'), 'utf8'), context);
         const shared = context.VolumeControlShared;
         assert.equal(shared.normalizeDomainInput('https://www.example.com/path'), 'example.com');
+        assert.equal(shared.normalizeDomainInput('http://[::1]:8080/path'), '[::1]');
+        assert.equal(shared.normalizeDomainInput('https://bücher.example/path'), 'xn--bcher-kva.example');
+        assert.equal(shared.normalizeBlocklistEntryInput('http://[::1]:8080/media'), '[::1]/media');
         assert.equal(shared.normalizeBlocklistEntryInput('https://www.example.com/videos/*'), 'example.com/videos/*');
         assert.equal(shared.normalizeBlocklistEntryInput('https://EXAMPLE.com/Case/Path/?x=1#top'), 'example.com/Case/Path');
         assert.equal(shared.isUrlBlockedByEntry('https://example.com/videos/one', 'example.com/videos/*'), true);
@@ -148,6 +151,10 @@ for (const browser of ['chrome', 'firefox']) {
         assert.equal(
             shared.normalizeSiteSettingsEntryInput('https://www.Example.com/Videos/?view=grid#top'),
             'example.com/Videos'
+        );
+        assert.equal(
+            shared.normalizeSiteSettingsEntryInput('https://www.Example.com/Videos/?view=grid#top', { includeQuery: true }),
+            'example.com/Videos?view=grid'
         );
         assert.equal(shared.extractRootDomain('file:///C:/Music/song.mp3'), 'file');
 
@@ -181,6 +188,19 @@ for (const browser of ['chrome', 'firefox']) {
         assert.equal(
             shared.getSiteSettingsKey({ 'Local File': { volume: 1 } }, 'file:///C:/Music/song.mp3'),
             'Local File'
+        );
+        const queryScoped = {
+            'example.com/watch': { volume: 1 },
+            'example.com/watch?v=abc': { volume: 2 },
+            'example.com/watch?v=*': { volume: 3 }
+        };
+        assert.equal(
+            shared.getSiteSettingsKey(queryScoped, 'https://example.com/watch?v=abc'),
+            'example.com/watch?v=abc'
+        );
+        assert.equal(
+            shared.getSiteSettingsKey(queryScoped, 'https://example.com/watch?v=xyz'),
+            'example.com/watch?v=*'
         );
     });
 }
@@ -291,6 +311,15 @@ test('popup only accepts a signed integer dB value and uses atomic URL settings 
     assert.match(source, /type: "setSiteActive"/);
 });
 
+test('remembered-setting saves do not rebroadcast every audio control', () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = source.indexOf('async function saveSiteSettingsNow');
+    const end = source.indexOf('\nfunction saveSiteSettings', start);
+    const saveBody = source.slice(start, end);
+    assert.doesNotMatch(saveBody, /tabsSendMessage/);
+    assert.match(source, /await tabsSendMessage\(tab\.id, \{ command: "setMono"/);
+});
+
 test('options queues a rerender requested during an active render', () => {
     const source = readFileSync(join(root, 'options.js'), 'utf8');
     assert.match(source, /memoryListRenderPending = true/);
@@ -309,17 +338,23 @@ test('daily prerelease compares against stable releases and ignores test-only sc
 });
 
 
-test('CI runs a real Chromium hook smoke test without an extra artifact dependency tree', () => {
+test('CI crosses the ZIP boundary and runs real installed-extension smoke coverage', () => {
     const workflow = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');
-    const smoke = readFileSync(join(root, 'scripts/browser-smoke.mjs'), 'utf8');
-    assert.match(workflow, /node scripts\/browser-smoke\.mjs/);
-    assert.match(workflow, /VC_EXTENSION_DIR: dist\/chrome/);
-    assert.match(workflow, /VC_EXTENSION_DIR: dist\/firefox/);
-    assert.ok(workflow.indexOf('Build Firefox and Chrome packages') < workflow.indexOf('Smoke packaged Chromium hook'));
+    const hookSmoke = readFileSync(join(root, 'scripts/browser-smoke.mjs'), 'utf8');
+    const chromiumInstall = readFileSync(join(root, 'scripts/chromium-extension-smoke.mjs'), 'utf8');
+    const firefoxInstall = readFileSync(join(root, 'scripts/firefox-extension-smoke.mjs'), 'utf8');
+    assert.match(workflow, /Expand-Archive/);
+    assert.match(workflow, /VC_EXTENSION_DIR: dist\/smoke\/chrome/);
+    assert.match(workflow, /VC_EXTENSION_DIR: dist\/smoke\/firefox/);
+    assert.match(workflow, /node scripts\/chromium-extension-smoke\.mjs/);
+    assert.match(workflow, /node scripts\/firefox-extension-smoke\.mjs/);
+    assert.ok(workflow.indexOf('Build Firefox and Chrome packages') < workflow.indexOf('Extract release ZIPs'));
     assert.doesNotMatch(workflow, /upload-build|@actions\/artifact/);
-    assert.match(smoke, /VC_BROWSER_SMOKE_PASS/);
-    assert.match(smoke, /disabledRestored/);
-    assert.match(smoke, /wrongTokenRejected/);
+    assert.match(hookSmoke, /VC_BROWSER_SMOKE_PASS/);
+    assert.match(chromiumInstall, /--load-extension/);
+    assert.match(chromiumInstall, /vc-init/);
+    assert.match(firefoxInstall, /web-ext@\$\{WEB_EXT_VERSION\}/);
+    assert.match(firefoxInstall, /--source-dir/);
 });
 
 
@@ -330,6 +365,35 @@ test('MAIN hook preflights early WebAudio but restores page APIs on exclusion', 
     assert.match(source, /if \(!state\.enabled\) restorePatchedPageApis\(\)/);
     assert.match(source, /bridgeToken = null/);
     assert.match(source, /data\.command !== "setState" && data\.command !== "heartbeat"/);
+});
+
+test('fallback routing preserves native site volume and invalidates new restriction reasons', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(source, /element\.__vc_originalVolume = currentVolume/);
+    assert.doesNotMatch(source, /gain > 1 \? 1 : currentVolume/);
+    assert.match(source, /previousFallbackReason/);
+    assert.match(source, /invalidateBoostLimitCache\(\)/);
+});
+
+test('live exclusion restores isolated fallback state before teardown', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(source, /if \(blocked\) \{[\s\S]*lastSyncedPageAudioState = null;[\s\S]*applyState\(\);[\s\S]*stopPageBridgeTimers\(\)/);
+    assert.match(source, /const gain = isEnabled \? \(tc\.vars\.muted \? 0 : getGainValue\(tc\.vars\.dB\)\) : 1/);
+    assert.match(source, /isEnabled && tc\.vars\.muted/);
+});
+
+test('content-script initialization failure releases preflight to native audio', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(source, /start\(\) storage read failed/);
+    assert.match(source, /tc\.vars\.isBlocked = true;[\s\S]*lastSyncedPageAudioState = null;[\s\S]*applyState\(\)/);
+});
+
+test('isolated media tracking periodically prunes detached idle elements', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(source, /const KNOWN_MEDIA_SWEEP_MS = 30000/);
+    assert.match(source, /function sweepKnownMediaElements\(\)/);
+    assert.match(source, /knownMediaSweepInterval = setInterval\(sweepKnownMediaElements/);
+    assert.match(source, /clearInterval\(knownMediaSweepInterval\)/);
 });
 
 test('detached MediaStream media releases external stream listeners', () => {
@@ -468,6 +532,9 @@ test('startup preflight bounds native-media burst before authorization resolves'
     assert.match(source, /preflightMutedElements/);
     assert.match(source, /document\.addEventListener\("play", preflightPlaybackCapture, true\)/);
     assert.match(source, /const PREFLIGHT_FAILSAFE_MS = 3000/);
+    assert.match(source, /preflightDesiredMuted/);
+    assert.match(source, /function patchedPreflightMutedSetter/);
+    assert.match(source, /restorePreflightMutedPatch\(\)/);
     assert.match(source, /setTimeout\(releasePreflightMediaMute, PREFLIGHT_FAILSAFE_MS\)/);
     assert.doesNotMatch(source, /setTimeout\(releasePreflightMediaMute, 250\)/);
 });
@@ -531,6 +598,24 @@ test('queued hotkeys remain bound to their originating tab', () => {
     assert.match(background, /const key = commandTab && Number\.isInteger\(commandTab\.id\)/);
 });
 
+test('hotkeys confirm top-frame delivery before feedback or persistence', () => {
+    const source = readFileSync(join(root, 'background.js'), 'utf8');
+    assert.match(source, /HOTKEY_DELIVERY_RETRY_MS = 120/);
+    assert.match(source, /async function sendHotkeyCommandAndConfirm/);
+    assert.match(source, /if \(!state\) return false/);
+    assert.match(source, /await delay\(HOTKEY_DELIVERY_RETRY_MS\)/);
+});
+
+test('manual query profiles preserve query keys while popup defaults remain path based', () => {
+    const background = readFileSync(join(root, 'background.js'), 'utf8');
+    const options = readFileSync(join(root, 'options.js'), 'utf8');
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    assert.match(background, /includeQuery: true/);
+    assert.match(options, /normalizeSiteSettingsEntryInput\(newRememberedInput\.value, \{ includeQuery: true \}\)/);
+    assert.match(options, /normalizeSiteSettingsEntryInput\(newDebugSiteInput\.value, \{ includeQuery: true \}\)/);
+    assert.match(popup, /const defaultSettingsKey = normalizeSiteSettingsEntryInput\(tab\.url\)/);
+});
+
 test('empty explicit whitelist stays empty after mode toggles', () => {
     const source = readFileSync(join(root, 'background.js'), 'utf8');
     assert.doesNotMatch(source, /if \(!whitelist\.length\) \{[\s\S]*Object\.keys\(data\.siteSettings/);
@@ -558,10 +643,24 @@ test('CI requires both Chromium and Firefox runtime smoke tests', () => {
     const firefox = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
     assert.match(workflow, /REQUIRE_BROWSER_SMOKE: "1"/);
     assert.match(workflow, /node scripts\/firefox-smoke\.mjs/);
+    assert.match(workflow, /dist\/smoke\/chrome/);
+    assert.match(workflow, /dist\/smoke\/firefox/);
     assert.match(chromium, /process\.env\.VC_EXTENSION_DIR/);
     assert.match(firefox, /process\.env\.VC_EXTENSION_DIR/);
     assert.match(chromium, /throw new Error\(message\)/);
     assert.match(firefox, /Firefox smoke passed/);
+});
+
+test('AMO manual publishing is stable-tag bound and duplicate-safe', () => {
+    const source = readFileSync(join(root, '.github/workflows/publish-firefox.yml'), 'utf8');
+    assert.match(source, /release_tag:/);
+    assert.match(source, /publish:/);
+    assert.match(source, /MANUAL_PUBLISH/);
+    assert.match(source, /refs\/tags\/\$env:RELEASE_TAG/);
+    assert.match(source, /does not match manifest version/);
+    assert.match(source, /filter=all_without_unlisted/);
+    assert.match(source, /Validation-only manual run/);
+    assert.doesNotMatch(source, /git fetch --force --no-tags --depth=1 origin "\$env:GITHUB_SHA"/);
 });
 
 test('browser smoke covers startup mute restoration and page wrapper ownership', () => {
