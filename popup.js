@@ -5,6 +5,7 @@ const {
   normalizeDb,
   normalizeSiteSettingsEntryInput,
   formatDb,
+  callApi,
   storageGet,
   storageSet,
   tabsQuery,
@@ -52,7 +53,8 @@ const cached = {
   activeTab: null,
   maxDb: MAX_DB,
   boostLimited: false,
-  monoAvailable: true
+  monoAvailable: true,
+  shortcuts: {}
 };
 
 function normalizeControlDb(value) {
@@ -129,6 +131,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setVolume(nextDb, tab);
   }, { passive: false });
 
+  refreshShortcutHints().catch(() => {});
   listenForEvents();
 });
 
@@ -292,6 +295,68 @@ function setDisplayedVolume(dB) {
   return normalizedDb;
 }
 
+function shortcutToAria(shortcut) {
+  return String(shortcut || '')
+    .replace(/\bUp\b/g, 'ArrowUp')
+    .replace(/\bDown\b/g, 'ArrowDown')
+    .replace(/\bLeft\b/g, 'ArrowLeft')
+    .replace(/\bRight\b/g, 'ArrowRight');
+}
+
+function applyShortcutHintsToControls() {
+  const shortcuts = cached.shortcuts || {};
+  const slider = cached.slider || document.querySelector("#volume-slider");
+  const monoCheckbox = cached.monoCheckbox || document.querySelector("#mono-checkbox");
+  const muteBtn = cached.muteBtn || document.querySelector("#mute-btn");
+  const monoContainer = monoCheckbox ? monoCheckbox.closest(".switch-container") : null;
+  const muted = muteBtn && muteBtn.getAttribute("aria-pressed") === "true";
+
+  const volumeCombos = [
+    shortcuts["volume-up"],
+    shortcuts["volume-down"],
+    shortcuts["volume-reset"]
+  ].filter(Boolean);
+
+  if (slider) {
+    slider.title = muted
+      ? "Volume (muted) - click Unmute to hear audio"
+      : (volumeCombos.length ? `Volume shortcuts: ${volumeCombos.join(" / ")}` : "Volume control");
+    const aria = volumeCombos.map(shortcutToAria).filter(Boolean).join(" ");
+    if (aria) slider.setAttribute("aria-keyshortcuts", aria);
+    else slider.removeAttribute("aria-keyshortcuts");
+  }
+
+  const monoShortcut = shortcuts["toggle-mono"] || "";
+  if (monoCheckbox) {
+    if (monoShortcut) monoCheckbox.setAttribute("aria-keyshortcuts", shortcutToAria(monoShortcut));
+    else monoCheckbox.removeAttribute("aria-keyshortcuts");
+  }
+  if (monoContainer && !monoCheckbox.disabled) {
+    monoContainer.title = monoShortcut ? `Toggle Mono Audio (${monoShortcut})` : "Toggle Mono Audio";
+  }
+
+  if (muteBtn) {
+    const muteShortcut = shortcuts["toggle-mute"] || "";
+    const action = muted ? "Unmute" : "Mute";
+    muteBtn.title = muteShortcut ? `${action} (${muteShortcut})` : action;
+    if (muteShortcut) muteBtn.setAttribute("aria-keyshortcuts", shortcutToAria(muteShortcut));
+    else muteBtn.removeAttribute("aria-keyshortcuts");
+  }
+}
+
+async function refreshShortcutHints() {
+  if (!browserApi || !browserApi.commands || typeof browserApi.commands.getAll !== "function") return;
+  try {
+    const commands = await callApi(browserApi.commands.getAll.bind(browserApi.commands), []);
+    cached.shortcuts = Object.fromEntries(
+      (commands || []).filter(cmd => cmd && cmd.name).map(cmd => [cmd.name, cmd.shortcut || ""])
+    );
+    applyShortcutHintsToControls();
+  } catch (e) {
+    console.debug("Popup: commands.getAll failed", e);
+  }
+}
+
 function applyMuteButtonState(muted) {
   const btn = cached.muteBtn || document.querySelector("#mute-btn");
   if (!btn) return;
@@ -300,16 +365,11 @@ function applyMuteButtonState(muted) {
   btn.setAttribute("aria-pressed", String(isMuted));
   const label = btn.querySelector(".mute-label");
   if (label) label.textContent = isMuted ? "Unmute" : "Mute";
-  btn.title = isMuted ? "Unmute" : "Mute";
-
   // Reflect muted state on the slider + popup container so users see why
   // dragging the slider does not change audible volume.
   const popupContent = document.querySelector("#popup-content");
   if (popupContent) popupContent.classList.toggle("is-muted", isMuted);
-  const slider = cached.slider || document.querySelector("#volume-slider");
-  if (slider) {
-    slider.title = isMuted ? "Volume (muted) - click Unmute to hear audio" : "Alt+Shift+Up / Alt+Shift+Down / Alt+Shift+0";
-  }
+  applyShortcutHintsToControls();
 }
 
 function applyMonoAvailability(state = {}) {
@@ -326,7 +386,7 @@ function applyMonoAvailability(state = {}) {
   if (container) {
     container.classList.toggle("is-disabled", !available);
     if (available) {
-      container.title = "Toggle Mono Audio (Alt+Shift+M)";
+      applyShortcutHintsToControls();
     } else {
       const message = reason === "restricted"
         ? "Mono unavailable while DRM/restricted media is using fallback audio."
