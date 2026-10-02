@@ -10,23 +10,27 @@ if (!extensionRoot || !existsSync(join(extensionRoot, 'manifest.json'))) {
 }
 
 function findChromium() {
+    // Chrome-branded builds ignore --load-extension starting in Chrome 137.
+    // Prefer non-Google Chromium-family builds (Edge/Chromium) for this
+    // command-line unpacked-extension smoke. Explicit env overrides still win.
     const candidates = [
-        process.env.CHROME_PATH,
         process.env.CHROMIUM_PATH,
         process.env.EDGE_PATH,
-        process.platform === 'win32' ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : null,
-        process.platform === 'win32' ? 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe' : null,
+        process.env.CHROME_PATH,
         process.platform === 'win32' ? 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe' : null,
         process.platform === 'win32' ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' : null,
-        '/usr/bin/google-chrome',
         '/usr/bin/chromium',
-        '/usr/bin/chromium-browser'
+        '/usr/bin/chromium-browser',
+        process.platform === 'win32' ? 'C:\\Program Files\\Google\\Chrome for Testing\\Application\\chrome.exe' : null,
+        process.platform === 'win32' ? 'C:\\Program Files (x86)\\Google\\Chrome for Testing\\Application\\chrome.exe' : null,
+        '/usr/bin/google-chrome'
     ].filter(Boolean);
     return candidates.find(existsSync) || null;
 }
 
 const browser = findChromium();
-if (!browser) throw new Error('Installed-extension smoke could not find Chromium/Chrome/Edge.');
+if (!browser) throw new Error('Installed-extension smoke could not find Edge, Chromium, or Chrome for Testing.');
+console.log(`Installed-extension smoke browser: ${browser}`);
 
 const work = mkdtempSync(join(tmpdir(), 'volume-control-installed-chrome-'));
 const profile = join(work, 'profile');
