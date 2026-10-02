@@ -468,6 +468,27 @@ test('startup preflight bounds native-media burst before authorization resolves'
 });
 
 
+test('manifest keeps the four Chromium-safe default shortcuts', () => {
+    const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.commands['volume-up'].suggested_key.default, 'Alt+Shift+Up');
+    assert.equal(manifest.commands['volume-down'].suggested_key.default, 'Alt+Shift+Down');
+    assert.equal(manifest.commands['volume-reset'].suggested_key.default, 'Alt+Shift+0');
+    assert.equal(manifest.commands['toggle-mono'].suggested_key.default, 'Alt+Shift+M');
+    assert.equal(manifest.commands['_execute_action'].suggested_key, undefined);
+    assert.equal(manifest.commands['toggle-mute'].suggested_key, undefined);
+});
+
+test('shortcut UI explains unassigned defaults and exposes Firefox reset only', () => {
+    const source = readFileSync(join(root, 'options.js'), 'utf8');
+    const html = readFileSync(join(root, 'options.html'), 'utf8');
+    assert.match(source, /function getSuggestedShortcut\(commandName\)/);
+    assert.match(source, /Not set — suggested:/);
+    assert.match(source, /function restoreShortcutDefaults\(\)/);
+    assert.match(source, /browserApi\.commands\.reset/);
+    assert.match(source, /isFirefoxBrowser\(\)/);
+    assert.match(html, /id="restoreShortcutDefaults" hidden/);
+});
+
 test('queued hotkeys remain bound to their originating tab', () => {
     const shared = readFileSync(join(root, 'shared.js'), 'utf8');
     const background = readFileSync(join(root, 'background.js'), 'utf8');
