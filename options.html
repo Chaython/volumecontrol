@@ -33,7 +33,7 @@
 
     <h3>Remembered Settings</h3>
     <div class="hint remembered-hint">
-        Manage saved volume, mono, and mute per site or URL path. A path such as <em>example.com/videos</em> applies to that path and its descendants; <em>*</em> can match within a path segment. Existing domain-only entries still apply to the whole site. These audio settings are independent from site access and debug overrides.
+        Manage saved volume, mono, and mute per site or URL path. A path such as <em>example.com/videos</em> applies to that path and its descendants; <em>*</em> can match within a path segment. Queries are ignored by normal Remember behavior, but a manually entered URL such as <em>youtube.com/watch?v=abc</em> creates an exact query-scoped profile (and <em>?v=*</em> may be used as a query wildcard). These audio settings are independent from site access and debug overrides.
     </div>
     <div class="input-group">
         <input type="text" id="newRememberedSite" placeholder="example.com or example.com/videos">
