@@ -490,16 +490,6 @@ async function saveSiteSettingsNow(tab) {
             defaultKey: defaultSettingsKey,
             patch
         });
-
-        if (tab && tab.id) {
-            try {
-                tabsSendMessage(tab.id, { command: "setVolume", dB: patch.volume }).catch(() => {});
-                tabsSendMessage(tab.id, { command: "setMono", mono: patch.mono }).catch(() => {});
-                tabsSendMessage(tab.id, { command: "setMute", muted: patch.muted }).catch(() => {});
-            } catch (e) {
-                // ignore messaging errors
-            }
-        }
     } catch (e) {
         handleError(e);
     }
@@ -562,7 +552,7 @@ async function setVolume(dB, tab, options = {}) {
 async function toggleMono(tab) {
   const monoCheckbox = cached.monoCheckbox || document.querySelector("#mono-checkbox");
   if (tab && monoCheckbox && !monoCheckbox.disabled && cached.monoAvailable) {
-      tabsSendMessage(tab.id, { command: "setMono", mono: monoCheckbox.checked }).catch(handleError);
+      await tabsSendMessage(tab.id, { command: "setMono", mono: monoCheckbox.checked }).catch(handleError);
       await saveSiteSettings(tab);
   }
 }
