@@ -11,7 +11,7 @@ permissions:
 jobs:
   test-and-build:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
@@ -64,15 +64,46 @@ jobs:
           Write-Host "Firefox: $($firefox[0].Name) ($($firefox[0].Length) bytes)"
           Write-Host "Chrome:  $($chrome[0].Name) ($($chrome[0].Length) bytes)"
 
-      - name: Smoke packaged Chromium hook
+      - name: Extract release ZIPs for artifact-boundary smoke tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+          $version = [string]$manifest.version
+          $smokeRoot = Join-Path $PWD "dist\smoke"
+          Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path (Join-Path $smokeRoot "chrome") -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $smokeRoot "firefox") -Force | Out-Null
+
+          Expand-Archive -LiteralPath "dist\volume-control-chrome-v$version.zip" -DestinationPath (Join-Path $smokeRoot "chrome") -Force
+          Expand-Archive -LiteralPath "dist\volume-control-firefox-v$version.zip" -DestinationPath (Join-Path $smokeRoot "firefox") -Force
+
+          foreach ($browser in @("chrome", "firefox")) {
+              $root = Join-Path $smokeRoot $browser
+              if (-not (Test-Path -LiteralPath (Join-Path $root "manifest.json"))) {
+                  throw "$browser release ZIP did not extract a manifest at the package root."
+              }
+          }
+
+      - name: Smoke extracted Chromium hook
         env:
           REQUIRE_BROWSER_SMOKE: "1"
-          VC_EXTENSION_DIR: dist/chrome
+          VC_EXTENSION_DIR: dist/smoke/chrome
         run: node scripts/browser-smoke.mjs
 
-      - name: Smoke packaged Firefox hook
+      - name: Smoke extracted Firefox hook
         env:
           REQUIRE_BROWSER_SMOKE: "1"
-          VC_EXTENSION_DIR: dist/firefox
+          VC_EXTENSION_DIR: dist/smoke/firefox
         run: node scripts/firefox-smoke.mjs
+
+      - name: Load extracted Chromium extension in-browser
+        env:
+          VC_EXTENSION_DIR: dist/smoke/chrome
+        run: node scripts/chromium-extension-smoke.mjs
+
+      - name: Temporarily install extracted Firefox extension
+        env:
+          VC_EXTENSION_DIR: dist/smoke/firefox
+        run: node scripts/firefox-extension-smoke.mjs
 
