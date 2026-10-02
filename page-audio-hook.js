@@ -39,6 +39,7 @@
     let gestureListenersInstalled = false;
     let authorizationResolved = false;
     let preflightReleaseTimer = null;
+    const PREFLIGHT_FAILSAFE_MS = 3000;
     const preflightMutedElements = new Set();
     const preflightOriginalMuted = new WeakMap();
     const pendingContextSuspends = new WeakMap();
@@ -312,7 +313,11 @@
 
     document.addEventListener("play", preflightPlaybackCapture, true);
     document.addEventListener("playing", preflightPlaybackCapture, true);
-    preflightReleaseTimer = setTimeout(releasePreflightMediaMute, 250);
+    // Do not drop the protective mute on an arbitrary 250 ms timer: service
+    // worker/content-script startup can legitimately take longer. setState()
+    // releases it as soon as authorization is known; this is only a last-resort
+    // escape hatch if the extension handshake never arrives.
+    preflightReleaseTimer = setTimeout(releasePreflightMediaMute, PREFLIGHT_FAILSAFE_MS);
 
     function isMediaPlaying(element) {
         return Boolean(element && !element.paused && !element.ended);
