@@ -54,7 +54,7 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
 
     // Commit rename on blur or Enter
     const commitRename = async () => {
-        const newName = normalizeSiteSettingsEntryInput(info.value);
+        const newName = normalizeSiteSettingsEntryInput(info.value, { includeQuery: true });
         if (!newName) {
             alert('Site cannot be empty.');
             info.value = domain;
@@ -180,7 +180,7 @@ function createDebugEntry(domain, settings, onRemove, onUpdate, onRename) {
     info.setAttribute('aria-label', 'Edit site debug override');
 
     const commitRename = async () => {
-        const newName = normalizeSiteSettingsEntryInput(info.value);
+        const newName = normalizeSiteSettingsEntryInput(info.value, { includeQuery: true });
         if (!newName) {
             alert('Site cannot be empty.');
             info.value = domain;
@@ -708,7 +708,7 @@ async function initOptions() {
             // Blocklist paths use exclusion semantics; whitelist paths use
             // explicit allow-list matching independent from remembered audio.
             const v = data.whitelistMode
-                ? normalizeSiteSettingsEntryInput(newFqdnInput.value)
+                ? normalizeSiteSettingsEntryInput(newFqdnInput.value, { includeQuery: true })
                 : normalizeBlocklistEntryInput(newFqdnInput.value);
             if (!v) return;
             if (data.whitelistMode) {
@@ -745,7 +745,7 @@ async function initOptions() {
     const newRememberedInput = document.getElementById('newRememberedSite');
     if (addRememberedBtn && newRememberedInput) {
         addRememberedBtn.addEventListener('click', async () => {
-            const v = normalizeSiteSettingsEntryInput(newRememberedInput.value);
+            const v = normalizeSiteSettingsEntryInput(newRememberedInput.value, { includeQuery: true });
             if (!v) return;
             const result = await mutateSiteSettings({
                 type: "create",
@@ -768,7 +768,7 @@ async function initOptions() {
     const newDebugSiteInput = document.getElementById('newDebugSite');
     if (addDebugSiteBtn && newDebugSiteInput) {
         addDebugSiteBtn.addEventListener('click', async () => {
-            const key = normalizeSiteSettingsEntryInput(newDebugSiteInput.value);
+            const key = normalizeSiteSettingsEntryInput(newDebugSiteInput.value, { includeQuery: true });
             if (!key) return;
             const defaults = await storageGet({
                 debugMode: false,
