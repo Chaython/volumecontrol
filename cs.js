@@ -440,7 +440,9 @@ function getBoostLimitReason(element) {
 let boostLimitCache = null;
 let boostLimitCacheTime = 0;
 let boostLimitObserver = null;
+let knownMediaSweepInterval = null;
 const BOOST_LIMIT_CACHE_TTL_MS = 1000;
+const KNOWN_MEDIA_SWEEP_MS = 30000;
 
 function invalidateBoostLimitCache() {
     boostLimitCache = null;
@@ -614,6 +616,20 @@ function stopFrameReporting() {
     if (isTopFrame()) frameLimitReports.clear();
 }
 
+function sweepKnownMediaElements() {
+    for (const element of Array.from(tc.vars.knownMediaElements || [])) {
+        if (element && element.isConnected) continue;
+        if (element && isMediaPlaying(element) && isAudibleMediaElement(element)) continue;
+        if (element && element.dataset && element.dataset.vcFallback === 'true') {
+            clearFallbackVolume(element);
+        }
+        tc.vars.knownMediaElements.delete(element);
+        if (tc.vars.mediaElements) tc.vars.mediaElements.delete(element);
+        resetEmePending(element);
+    }
+    suspendAudioContextIfIdle();
+}
+
 function setupBoostLimitObserver() {
     // Invalidate the boost limit cache when audio/video elements are added or
     // removed from the DOM, so the next call to getBoostLimitInfo recomputes.
@@ -637,6 +653,9 @@ function setupBoostLimitObserver() {
         }
     });
     boostLimitObserver = observer;
+    if (!knownMediaSweepInterval) {
+        knownMediaSweepInterval = setInterval(sweepKnownMediaElements, KNOWN_MEDIA_SWEEP_MS);
+    }
     const startObserving = () => {
         if (boostLimitObserver !== observer) return;
         observer.observe(document.documentElement || document, { childList: true, subtree: true });
@@ -649,9 +668,15 @@ function setupBoostLimitObserver() {
 }
 
 function stopBoostLimitObserver() {
-    if (!boostLimitObserver) return;
-    boostLimitObserver.disconnect();
-    boostLimitObserver = null;
+    if (boostLimitObserver) {
+        boostLimitObserver.disconnect();
+        boostLimitObserver = null;
+    }
+    if (knownMediaSweepInterval) {
+        clearInterval(knownMediaSweepInterval);
+        knownMediaSweepInterval = null;
+    }
+    sweepKnownMediaElements();
 }
 
 function normalizeDbForCurrentMedia(value) {
@@ -703,26 +728,32 @@ function applyFallbackVolume(element, reason = "") {
     try {
         const currentVolume = (typeof element.volume === 'number') ? element.volume : 1;
         if (element.dataset.vcFallback !== 'true') {
-            // First time applying fallback; capture original volume.
-            element.__vc_originalVolume = gain > 1 ? 1 : currentVolume;
+            // First fallback write must preserve the page's real native base.
+            // A requested positive boost cannot be represented with
+            // HTMLMediaElement.volume, so pretending the base was 1 caused a
+            // 20% player, for example, to jump toward 100% when routing failed.
+            element.__vc_originalVolume = currentVolume;
         } else {
             // Already in fallback mode. If the page changed element.volume out
             // from under us (e.g., the page's own volume slider), update
-            // __vc_originalVolume to reflect the page's intent. Without this,
-            // the captured original can become stale and cause a volume spike
-            // when the route is later established and volume is restored.
+            // __vc_originalVolume to reflect the page's intent.
             const origBase = element.__vc_originalVolume !== undefined
                 ? element.__vc_originalVolume
-                : (gain > 1 ? 1 : currentVolume);
+                : currentVolume;
             const expectedScaled = Math.min(1, Math.max(0, origBase * Math.min(gain, 1)));
             if (Math.abs(currentVolume - expectedScaled) > 0.05) {
-                // Page changed volume; treat current as the new "original".
-                element.__vc_originalVolume = gain > 1 ? 1 : currentVolume;
+                element.__vc_originalVolume = currentVolume;
             }
         }
         element.dataset.vcFallback = 'true';
     } catch (e) {}
+
+    const previousFallbackReason = element.dataset.vcFallbackReason || "";
     if (limitReason) element.dataset.vcFallbackReason = limitReason;
+    else delete element.dataset.vcFallbackReason;
+    if (previousFallbackReason !== (element.dataset.vcFallbackReason || "")) {
+        invalidateBoostLimitCache();
+    }
 
     try {
         // Native mute: when the extension is muted, set element.muted = true
@@ -887,7 +918,7 @@ function applyState() {
     // scans on every state change. Clean up disconnected elements as we go.
     try {
         const routeNeeded = needsAudioRoute();
-        const gain = tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
+        const gain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB)) : 1;
         for (const el of Array.from(tc.vars.knownMediaElements || [])) {
             // Clean up elements that have been removed from the DOM -- but
             // keep tracking detached elements that are still playing. Sites
@@ -912,11 +943,11 @@ function applyState() {
                 continue;
             }
 
-            if (tc.vars.muted && !routeNeeded) {
+            if (isEnabled && tc.vars.muted && !routeNeeded) {
                 // Muted but no WebAudio route (e.g. fallback-only media):
                 // apply native element.muted so the OS can release audio.
                 applyFallbackVolume(el);
-            } else if (!routeNeeded && !tc.vars.isBlocked && gain < 1) {
+            } else if (isEnabled && !routeNeeded && gain < 1) {
                 applyFallbackVolume(el);
             } else if (el.dataset.vcFallback === 'true') {
                 if (gain === 1 && !tc.vars.mono && !tc.vars.muted) clearFallbackVolume(el);
@@ -1535,11 +1566,12 @@ async function start() {
         tc.vars.isBlocked = blocked;
         controlProfileReady = true;
         if (blocked) {
-            // Resolve the MAIN-world preflight immediately. This sends an
-            // authenticated disabled state, causing it to restore native page
-            // APIs instead of leaving wrappers installed on an excluded site.
+            // Restore isolated-world fallback volume/mute immediately too. A
+            // block/whitelist change from the Options page does not reload the
+            // tab, so returning before applyState() left DRM/CORS fallback
+            // attenuation or a native mute stuck on the live player.
             lastSyncedPageAudioState = null;
-            syncPageAudioHook();
+            applyState();
             stopPageBridgeTimers();
             stopFrameReporting();
             stopBoostLimitObserver();
@@ -1572,6 +1604,17 @@ async function start() {
         initWhenReady();
     } catch (e) {
         if (tc.settings.debugMode) log(`start() storage read failed: ${e && e.message}`, 2);
+        if (generation !== startGeneration) return;
+        // A storage/runtime failure must fail open to native audio. Otherwise
+        // the MAIN-world preflight has no authenticated state to consume and
+        // can keep playback muted until its emergency timeout.
+        tc.vars.isBlocked = true;
+        controlProfileReady = true;
+        lastSyncedPageAudioState = null;
+        applyState();
+        stopPageBridgeTimers();
+        stopFrameReporting();
+        stopBoostLimitObserver();
     }
 }
 
