@@ -313,6 +313,9 @@ test('CI runs a real Chromium hook smoke test without an extra artifact dependen
     const workflow = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');
     const smoke = readFileSync(join(root, 'scripts/browser-smoke.mjs'), 'utf8');
     assert.match(workflow, /node scripts\/browser-smoke\.mjs/);
+    assert.match(workflow, /VC_EXTENSION_DIR: dist\/chrome/);
+    assert.match(workflow, /VC_EXTENSION_DIR: dist\/firefox/);
+    assert.ok(workflow.indexOf('Build Firefox and Chrome packages') < workflow.indexOf('Smoke packaged Chromium hook'));
     assert.doesNotMatch(workflow, /upload-build|@actions\/artifact/);
     assert.match(smoke, /VC_BROWSER_SMOKE_PASS/);
     assert.match(smoke, /disabledRestored/);
@@ -464,7 +467,9 @@ test('startup preflight bounds native-media burst before authorization resolves'
     const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     assert.match(source, /preflightMutedElements/);
     assert.match(source, /document\.addEventListener\("play", preflightPlaybackCapture, true\)/);
-    assert.match(source, /setTimeout\(releasePreflightMediaMute, 250\)/);
+    assert.match(source, /const PREFLIGHT_FAILSAFE_MS = 3000/);
+    assert.match(source, /setTimeout\(releasePreflightMediaMute, PREFLIGHT_FAILSAFE_MS\)/);
+    assert.doesNotMatch(source, /setTimeout\(releasePreflightMediaMute, 250\)/);
 });
 
 
@@ -485,8 +490,37 @@ test('shortcut UI explains unassigned defaults and exposes Firefox reset only', 
     assert.match(source, /Not set — suggested:/);
     assert.match(source, /function restoreShortcutDefaults\(\)/);
     assert.match(source, /browserApi\.commands\.reset/);
+    assert.match(source, /commands\.openShortcutSettings/);
+    assert.match(source, /window\.addEventListener\('focus'/);
+    assert.match(source, /document\.visibilityState === 'visible'/);
     assert.match(source, /isFirefoxBrowser\(\)/);
     assert.match(html, /id="restoreShortcutDefaults" hidden/);
+});
+
+test('popup shortcut hints follow browser assignments instead of hardcoded defaults', () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    const html = readFileSync(join(root, 'popup.html'), 'utf8');
+    assert.match(source, /commands\.getAll/);
+    assert.match(source, /applyShortcutHintsToControls/);
+    assert.match(source, /shortcutToAria/);
+    assert.doesNotMatch(source, /Alt\+Shift\+Up \/ Alt\+Shift\+Down/);
+    assert.doesNotMatch(html, /aria-keyshortcuts="Alt\+Shift/);
+});
+
+test('per-site debug overrides are independent from remembered audio', () => {
+    const background = readFileSync(join(root, 'background.js'), 'utf8');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const options = readFileSync(join(root, 'options.js'), 'utf8');
+    const html = readFileSync(join(root, 'options.html'), 'utf8');
+    assert.match(background, /function mutateSiteDebugSettings/);
+    assert.match(background, /migrateSeparatedSiteDebugSettingsOnce/);
+    assert.match(background, /siteDebugSettingsSeparatedV1: true/);
+    assert.match(background, /delete next\.debug/);
+    assert.match(content, /data\.siteDebugSettings \|\| \{\}/);
+    assert.match(content, /legacyDebug = !data\.siteDebugSettingsSeparatedV1/);
+    assert.match(options, /command: "mutateSiteDebugSettings"/);
+    assert.match(options, /async function renderDebugList/);
+    assert.match(html, /id="debugList"/);
 });
 
 test('queued hotkeys remain bound to their originating tab', () => {
@@ -524,6 +558,8 @@ test('CI requires both Chromium and Firefox runtime smoke tests', () => {
     const firefox = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
     assert.match(workflow, /REQUIRE_BROWSER_SMOKE: "1"/);
     assert.match(workflow, /node scripts\/firefox-smoke\.mjs/);
+    assert.match(chromium, /process\.env\.VC_EXTENSION_DIR/);
+    assert.match(firefox, /process\.env\.VC_EXTENSION_DIR/);
     assert.match(chromium, /throw new Error\(message\)/);
     assert.match(firefox, /Firefox smoke passed/);
 });
