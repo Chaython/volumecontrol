@@ -1438,13 +1438,20 @@ function applyEffectiveDebugSettings(data, controlUrl) {
     tc.settings.forceCorsCapture = !!data.forceCorsCapture;
     tc.settings.debugRouteMode = normalizeDebugRouteMode(data.debugRouteMode);
 
-    // A remembered site's optional debug object overrides those defaults only
-    // for URLs matched by the existing remembered-profile lookup.
+    // Per-site debug overrides are independent from Remembered Audio. During
+    // the one-time migration, keep the legacy embedded object as a transient
+    // fallback so an existing DRM/CORS override never blinks off.
     const siteSettingsKey = getSiteSettingsKey(data.siteSettings || {}, controlUrl);
-    const siteSettings = siteSettingsKey ? data.siteSettings[siteSettingsKey] : null;
-    const siteDebug = siteSettings && siteSettings.debug && typeof siteSettings.debug === "object"
-        ? siteSettings.debug
+    const siteDebugKey = getSiteSettingsKey(data.siteDebugSettings || {}, controlUrl);
+    const separatedDebug = siteDebugKey ? data.siteDebugSettings[siteDebugKey] : null;
+    const legacySettings = siteSettingsKey ? data.siteSettings[siteSettingsKey] : null;
+    const legacyDebug = !data.siteDebugSettingsSeparatedV1 &&
+        legacySettings && legacySettings.debug && typeof legacySettings.debug === "object"
+        ? legacySettings.debug
         : null;
+    const siteDebug = separatedDebug && typeof separatedDebug === "object"
+        ? separatedDebug
+        : legacyDebug;
 
     if (siteDebug) {
         if (siteDebug.debugMode !== undefined) tc.settings.debugMode = !!siteDebug.debugMode;
@@ -1475,7 +1482,7 @@ async function start() {
     const generation = ++startGeneration;
     controlProfileReady = false;
     try {
-        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, whitelistSeparatedV1: false, siteSettings: {}, debugMode: false, forceDrmCapture: false, forceCorsCapture: false, debugRouteMode: "auto", legacyTwitchDefaultsPurged: false });
+        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, whitelistSeparatedV1: false, siteSettings: {}, siteDebugSettings: {}, siteDebugSettingsSeparatedV1: false, debugMode: false, forceDrmCapture: false, forceCorsCapture: false, debugRouteMode: "auto", legacyTwitchDefaultsPurged: false });
         if (generation !== startGeneration) return;
 
         // One-time migration (issue #69): V4-era builds seeded default
@@ -1622,6 +1629,8 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
             changes.whitelist ||
             changes.fqdns ||
             changes.siteSettings ||
+            changes.siteDebugSettings ||
+            changes.siteDebugSettingsSeparatedV1 ||
             changes.debugMode ||
             changes.forceDrmCapture ||
             changes.forceCorsCapture ||
