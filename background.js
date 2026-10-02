@@ -78,7 +78,9 @@ function mutateSiteSettings(mutation = {}) {
             const current = siteSettings[key] || { volume: 0, mono: false, muted: false };
             const patch = mutation.patch && typeof mutation.patch === "object" ? mutation.patch : {};
             const next = { ...current, ...patch };
-            if (Object.prototype.hasOwnProperty.call(patch, "debug") && patch.debug == null) delete next.debug;
+            // Per-site debug overrides live in siteDebugSettings and must never
+            // be coupled to Remembered Audio again.
+            delete next.debug;
             siteSettings[key] = next;
         } else if (type === "remove" || type === "removeForUrl") {
             delete siteSettings[key];
@@ -102,6 +104,77 @@ function mutateSiteSettings(mutation = {}) {
         await storageSet({ siteSettings });
         return { ok: true, key };
     };
+    siteSettingsMutationChain = siteSettingsMutationChain.then(run, run);
+    return siteSettingsMutationChain;
+}
+
+
+function mutateSiteDebugSettings(mutation = {}) {
+    const normalizeDebugValue = (value = {}) => ({
+        debugMode: !!value.debugMode,
+        forceDrmCapture: !!value.forceDrmCapture,
+        forceCorsCapture: !!value.forceCorsCapture,
+        debugRouteMode: value.debugRouteMode === "webaudio" || value.debugRouteMode === "native"
+            ? value.debugRouteMode
+            : "auto"
+    });
+
+    const run = async () => {
+        const data = await storageGet({ siteDebugSettings: {} });
+        const siteDebugSettings = { ...(data.siteDebugSettings || {}) };
+        const type = String(mutation.type || "");
+        const rawKey = String(mutation.key == null ? "" : mutation.key).trim();
+        const normalizedKey = normalizeSiteSettingsEntryInput(rawKey);
+        let key = rawKey && Object.prototype.hasOwnProperty.call(siteDebugSettings, rawKey)
+            ? rawKey
+            : normalizedKey;
+
+        if (type === "mergeForUrl" || type === "removeForUrl") {
+            const url = String(mutation.url || "");
+            const defaultKey = normalizeSiteSettingsEntryInput(mutation.defaultKey || url);
+            key = getSiteSettingsKey(siteDebugSettings, url) || defaultKey;
+        }
+
+        if (!key) return { ok: false, reason: "invalid-key" };
+
+        if (type === "create") {
+            key = normalizedKey;
+            if (!key) return { ok: false, reason: "invalid-key" };
+            if (Object.prototype.hasOwnProperty.call(siteDebugSettings, key)) {
+                return { ok: false, reason: "exists", key };
+            }
+            siteDebugSettings[key] = normalizeDebugValue(mutation.value);
+        } else if (type === "merge" || type === "mergeForUrl") {
+            const current = siteDebugSettings[key] || {};
+            const patch = mutation.patch && typeof mutation.patch === "object" ? mutation.patch : {};
+            siteDebugSettings[key] = normalizeDebugValue({ ...current, ...patch });
+        } else if (type === "remove" || type === "removeForUrl") {
+            delete siteDebugSettings[key];
+        } else if (type === "rename") {
+            const newKey = normalizeSiteSettingsEntryInput(mutation.newKey);
+            if (!newKey) return { ok: false, reason: "invalid-key" };
+            if (!Object.prototype.hasOwnProperty.call(siteDebugSettings, key)) {
+                return { ok: false, reason: "missing", key };
+            }
+            if (newKey !== key && Object.prototype.hasOwnProperty.call(siteDebugSettings, newKey)) {
+                return { ok: false, reason: "exists", key: newKey };
+            }
+            if (newKey !== key) {
+                siteDebugSettings[newKey] = siteDebugSettings[key];
+                delete siteDebugSettings[key];
+            }
+            await storageSet({ siteDebugSettings });
+            return { ok: true, key: newKey };
+        } else {
+            return { ok: false, reason: "invalid-operation" };
+        }
+
+        await storageSet({ siteDebugSettings });
+        return { ok: true, key };
+    };
+
+    // Share the profile queue with remembered audio so migration/rename/remove
+    // operations cannot interleave and lose one side of the split profile.
     siteSettingsMutationChain = siteSettingsMutationChain.then(run, run);
     return siteSettingsMutationChain;
 }
@@ -439,6 +512,49 @@ async function migrateSeparatedWhitelistOnce() {
     return accessListMutationChain.catch(handleError);
 }
 
+async function migrateSeparatedSiteDebugSettingsOnce() {
+    const run = async () => {
+        const data = await storageGet({
+            siteDebugSettingsSeparatedV1: false,
+            siteSettings: {},
+            siteDebugSettings: {}
+        });
+        if (data.siteDebugSettingsSeparatedV1) return;
+
+        const siteSettings = { ...(data.siteSettings || {}) };
+        const siteDebugSettings = { ...(data.siteDebugSettings || {}) };
+        let audioChanged = false;
+
+        for (const [key, value] of Object.entries(siteSettings)) {
+            if (!value || typeof value !== "object" || !value.debug || typeof value.debug !== "object") continue;
+            if (!Object.prototype.hasOwnProperty.call(siteDebugSettings, key)) {
+                const debug = value.debug;
+                siteDebugSettings[key] = {
+                    debugMode: !!debug.debugMode,
+                    forceDrmCapture: !!debug.forceDrmCapture,
+                    forceCorsCapture: !!debug.forceCorsCapture,
+                    debugRouteMode: debug.debugRouteMode === "webaudio" || debug.debugRouteMode === "native"
+                        ? debug.debugRouteMode
+                        : "auto"
+                };
+            }
+            const next = { ...value };
+            delete next.debug;
+            siteSettings[key] = next;
+            audioChanged = true;
+        }
+
+        await storageSet({
+            siteDebugSettingsSeparatedV1: true,
+            siteDebugSettings,
+            ...(audioChanged ? { siteSettings } : {})
+        });
+    };
+
+    siteSettingsMutationChain = siteSettingsMutationChain.then(run, run);
+    return siteSettingsMutationChain.catch(handleError);
+}
+
 async function purgeLegacyDefaultsOnce() {
     const run = async () => {
         const data = await storageGet({ fqdns: [], legacyTwitchDefaultsPurged: false });
@@ -453,13 +569,20 @@ async function purgeLegacyDefaultsOnce() {
     return accessListMutationChain.catch(handleError);
 }
 if (browserApi && browserApi.runtime && browserApi.runtime.onInstalled) {
-    browserApi.runtime.onInstalled.addListener(() => { purgeLegacyDefaultsOnce(); });
+    browserApi.runtime.onInstalled.addListener(() => {
+        purgeLegacyDefaultsOnce();
+        migrateSeparatedSiteDebugSettingsOnce();
+    });
 }
 if (browserApi && browserApi.runtime && browserApi.runtime.onStartup) {
-    browserApi.runtime.onStartup.addListener(() => { purgeLegacyDefaultsOnce(); });
+    browserApi.runtime.onStartup.addListener(() => {
+        purgeLegacyDefaultsOnce();
+        migrateSeparatedSiteDebugSettingsOnce();
+    });
 }
 purgeLegacyDefaultsOnce(); // MV3 worker wake (e.g. after an update) before any user interaction
 migrateSeparatedWhitelistOnce();
+migrateSeparatedSiteDebugSettingsOnce();
 
 if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
     browserApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -467,6 +590,16 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
 
         if (message.command === "mutateSiteSettings") {
             mutateSiteSettings(message.mutation)
+                .then((result) => sendResponse(result))
+                .catch((error) => {
+                    handleError(error);
+                    sendResponse({ ok: false, reason: "storage-error" });
+                });
+            return true;
+        }
+
+        if (message.command === "mutateSiteDebugSettings") {
+            mutateSiteDebugSettings(message.mutation)
                 .then((result) => sendResponse(result))
                 .catch((error) => {
                     handleError(error);
