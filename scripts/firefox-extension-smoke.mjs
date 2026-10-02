@@ -81,9 +81,7 @@ try {
     const port = typeof address === 'object' && address ? address.port : 0;
     if (!port) throw new Error('Could not allocate Firefox installed-extension smoke port.');
 
-    const npx = 'npx';
-    let stderr = '';
-    child = spawn(npx, [
+    const webExtArgs = [
         '--yes',
         `web-ext@${WEB_EXT_VERSION}`,
         'run',
@@ -92,11 +90,33 @@ try {
         '--headless',
         '--no-reload',
         '--start-url', `http://127.0.0.1:${port}/`
-    ], {
-        // Windows npm/npx entry points are .cmd shims and require a shell.
-        // Direct child_process.spawn('npx.cmd', ...) returns EINVAL on the
-        // hosted Windows runner before web-ext can even start.
-        shell: process.platform === 'win32',
+    ];
+
+    let launcher = 'npx';
+    let launcherArgs = webExtArgs;
+    if (process.platform === 'win32') {
+        // npm/npx are .cmd shims on Windows. Running spawn(..., {shell:true})
+        // makes cmd.exe re-parse each Node argument and splits paths such as
+        // "C:\\Program Files\\Mozilla Firefox\\firefox.exe". Build one
+        // deliberately quoted command and hand it to cmd.exe instead.
+        const quote = value => `"${String(value).replace(/"/g, '""')}"`;
+        const command = [
+            'npx',
+            '--yes',
+            `web-ext@${WEB_EXT_VERSION}`,
+            'run',
+            '--source-dir', quote(extensionRoot),
+            '--firefox', quote(browser),
+            '--headless',
+            '--no-reload',
+            '--start-url', quote(`http://127.0.0.1:${port}/`)
+        ].join(' ');
+        launcher = process.env.ComSpec || 'cmd.exe';
+        launcherArgs = ['/d', '/s', '/c', command];
+    }
+
+    let stderr = '';
+    child = spawn(launcher, launcherArgs, {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe']
     });
