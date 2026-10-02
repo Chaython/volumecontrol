@@ -1,0 +1,165 @@
+name: Publish Firefox stable
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-firefox-stable
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+
+    steps:
+      - name: Checkout release revision
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          git init .
+          git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
+          git fetch --force --no-tags --depth=1 origin "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { throw "Could not fetch $env:GITHUB_SHA" }
+          git checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "Could not check out the release revision." }
+
+      - name: Install pinned build dependencies
+        run: npm ci
+
+      - name: Run regression tests
+        run: npm test
+
+      - name: Build Firefox and Chrome packages
+        shell: powershell
+        run: .\scripts\build.ps1
+
+      - name: Smoke packaged Firefox hook
+        env:
+          REQUIRE_BROWSER_SMOKE: "1"
+          VC_EXTENSION_DIR: dist/firefox
+        run: node scripts/firefox-smoke.mjs
+
+      - name: Create readable source archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+          $source = "dist/source-v$($manifest.version).zip"
+          git archive --format=zip --output="$source" HEAD
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $source)) {
+              throw "Could not create AMO source archive."
+          }
+          Write-Host "Created $source"
+
+      - name: Check AMO credentials
+        id: amo_credentials
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AMO_JWT_ISSUER) -or
+              [string]::IsNullOrWhiteSpace($env:AMO_JWT_SECRET)) {
+              "configured=false" >> $env:GITHUB_OUTPUT
+              Write-Warning "AMO publishing skipped. Configure AMO_JWT_ISSUER and AMO_JWT_SECRET repository secrets."
+          } else {
+              "configured=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Publish listed Firefox version to AMO
+        if: steps.amo_credentials.outputs.configured == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $api = "https://addons.mozilla.org/api/v5"
+          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+          $version = [string]$manifest.version
+          $guid = [string]$manifest.browser_specific_settings.gecko.id
+          if ([string]::IsNullOrWhiteSpace($guid)) { throw "Firefox add-on ID is missing from manifest.json." }
+
+          $firefoxZip = @(Get-ChildItem -LiteralPath dist -Filter "volume-control-firefox-v$version.zip")
+          if ($firefoxZip.Count -ne 1) { throw "Expected one Firefox ZIP for v$version." }
+          $sourceZip = Get-Item -LiteralPath "dist/source-v$version.zip"
+
+          function ConvertTo-Base64Url([byte[]]$Bytes) {
+              return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+          }
+
+          function New-AmoToken {
+              $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+              $headerJson = '{"alg":"HS256","typ":"JWT"}'
+              $payload = @{
+                  iss = $env:AMO_JWT_ISSUER
+                  jti = [guid]::NewGuid().ToString("N")
+                  iat = $now
+                  exp = $now + 60
+              } | ConvertTo-Json -Compress
+
+              $header = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($headerJson))
+              $payloadPart = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($payload))
+              $unsigned = "$header.$payloadPart"
+              $key = [Text.Encoding]::UTF8.GetBytes($env:AMO_JWT_SECRET)
+              $hmac = [Security.Cryptography.HMACSHA256]::new($key)
+              try {
+                  $signature = ConvertTo-Base64Url ($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($unsigned)))
+              } finally {
+                  $hmac.Dispose()
+              }
+              return "$unsigned.$signature"
+          }
+
+          function Get-AmoHeaders {
+              return @{ Authorization = "JWT $(New-AmoToken)" }
+          }
+
+          $encodedGuid = [Uri]::EscapeDataString($guid)
+          $addonUrl = "$api/addons/addon/$encodedGuid/"
+
+          # Idempotency: do not resubmit a version already public on AMO.
+          $publicAddon = Invoke-RestMethod -Method Get -Uri $addonUrl
+          if ($publicAddon.current_version -and [string]$publicAddon.current_version.version -eq $version) {
+              Write-Host "AMO already publishes version $version; nothing to do."
+              exit 0
+          }
+
+          Write-Host "Uploading Firefox v$version to AMO validation..."
+          $upload = Invoke-RestMethod -Method Post -Uri "$api/addons/upload/" -Headers (Get-AmoHeaders) -Form @{
+              upload = $firefoxZip[0]
+              channel = "listed"
+          }
+          if (-not $upload.uuid) { throw "AMO upload did not return an upload UUID." }
+
+          $detail = $upload
+          for ($attempt = 0; $attempt -lt 60 -and -not $detail.processed; $attempt++) {
+              Start-Sleep -Seconds 5
+              $detail = Invoke-RestMethod -Method Get -Uri "$api/addons/upload/$($upload.uuid)/" -Headers (Get-AmoHeaders)
+          }
+          if (-not $detail.processed) { throw "AMO validation timed out." }
+          if (-not $detail.valid) {
+              $validation = $detail.validation | ConvertTo-Json -Depth 20
+              throw "AMO validation failed: $validation"
+          }
+
+          Write-Host "Validation passed; creating listed AMO version with ISC license and source archive."
+          $created = Invoke-RestMethod -Method Post -Uri "$api/addons/addon/$encodedGuid/versions/" -Headers (Get-AmoHeaders) -Form @{
+              upload = [string]$upload.uuid
+              license = "ISC"
+              source = $sourceZip
+          }
+
+          Write-Host "Submitted Firefox v$version to AMO."
+          if ($created.url) { Write-Host $created.url }
+
+      - name: AMO credentials not configured
+        if: steps.amo_credentials.outputs.configured != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Build and packaged Firefox smoke test passed."
+          Write-Host "To enable stable AMO publishing, add repository secrets AMO_JWT_ISSUER and AMO_JWT_SECRET."
