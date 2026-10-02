@@ -81,7 +81,7 @@ try {
     const port = typeof address === 'object' && address ? address.port : 0;
     if (!port) throw new Error('Could not allocate Firefox installed-extension smoke port.');
 
-    const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    const npx = 'npx';
     let stderr = '';
     child = spawn(npx, [
         '--yes',
@@ -93,6 +93,10 @@ try {
         '--no-reload',
         '--start-url', `http://127.0.0.1:${port}/`
     ], {
+        // Windows npm/npx entry points are .cmd shims and require a shell.
+        // Direct child_process.spawn('npx.cmd', ...) returns EINVAL on the
+        // hosted Windows runner before web-ext can even start.
+        shell: process.platform === 'win32',
         windowsHide: true,
         stdio: ['ignore', 'ignore', 'pipe']
     });
