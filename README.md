@@ -497,14 +497,14 @@ The script writes clean packages to `dist/`, using `ico.svg` for Firefox and `ch
 
 ### Stable Firefox / AMO publishing
 
-Publishing a **non-prerelease GitHub Release** runs `.github/workflows/publish-firefox.yml`. The workflow rebuilds from the release revision, reruns regression tests, smokes the packaged Firefox output, creates a readable source archive for Mozilla review, validates the upload with AMO's v5 API, and submits the listed version with the **ISC** license.
+Publishing a **non-prerelease GitHub Release** runs `.github/workflows/publish-firefox.yml`. The workflow checks out the exact stable tag, reruns regression tests, rebuilds the extension, extracts the generated Firefox ZIP, runs both hook-level and temporary-installed-addon smoke tests against that extracted release artifact, creates a readable source archive for Mozilla review, validates the upload with AMO's v5 API, and submits the listed version with the **ISC** license.
 
 Configure these repository Actions secrets before publishing a stable release:
 
 - `AMO_JWT_ISSUER` — the AMO API key/issuer.
 - `AMO_JWT_SECRET` — the matching AMO API secret.
 
-If the secrets are absent, the workflow still verifies the release build but skips the AMO submission instead of failing the release. The workflow can also be run manually with **workflow_dispatch** and is idempotent when the manifest version is already public on AMO.
+If the secrets are absent, the workflow still verifies the release build but skips the AMO submission instead of failing the release. Manual **workflow_dispatch** runs require an exact stable tag such as `V6.23` and default to **validation only**; `publish=true` must be selected explicitly to submit to AMO. Before uploading, the workflow checks authenticated AMO version history so a version already public, pending review, or otherwise already present is not submitted again.
 
 ***
 
