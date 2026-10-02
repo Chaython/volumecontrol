@@ -82,11 +82,34 @@ jobs:
         shell: powershell
         run: .\scripts\build.ps1
 
-      - name: Smoke packaged Firefox hook
+      - name: Extract Firefox release ZIP for artifact-boundary validation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+          $version = [string]$manifest.version
+          $firefoxZip = "dist\\volume-control-firefox-v$version.zip"
+          $smokeRoot = "dist\\smoke\\firefox"
+          if (-not (Test-Path -LiteralPath $firefoxZip)) {
+              throw "Firefox release ZIP was not produced: $firefoxZip"
+          }
+          Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
+          Expand-Archive -LiteralPath $firefoxZip -DestinationPath $smokeRoot -Force
+          if (-not (Test-Path -LiteralPath (Join-Path $smokeRoot "manifest.json"))) {
+              throw "Firefox release ZIP did not extract a manifest at the package root."
+          }
+
+      - name: Smoke extracted Firefox hook
         env:
           REQUIRE_BROWSER_SMOKE: "1"
-          VC_EXTENSION_DIR: dist/firefox
+          VC_EXTENSION_DIR: dist/smoke/firefox
         run: node scripts/firefox-smoke.mjs
+
+      - name: Temporarily install extracted Firefox extension
+        env:
+          VC_EXTENSION_DIR: dist/smoke/firefox
+        run: node scripts/firefox-extension-smoke.mjs
 
       - name: Create readable source archive
         shell: pwsh
