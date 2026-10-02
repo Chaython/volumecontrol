@@ -403,7 +403,27 @@ async function renderFqdnList() {
     }
 }
 
-// Render the list of keyboard shortcuts using chrome.commands.getAll().
+function isFirefoxBrowser() {
+    return Boolean(browserApi && browserApi.runtime &&
+        typeof browserApi.runtime.getURL === 'function' &&
+        browserApi.runtime.getURL('').indexOf('moz-extension://') === 0);
+}
+
+function getSuggestedShortcut(commandName) {
+    if (!browserApi || !browserApi.runtime || typeof browserApi.runtime.getManifest !== 'function') return '';
+    try {
+        const manifest = browserApi.runtime.getManifest();
+        const suggested = manifest && manifest.commands && manifest.commands[commandName] &&
+            manifest.commands[commandName].suggested_key;
+        return suggested && (suggested.default || suggested.mac || suggested.windows || suggested.linux || suggested.chromeos)
+            ? (suggested.default || suggested.mac || suggested.windows || suggested.linux || suggested.chromeos)
+            : '';
+    } catch (e) {
+        return '';
+    }
+}
+
+// Render the list of keyboard shortcuts using commands.getAll().
 // Each row shows the action description and the current key combo as keycaps.
 async function renderShortcuts() {
     const container = document.getElementById('shortcutsList');
@@ -468,7 +488,8 @@ async function renderShortcuts() {
         } else {
             const unset = document.createElement('span');
             unset.className = 'shortcut-unset';
-            unset.textContent = 'Not set';
+            const suggested = getSuggestedShortcut(cmd.name);
+            unset.textContent = suggested ? `Not set — suggested: ${suggested}` : 'Not set';
             keys.appendChild(unset);
         }
 
@@ -486,13 +507,38 @@ function openShortcutsPage() {
         alert('Could not open the shortcut settings page automatically. Please open your browser\'s extension shortcut settings manually.');
         return;
     }
-    const isFirefox = browserApi.runtime.getURL('').indexOf('moz-extension://') === 0;
-    const url = isFirefox ? 'about:addons/shortcuts' : 'chrome://extensions/shortcuts';
+    const url = isFirefoxBrowser() ? 'about:addons/shortcuts' : 'chrome://extensions/shortcuts';
     callApi(browserApi.tabs.create.bind(browserApi.tabs), [{ url }])
         .catch(err => {
             console.error('Options: failed to open shortcuts page', err);
             alert('Could not open the shortcut settings page automatically. Please open your browser\'s extension shortcut settings manually.');
         });
+}
+
+async function restoreShortcutDefaults() {
+    if (!isFirefoxBrowser() || !browserApi.commands || typeof browserApi.commands.reset !== 'function') return;
+    const button = document.getElementById('restoreShortcutDefaults');
+    if (button) {
+        button.disabled = true;
+        button.textContent = 'Restoring...';
+    }
+    try {
+        const commands = await callApi(browserApi.commands.getAll.bind(browserApi.commands), []);
+        for (const cmd of commands || []) {
+            if (cmd && cmd.name) {
+                await callApi(browserApi.commands.reset.bind(browserApi.commands), [cmd.name]);
+            }
+        }
+        await renderShortcuts();
+    } catch (e) {
+        console.error('Options: commands.reset failed', e);
+        alert('Could not restore the default shortcuts.');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = 'Restore Default Shortcuts';
+        }
+    }
 }
 
 async function initOptions() {
@@ -645,10 +691,18 @@ async function initOptions() {
         });
     }
 
-    // Keyboard shortcuts: wire up the button and render the current shortcuts.
+    // Keyboard shortcuts: wire up browser settings and Firefox's reset API.
     const openShortcutsBtn = document.getElementById('openShortcutsPage');
     if (openShortcutsBtn) {
         openShortcutsBtn.addEventListener('click', openShortcutsPage);
+    }
+    const restoreShortcutDefaultsBtn = document.getElementById('restoreShortcutDefaults');
+    if (restoreShortcutDefaultsBtn &&
+        isFirefoxBrowser() &&
+        browserApi.commands &&
+        typeof browserApi.commands.reset === 'function') {
+        restoreShortcutDefaultsBtn.hidden = false;
+        restoreShortcutDefaultsBtn.addEventListener('click', restoreShortcutDefaults);
     }
     await renderShortcuts();
 
