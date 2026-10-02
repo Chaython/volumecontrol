@@ -656,7 +656,7 @@ test('AMO manual publishing is stable-tag bound and duplicate-safe', () => {
     assert.match(source, /release_tag:/);
     assert.match(source, /publish:/);
     assert.match(source, /MANUAL_PUBLISH/);
-    assert.match(source, /refs\/tags\/\$env:RELEASE_TAG/);
+    assert.match(source, /refs\/tags\/\$\(\$env:RELEASE_TAG\)/);
     assert.match(source, /does not match manifest version/);
     assert.match(source, /filter=all_without_unlisted/);
     assert.match(source, /Validation-only manual run/);
