@@ -44,16 +44,6 @@ jobs:
       - name: Run regression tests
         run: npm test
 
-      - name: Run Chromium audio-hook smoke test
-        env:
-          REQUIRE_BROWSER_SMOKE: "1"
-        run: node scripts/browser-smoke.mjs
-
-      - name: Run Firefox audio-hook smoke test
-        env:
-          REQUIRE_BROWSER_SMOKE: "1"
-        run: node scripts/firefox-smoke.mjs
-
       - name: Build Firefox and Chrome packages
         shell: powershell
         run: .\scripts\build.ps1
@@ -73,4 +63,16 @@ jobs:
 
           Write-Host "Firefox: $($firefox[0].Name) ($($firefox[0].Length) bytes)"
           Write-Host "Chrome:  $($chrome[0].Name) ($($chrome[0].Length) bytes)"
+
+      - name: Smoke packaged Chromium hook
+        env:
+          REQUIRE_BROWSER_SMOKE: "1"
+          VC_EXTENSION_DIR: dist/chrome
+        run: node scripts/browser-smoke.mjs
+
+      - name: Smoke packaged Firefox hook
+        env:
+          REQUIRE_BROWSER_SMOKE: "1"
+          VC_EXTENSION_DIR: dist/firefox
+        run: node scripts/firefox-smoke.mjs
 
