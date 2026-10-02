@@ -440,12 +440,14 @@
         if (normalizedWithQuery && siteSettings[normalizedWithQuery]) return normalizedWithQuery;
 
         const normalized = normalizeSiteSettingsEntryInput(url);
-        if (normalized && siteSettings[normalized]) return normalized;
 
         // Backward compatibility for versions that saved local files under
         // "Local File" while the content script looked for "file".
         if (normalized === "file" && siteSettings["Local File"]) return "Local File";
 
+        // Do not return a generic exact-path key before ranking matches. A
+        // manually entered query wildcard (e.g. watch?v=*) is intentionally
+        // more specific than the default path-only watch profile.
         return Object.keys(siteSettings)
             .filter(savedEntry => isUrlRememberedByEntry(url, savedEntry))
             .sort((a, b) => compareSiteSettingsMatches(url, a, b))[0] || null;
