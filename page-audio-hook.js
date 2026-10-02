@@ -42,6 +42,7 @@
     const PREFLIGHT_FAILSAFE_MS = 3000;
     const preflightMutedElements = new Set();
     const preflightOriginalMuted = new WeakMap();
+    const preflightDesiredMuted = new WeakMap();
     const pendingContextSuspends = new WeakMap();
 
     const graphs = new WeakMap();
@@ -62,6 +63,9 @@
     const nativePlay = window.HTMLMediaElement && window.HTMLMediaElement.prototype && window.HTMLMediaElement.prototype.play;
     const nativeVolumeDescriptor = window.HTMLMediaElement && window.HTMLMediaElement.prototype
         ? Object.getOwnPropertyDescriptor(window.HTMLMediaElement.prototype, "volume")
+        : null;
+    const nativeMutedDescriptor = window.HTMLMediaElement && window.HTMLMediaElement.prototype
+        ? Object.getOwnPropertyDescriptor(window.HTMLMediaElement.prototype, "muted")
         : null;
     const nativeSrcObjectDescriptor = window.HTMLMediaElement && window.HTMLMediaElement.prototype
         ? Object.getOwnPropertyDescriptor(window.HTMLMediaElement.prototype, "srcObject")
@@ -286,12 +290,77 @@
         return promise;
     }
 
+    function readNativeMuted(element) {
+        try {
+            if (nativeMutedDescriptor && nativeMutedDescriptor.get) {
+                return Boolean(nativeMutedDescriptor.get.call(element));
+            }
+            return Boolean(element && element.muted);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function writeNativeMuted(element, value) {
+        try {
+            if (nativeMutedDescriptor && nativeMutedDescriptor.set) {
+                nativeMutedDescriptor.set.call(element, Boolean(value));
+            } else if (element) {
+                element.muted = Boolean(value);
+            }
+        } catch (e) {}
+    }
+
+    function patchPreflightMuted() {
+        if (!nativeMutedDescriptor || !nativeMutedDescriptor.get || !nativeMutedDescriptor.set ||
+            !window.HTMLMediaElement || !window.HTMLMediaElement.prototype) return;
+
+        const proto = window.HTMLMediaElement.prototype;
+        const current = Object.getOwnPropertyDescriptor(proto, "muted");
+        if (!current || !current.configurable || (current.set && current.set.name === "patchedPreflightMutedSetter")) return;
+
+        try {
+            Object.defineProperty(proto, "muted", {
+                configurable: true,
+                enumerable: nativeMutedDescriptor.enumerable,
+                get: function patchedPreflightMutedGetter() {
+                    return nativeMutedDescriptor.get.call(this);
+                },
+                set: function patchedPreflightMutedSetter(value) {
+                    const desired = Boolean(value);
+                    if (!authorizationResolved && preflightMutedElements.has(this)) {
+                        // Preserve the site's newest intent but keep native audio
+                        // muted until authorization resolves. This avoids both a
+                        // loud startup burst and clobbering a site's mute/unmute.
+                        preflightDesiredMuted.set(this, desired);
+                        nativeMutedDescriptor.set.call(this, true);
+                        return;
+                    }
+                    nativeMutedDescriptor.set.call(this, desired);
+                }
+            });
+        } catch (e) {}
+    }
+
+    function restorePreflightMutedPatch() {
+        if (!nativeMutedDescriptor || !window.HTMLMediaElement || !window.HTMLMediaElement.prototype) return;
+        try {
+            const proto = window.HTMLMediaElement.prototype;
+            const current = Object.getOwnPropertyDescriptor(proto, "muted");
+            if (current && current.set && current.set.name === "patchedPreflightMutedSetter") {
+                Object.defineProperty(proto, "muted", nativeMutedDescriptor);
+            }
+        } catch (e) {}
+    }
+
     function preflightMuteMedia(element) {
         if (authorizationResolved || !isMediaElement(element) || preflightMutedElements.has(element)) return;
         try {
-            preflightOriginalMuted.set(element, Boolean(element.muted));
+            const originalMuted = readNativeMuted(element);
+            preflightOriginalMuted.set(element, originalMuted);
+            preflightDesiredMuted.set(element, originalMuted);
             preflightMutedElements.add(element);
-            element.muted = true;
+            writeNativeMuted(element, true);
         } catch (e) {}
     }
 
@@ -302,15 +371,20 @@
             preflightReleaseTimer = null;
         }
         for (const element of Array.from(preflightMutedElements)) {
-            try { element.muted = Boolean(preflightOriginalMuted.get(element)); } catch (e) {}
+            const desiredMuted = preflightDesiredMuted.has(element)
+                ? Boolean(preflightDesiredMuted.get(element))
+                : Boolean(preflightOriginalMuted.get(element));
+            writeNativeMuted(element, desiredMuted);
             preflightMutedElements.delete(element);
         }
+        restorePreflightMutedPatch();
     }
 
     function preflightPlaybackCapture(event) {
         if (!authorizationResolved) preflightMuteMedia(event && event.target);
     }
 
+    patchPreflightMuted();
     document.addEventListener("play", preflightPlaybackCapture, true);
     document.addEventListener("playing", preflightPlaybackCapture, true);
     // Do not drop the protective mute on an arbitrary 250 ms timer: service
