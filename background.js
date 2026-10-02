@@ -41,7 +41,7 @@ function mutateSiteSettings(mutation = {}) {
         const siteSettings = { ...(data.siteSettings || {}) };
         const type = String(mutation.type || "");
         const rawKey = String(mutation.key == null ? "" : mutation.key).trim();
-        const normalizedKey = normalizeSiteSettingsEntryInput(rawKey);
+        const normalizedKey = normalizeSiteSettingsEntryInput(rawKey, { includeQuery: true });
         let key = rawKey && Object.prototype.hasOwnProperty.call(siteSettings, rawKey)
             ? rawKey
             : normalizedKey;
@@ -86,7 +86,7 @@ function mutateSiteSettings(mutation = {}) {
         } else if (type === "remove" || type === "removeForUrl") {
             delete siteSettings[key];
         } else if (type === "rename") {
-            const newKey = normalizeSiteSettingsEntryInput(mutation.newKey);
+            const newKey = normalizeSiteSettingsEntryInput(mutation.newKey, { includeQuery: true });
             if (!newKey) return { ok: false, reason: "invalid-key" };
             if (!Object.prototype.hasOwnProperty.call(siteSettings, key)) return { ok: false, reason: "missing", key };
             if (newKey !== key && Object.prototype.hasOwnProperty.call(siteSettings, newKey)) {
@@ -125,7 +125,7 @@ function mutateSiteDebugSettings(mutation = {}) {
         const siteDebugSettings = { ...(data.siteDebugSettings || {}) };
         const type = String(mutation.type || "");
         const rawKey = String(mutation.key == null ? "" : mutation.key).trim();
-        const normalizedKey = normalizeSiteSettingsEntryInput(rawKey);
+        const normalizedKey = normalizeSiteSettingsEntryInput(rawKey, { includeQuery: true });
         let key = rawKey && Object.prototype.hasOwnProperty.call(siteDebugSettings, rawKey)
             ? rawKey
             : normalizedKey;
@@ -152,7 +152,7 @@ function mutateSiteDebugSettings(mutation = {}) {
         } else if (type === "remove" || type === "removeForUrl") {
             delete siteDebugSettings[key];
         } else if (type === "rename") {
-            const newKey = normalizeSiteSettingsEntryInput(mutation.newKey);
+            const newKey = normalizeSiteSettingsEntryInput(mutation.newKey, { includeQuery: true });
             if (!newKey) return { ok: false, reason: "invalid-key" };
             if (!Object.prototype.hasOwnProperty.call(siteDebugSettings, key)) {
                 return { ok: false, reason: "missing", key };
@@ -204,7 +204,7 @@ function mutateAccessLists(mutation = {}) {
             const active = Boolean(mutation.active);
             if (whitelistMode) {
                 if (active) {
-                    const entry = normalizeSiteSettingsEntryInput(mutation.entry || url);
+                    const entry = normalizeSiteSettingsEntryInput(mutation.entry || url, { includeQuery: true });
                     if (!entry) return { ok: false, reason: "invalid-entry" };
                     if (!whitelist.includes(entry)) whitelist.push(entry);
                 } else {
@@ -235,7 +235,7 @@ function mutateAccessLists(mutation = {}) {
         }
 
         if (type === "addWhitelist") {
-            const entry = normalizeSiteSettingsEntryInput(mutation.entry);
+            const entry = normalizeSiteSettingsEntryInput(mutation.entry, { includeQuery: true });
             if (!entry) return { ok: false, reason: "invalid-entry" };
             if (whitelist.includes(entry)) return { ok: false, reason: "exists", entry };
             whitelist.push(entry);
@@ -544,7 +544,7 @@ async function migrateSeparatedWhitelistOnce() {
         if (data.whitelistMode && (!Array.isArray(data.whitelist) || data.whitelist.length === 0)) {
             updates.whitelist = [...new Set(
                 Object.keys(data.siteSettings || {})
-                    .map(entry => normalizeSiteSettingsEntryInput(entry))
+                    .map(entry => normalizeSiteSettingsEntryInput(entry, { includeQuery: true }))
                     .filter(Boolean)
             )];
         }
