@@ -407,7 +407,7 @@ test('isolated fallback never reuses a GainNode from a closed AudioContext', () 
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
     assert.match(source, /tc\.vars\.gainNode = undefined/);
     assert.match(source, /Previously hooked media lost its AudioContext/);
-    assert.match(source, /syncPageAudioHook\(\);\s*\n\s*stopPageBridgeTimers\(\)/);
+    assert.match(source, /applyState\(\);\s*\n\s*stopPageBridgeTimers\(\)/);
 });
 
 
