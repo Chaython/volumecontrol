@@ -659,6 +659,9 @@ test('AMO manual publishing is stable-tag bound and duplicate-safe', () => {
     assert.match(source, /refs\/tags\/\$\(\$env:RELEASE_TAG\)/);
     assert.match(source, /does not match manifest version/);
     assert.match(source, /filter=all_without_unlisted/);
+    assert.match(source, /Expand-Archive/);
+    assert.match(source, /VC_EXTENSION_DIR: dist\/smoke\/firefox/);
+    assert.match(source, /node scripts\/firefox-extension-smoke\.mjs/);
     assert.match(source, /Validation-only manual run/);
     assert.doesNotMatch(source, /git fetch --force --no-tags --depth=1 origin "\$env:GITHUB_SHA"/);
 });
