@@ -5,7 +5,7 @@
     const MEDIA_MANAGED_ATTR = "vcPageAudioManaged";
     const MIN_DB = -32;
     const MAX_DB = 32;
-    const BRIDGE_VERSION = 2;
+    const BRIDGE_VERSION = 3;
     const HEARTBEAT_TIMEOUT_MS = 10000;
     const supportsWeakRef = typeof WeakRef !== "undefined";
 
