@@ -16,6 +16,8 @@
         dB: 0,
         mono: false,
         muted: false,
+        normalizerEnabled: false,
+        normalizerConfig: { targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 },
         debugMode: false,
         forceDrmCapture: false,
         forceCorsCapture: false,
@@ -100,6 +102,38 @@
     function getGainValue(dB) {
         const n = normalizeDb(dB);
         return Math.pow(10, n / 20);
+    }
+
+    function dbToGain(dB) {
+        const n = Number(dB);
+        return Number.isFinite(n) ? Math.pow(10, n / 20) : 1;
+    }
+
+    function normalizeNormalizerConfig(value = {}) {
+        const finiteOr = (candidate, fallback) => {
+            const n = Number(candidate);
+            return Number.isFinite(n) ? n : fallback;
+        };
+        return {
+            targetDb: Math.max(-30, Math.min(-6, finiteOr(value.targetDb, -16))),
+            maxBoostDb: Math.max(0, Math.min(24, finiteOr(value.maxBoostDb, 12))),
+            ceilingDb: Math.max(-6, Math.min(-0.1, finiteOr(value.ceilingDb, -1))),
+            responseMs: Math.max(100, Math.min(3000, Math.round(finiteOr(value.responseMs, 600))))
+        };
+    }
+
+    function configureLimiter(processor) {
+        if (!processor || !processor.limiter) return;
+        const config = normalizeNormalizerConfig(state.normalizerConfig);
+        try {
+            processor.limiter.threshold.value = config.ceilingDb;
+            processor.limiter.knee.value = 0;
+            processor.limiter.ratio.value = 20;
+            processor.limiter.attack.value = 0.003;
+            processor.limiter.release.value = 0.12;
+        } catch (e) {
+            log(`limiter configure failed: ${e && e.message}`);
+        }
     }
 
     function markNode(node) {
@@ -547,6 +581,8 @@
         safeDisconnect(route.leftGain);
         safeDisconnect(route.rightGain);
         safeDisconnect(route.merger);
+        safeDisconnect(route.limiter);
+        safeDisconnect(route.analyser);
         route.outputConnected = false;
     }
 
@@ -574,7 +610,8 @@
     }
 
     function setGainValue(graph) {
-        const targetGain = effectiveGain();
+        const autoGain = state.normalizerEnabled ? dbToGain(graph.normalizerGainDb || 0) : 1;
+        const targetGain = effectiveGain() * autoGain;
         try {
             const now = graph.context.currentTime;
             if (graph.context.state === "running") {
@@ -625,13 +662,18 @@
         safeDisconnect(graph.leftGain);
         safeDisconnect(graph.rightGain);
         safeDisconnect(graph.merger);
+        safeDisconnect(graph.limiter);
+        safeDisconnect(graph.analyser);
 
         try {
+            configureLimiter(graph);
             if (state.extensionActive && state.enabled && state.mono) {
-                connectMonoChain(graph.gain, graph.splitter, graph.leftGain, graph.rightGain, graph.merger, graph.context.destination);
+                connectMonoChain(graph.gain, graph.splitter, graph.leftGain, graph.rightGain, graph.merger, graph.limiter);
             } else {
-                connectNative(graph.gain, graph.context.destination);
+                connectNative(graph.gain, graph.limiter);
             }
+            connectNative(graph.limiter, graph.analyser);
+            connectNative(graph.analyser, graph.context.destination);
         } catch (e) {
             log(`graph wire failed: ${e && e.message}`);
         }
@@ -647,12 +689,22 @@
             const leftGain = markNode(context.createGain());
             const rightGain = markNode(context.createGain());
             const merger = markNode(context.createChannelMerger(2));
+            const limiter = markNode(context.createDynamicsCompressor());
+            const analyser = markNode(context.createAnalyser());
 
             gain.channelInterpretation = "speakers";
             leftGain.gain.value = 0.5;
             rightGain.gain.value = 0.5;
+            analyser.fftSize = 1024;
+            analyser.smoothingTimeConstant = 0.35;
 
-            const graph = { context, gain, splitter, leftGain, rightGain, merger, currentMode: null };
+            const graph = {
+                context, gain, splitter, leftGain, rightGain, merger, limiter, analyser,
+                currentMode: null,
+                normalizerGainDb: 0,
+                meterPeakDb: -Infinity,
+                meterBuffer: new Float32Array(analyser.fftSize)
+            };
             graphs.set(context, graph);
             addTrackedContext(context);
             wireGraph(graph);
@@ -1288,11 +1340,11 @@
         if (!state.extensionActive || !state.enabled) return false;
         if (state.debugRouteMode === "native") return false;
         if (state.debugRouteMode === "webaudio") return true;
-        return state.muted || state.mono || getGainValue(state.dB) > 1;
+        return state.muted || state.mono || state.normalizerEnabled || getGainValue(state.dB) > 1;
     }
 
     function pageAudioNeedsRoute() {
-        return state.extensionActive && state.enabled && (state.muted || state.mono || Number(state.dB) !== 0);
+        return state.extensionActive && state.enabled && (state.muted || state.mono || state.normalizerEnabled || Number(state.dB) !== 0);
     }
 
     function routeRecordedDestinationConnections() {
@@ -1463,7 +1515,8 @@
     }
 
     function wireMediaRoute(route) {
-        const targetGain = effectiveGain();
+        const autoGain = state.normalizerEnabled ? dbToGain(route.normalizerGainDb || 0) : 1;
+        const targetGain = effectiveGain() * autoGain;
 
         try {
             const now = route.context.currentTime;
@@ -1490,11 +1543,14 @@
         disconnectMediaRouteOutput(route);
 
         try {
+            configureLimiter(route);
             if (state.extensionActive && state.enabled && state.mono) {
-                connectMonoChain(route.gain, route.splitter, route.leftGain, route.rightGain, route.merger, route.context.destination);
+                connectMonoChain(route.gain, route.splitter, route.leftGain, route.rightGain, route.merger, route.limiter);
             } else {
-                connectNative(route.gain, route.context.destination);
+                connectNative(route.gain, route.limiter);
             }
+            connectNative(route.limiter, route.analyser);
+            connectNative(route.analyser, route.context.destination);
             route.outputConnected = true;
         } catch (e) {
             log(`media graph wire failed: ${e && e.message}`);
@@ -1533,10 +1589,14 @@
             const leftGain = markNode(context.createGain());
             const rightGain = markNode(context.createGain());
             const merger = markNode(context.createChannelMerger(2));
+            const limiter = markNode(context.createDynamicsCompressor());
+            const analyser = markNode(context.createAnalyser());
 
             gain.channelInterpretation = "speakers";
             leftGain.gain.value = 0.5;
             rightGain.gain.value = 0.5;
+            analyser.fftSize = 1024;
+            analyser.smoothingTimeConstant = 0.35;
             // Set the gain value BEFORE connecting the source so there is no
             // brief moment of full-volume (gain=1.0) audio at route creation.
             gain.gain.value = effectiveGain();
@@ -1550,6 +1610,11 @@
                 leftGain,
                 rightGain,
                 merger,
+                limiter,
+                analyser,
+                normalizerGainDb: 0,
+                meterPeakDb: -Infinity,
+                meterBuffer: new Float32Array(analyser.fftSize),
                 sourceKind: routeSource.kind,
                 muteNative: Boolean(routeSource.muteNative),
                 stream: routeSource.stream || null,
@@ -2359,6 +2424,8 @@
         state.dB = normalizeDb(data.dB);
         state.mono = Boolean(data.mono);
         state.muted = Boolean(data.muted);
+        state.normalizerEnabled = Boolean(data.normalizerEnabled);
+        state.normalizerConfig = normalizeNormalizerConfig(data.normalizerConfig);
         state.debugMode = Boolean(data.debugMode);
         state.forceDrmCapture = Boolean(data.forceDrmCapture);
         state.forceCorsCapture = Boolean(data.forceCorsCapture);
@@ -2397,6 +2464,8 @@
         state.dB = 0;
         state.mono = false;
         state.muted = false;
+        state.normalizerEnabled = false;
+        state.normalizerConfig = normalizeNormalizerConfig({});
         state.forceDrmCapture = false;
         state.forceCorsCapture = false;
         state.debugRouteMode = "auto";
@@ -2459,6 +2528,93 @@
         setTimeout(suspendMediaContextIfIdle, 0);
     }
 
+
+    function sampleProcessor(processor) {
+        if (!processor || !processor.analyser || !processor.context || processor.context.state !== "running") {
+            return { peakDb: -Infinity, gainDb: processor && Number(processor.normalizerGainDb) || 0 };
+        }
+        const analyser = processor.analyser;
+        if (!processor.meterBuffer || processor.meterBuffer.length !== analyser.fftSize) {
+            processor.meterBuffer = new Float32Array(analyser.fftSize);
+        }
+        try {
+            analyser.getFloatTimeDomainData(processor.meterBuffer);
+        } catch (e) {
+            return { peakDb: -Infinity, gainDb: Number(processor.normalizerGainDb) || 0 };
+        }
+
+        let sum = 0;
+        let peak = 0;
+        for (let i = 0; i < processor.meterBuffer.length; i++) {
+            const sample = processor.meterBuffer[i];
+            const abs = Math.abs(sample);
+            if (abs > peak) peak = abs;
+            sum += sample * sample;
+        }
+
+        const rms = Math.sqrt(sum / Math.max(1, processor.meterBuffer.length));
+        const rmsDb = rms > 0.000001 ? 20 * Math.log10(rms) : -120;
+        const peakDb = peak > 0.000001 ? 20 * Math.log10(peak) : -Infinity;
+        processor.meterPeakDb = peakDb;
+
+        const config = normalizeNormalizerConfig(state.normalizerConfig);
+        let gainDb = Number(processor.normalizerGainDb) || 0;
+        if (state.normalizerEnabled && state.extensionActive && state.enabled && !state.muted && rmsDb > -80) {
+            const desired = Math.max(-18, Math.min(config.maxBoostDb, gainDb + (config.targetDb - rmsDb)));
+            const intervalMs = 100;
+            const alpha = 1 - Math.exp(-intervalMs / Math.max(100, config.responseMs));
+            gainDb += (desired - gainDb) * alpha;
+        } else {
+            gainDb += (0 - gainDb) * 0.35;
+        }
+
+        if (Math.abs(gainDb) < 0.01) gainDb = 0;
+        processor.normalizerGainDb = gainDb;
+        configureLimiter(processor);
+
+        try {
+            const now = processor.context.currentTime;
+            const target = effectiveGain() * (state.normalizerEnabled ? dbToGain(gainDb) : 1);
+            processor.gain.gain.cancelScheduledValues(now);
+            processor.gain.gain.setTargetAtTime(target, now, 0.035);
+        } catch (e) {}
+
+        return { peakDb, gainDb };
+    }
+
+    function updateNormalizerAndMeter() {
+        let peakDb = -Infinity;
+        let gainDb = 0;
+        let gainCount = 0;
+
+        eachTrackedContext((context) => {
+            const graph = graphs.get(context);
+            if (!graph) return;
+            const sample = sampleProcessor(graph);
+            if (Number.isFinite(sample.peakDb)) peakDb = Math.max(peakDb, sample.peakDb);
+            if (Number.isFinite(sample.gainDb)) {
+                gainDb += sample.gainDb;
+                gainCount++;
+            }
+        });
+
+        for (const element of Array.from(mediaElements)) {
+            const route = mediaRoutes.get(element);
+            if (!route || !route.outputConnected) continue;
+            const sample = sampleProcessor(route);
+            if (Number.isFinite(sample.peakDb)) peakDb = Math.max(peakDb, sample.peakDb);
+            if (Number.isFinite(sample.gainDb)) {
+                gainDb += sample.gainDb;
+                gainCount++;
+            }
+        }
+
+        postToContentScript("meterUpdate", {
+            peakDb,
+            normalizerGainDb: gainCount ? gainDb / gainCount : 0
+        });
+    }
+
     function startMaintenanceTimers() {
         if (!state.extensionActive || !state.enabled || maintenanceTimerIds.length) return;
 
@@ -2476,6 +2632,7 @@
         }, 1000);
 
         maintenanceTimerIds = [
+            setInterval(updateNormalizerAndMeter, 100),
             setInterval(sweepDeadDestinationConnections, 30000),
             setInterval(runRestrictionAudit, 1000),
             setInterval(sweepDetachedMediaElements, 30000),
