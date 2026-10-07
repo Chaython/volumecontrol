@@ -28,7 +28,26 @@
         return browserApi && browserApi.runtime ? browserApi.runtime.lastError : null;
     }
 
-    const BRIDGE_VERSION = 2;
+    const BRIDGE_VERSION = 3;
+    const DEFAULT_NORMALIZER_CONFIG = Object.freeze({
+        targetDb: -16,
+        maxBoostDb: 12,
+        ceilingDb: -1,
+        responseMs: 600
+    });
+
+    function normalizeNormalizerConfig(value = {}) {
+        const numberOr = (candidate, fallback) => {
+            const n = Number(candidate);
+            return Number.isFinite(n) ? n : fallback;
+        };
+        return {
+            targetDb: Math.max(-30, Math.min(-6, numberOr(value.targetDb, DEFAULT_NORMALIZER_CONFIG.targetDb))),
+            maxBoostDb: Math.max(0, Math.min(24, numberOr(value.maxBoostDb, DEFAULT_NORMALIZER_CONFIG.maxBoostDb))),
+            ceilingDb: Math.max(-6, Math.min(-0.1, numberOr(value.ceilingDb, DEFAULT_NORMALIZER_CONFIG.ceilingDb))),
+            responseMs: Math.max(100, Math.min(3000, Math.round(numberOr(value.responseMs, DEFAULT_NORMALIZER_CONFIG.responseMs))))
+        };
+    }
 
     function callApi(method, args = []) {
         return new Promise((resolve, reject) => {
@@ -473,7 +492,7 @@
         return HARMLESS_MESSAGE_ERRORS.some(fragment => msg.includes(fragment));
     }
 
-    const BOOST_LIMIT_NOTE = "Boosting and mono may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
+    const BOOST_LIMIT_NOTE = "Boosting, mono, and normalization may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.";
 
     // Shared error handler: suppresses harmless messaging errors (content
     // script not yet injected, tab navigated away, etc.) and logs the rest.
@@ -491,6 +510,8 @@
         MAX_DB,
         RESTRICTED_PROTOCOLS,
         BRIDGE_VERSION,
+        DEFAULT_NORMALIZER_CONFIG,
+        normalizeNormalizerConfig,
         normalizeDb,
         getGainValue,
         formatDb,
