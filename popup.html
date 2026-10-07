@@ -34,6 +34,29 @@
           <span class="volume-unit" aria-hidden="true">dB</span>
         </span>
       </div>
+
+      <div class="normalizer-panel">
+        <div class="normalizer-header">
+          <label class="switch-container normalizer-switch" for="normalizer-checkbox" title="Automatically even out loud and quiet audio">
+            <div class="switch">
+              <input type="checkbox" id="normalizer-checkbox">
+              <span class="slider"></span>
+            </div>
+            <span class="label-text">Normalize</span>
+          </label>
+          <span id="normalizer-gain" class="normalizer-gain" aria-live="polite">Gain +0.0 dB</span>
+        </div>
+        <div class="peak-meter-row">
+          <div class="peak-meter" role="meter" aria-label="Output peak level" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-60">
+            <div id="peak-meter-fill" class="peak-meter-fill"></div>
+            <div class="peak-meter-ceiling" title="-1 dBFS ceiling"></div>
+          </div>
+          <span id="peak-meter-text" class="peak-meter-text">−∞ dBFS</span>
+        </div>
+        <p id="normalizer-note" class="normalizer-note hidden" role="status">
+          Normalization needs the WebAudio route and is unavailable on this media.
+        </p>
+      </div>
     </div>
 
     <div class="bot-controls"> 
