@@ -64,6 +64,10 @@ const tc = {
     normalizerGainDb: 0,
     audioCtx: undefined,
     gainNode: undefined,
+    limiterNode: undefined,
+    analyserNode: undefined,
+    analyserBuffer: undefined,
+    normalizerTimer: null,
     isBlocked: false,
     pendingInit: false,
     // Media elements successfully hooked into our AudioContext (source.connect'd).
@@ -927,7 +931,10 @@ function applyState() {
     const audioCtx = tc.vars.audioCtx;
     const gainNode = tc.vars.gainNode;
     const isEnabled = !tc.vars.isBlocked;
-    const targetGain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB)) : 1.0;
+    const autoGain = tc.vars.normalizerEnabled
+        ? Math.pow(10, (Number(tc.vars.normalizerGainDb) || 0) / 20)
+        : 1;
+    const targetGain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB) * autoGain) : 1.0;
 
     if (gainNode && audioCtx) {
         const now = audioCtx.currentTime;
@@ -1012,12 +1019,91 @@ function applyState() {
     setTimeout(suspendAudioContextIfIdle, 250);
 }
 
+function configureIsolatedLimiter() {
+    const limiter = tc.vars.limiterNode;
+    if (!limiter) return;
+    const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
+    try {
+        limiter.threshold.value = config.ceilingDb;
+        limiter.knee.value = 0;
+        limiter.ratio.value = 20;
+        limiter.attack.value = 0.003;
+        limiter.release.value = 0.12;
+    } catch (e) {
+        if (tc.settings.debugMode) log(`isolated limiter configure failed: ${e && e.message}`, 3);
+    }
+}
+
+function sampleIsolatedNormalizer() {
+    const ctx = tc.vars.audioCtx;
+    const analyser = tc.vars.analyserNode;
+    const gainNode = tc.vars.gainNode;
+    if (!ctx || !analyser || !gainNode || ctx.state !== "running") return;
+
+    if (!tc.vars.analyserBuffer || tc.vars.analyserBuffer.length !== analyser.fftSize) {
+        tc.vars.analyserBuffer = new Float32Array(analyser.fftSize);
+    }
+
+    try {
+        analyser.getFloatTimeDomainData(tc.vars.analyserBuffer);
+    } catch (e) {
+        return;
+    }
+
+    let sum = 0;
+    let peak = 0;
+    for (let i = 0; i < tc.vars.analyserBuffer.length; i++) {
+        const sample = tc.vars.analyserBuffer[i];
+        const abs = Math.abs(sample);
+        if (abs > peak) peak = abs;
+        sum += sample * sample;
+    }
+    const rms = Math.sqrt(sum / Math.max(1, tc.vars.analyserBuffer.length));
+    const rmsDb = rms > 0.000001 ? 20 * Math.log10(rms) : -120;
+    tc.vars.normalizerPeakDb = peak > 0.000001 ? 20 * Math.log10(peak) : -Infinity;
+
+    const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
+    let gainDb = Number(tc.vars.normalizerGainDb) || 0;
+    if (tc.vars.normalizerEnabled && !tc.vars.muted && rmsDb > -80) {
+        const desired = Math.max(-18, Math.min(config.maxBoostDb, gainDb + (config.targetDb - rmsDb)));
+        const alpha = 1 - Math.exp(-100 / Math.max(100, config.responseMs));
+        gainDb += (desired - gainDb) * alpha;
+    } else {
+        gainDb += (0 - gainDb) * 0.35;
+    }
+    if (Math.abs(gainDb) < 0.01) gainDb = 0;
+    tc.vars.normalizerGainDb = gainDb;
+
+    configureIsolatedLimiter();
+    try {
+        const now = ctx.currentTime;
+        const manualGain = tc.vars.isBlocked || tc.vars.muted ? (tc.vars.isBlocked ? 1 : 0) : getGainValue(tc.vars.dB);
+        const target = manualGain * (tc.vars.normalizerEnabled ? Math.pow(10, gainDb / 20) : 1);
+        gainNode.gain.cancelScheduledValues(now);
+        gainNode.gain.setTargetAtTime(target, now, 0.035);
+    } catch (e) {}
+}
+
+function ensureIsolatedNormalizerTimer() {
+    if (tc.vars.normalizerTimer !== null) return;
+    tc.vars.normalizerTimer = setInterval(sampleIsolatedNormalizer, 100);
+}
+
 function createGainNode() {
     if (!tc.vars.audioCtx) return;
 
     if (!tc.vars.gainNode) {
         tc.vars.gainNode = tc.vars.audioCtx.createGain();
         tc.vars.gainNode.channelInterpretation = "speakers";
+        tc.vars.limiterNode = tc.vars.audioCtx.createDynamicsCompressor();
+        tc.vars.analyserNode = tc.vars.audioCtx.createAnalyser();
+        tc.vars.analyserNode.fftSize = 1024;
+        tc.vars.analyserNode.smoothingTimeConstant = 0.35;
+        configureIsolatedLimiter();
+        tc.vars.gainNode.connect(tc.vars.limiterNode);
+        tc.vars.limiterNode.connect(tc.vars.analyserNode);
+        tc.vars.analyserNode.connect(tc.vars.audioCtx.destination);
+        ensureIsolatedNormalizerTimer();
     }
     applyState();
 }
@@ -1328,6 +1414,13 @@ function connectOutput(element) {
         // before constructing a replacement context or connect() will throw a
         // cross-context InvalidAccessError.
         tc.vars.gainNode = undefined;
+        tc.vars.limiterNode = undefined;
+        tc.vars.analyserNode = undefined;
+        tc.vars.analyserBuffer = undefined;
+        if (tc.vars.normalizerTimer !== null) {
+            clearInterval(tc.vars.normalizerTimer);
+            tc.vars.normalizerTimer = null;
+        }
         // If the context was closed (e.g. the page itself called .close()
         // on it, or a previous extension version closed it), create a fresh
         // one. Note: any elements previously hooked on the old context have
@@ -1392,7 +1485,6 @@ function connectOutput(element) {
 
         if (source) {
             source.connect(tc.vars.gainNode);
-            tc.vars.gainNode.connect(tc.vars.audioCtx.destination);
 
             element.dataset.vcHooked = "true";
             tc.vars.mediaElements.add(element);
