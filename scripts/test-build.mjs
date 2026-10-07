@@ -114,8 +114,12 @@ for (const browser of ['chrome', 'firefox']) {
         const popupHtml = readFileSync(join(packageDir, 'popup.html'), 'utf8');
         const optionsHtml = readFileSync(join(packageDir, 'options.html'), 'utf8');
         assert.match(popupHtml, /id="volume-slider"/);
+        assert.match(popupHtml, /id="normalizer-checkbox"/);
+        assert.match(popupHtml, /id="peak-meter-fill"/);
         assert.match(popupHtml, /src="shared\.js"/);
         assert.match(optionsHtml, /id="debugRouteMode"/);
+        assert.match(optionsHtml, /id="normalizerTargetDb"/);
+        assert.match(optionsHtml, /id="normalizerCeilingDb"/);
         assert.match(optionsHtml, /src="options\.js"/);
 
         const popupCss = readFileSync(join(packageDir, 'popup.css'), 'utf8');
@@ -235,6 +239,27 @@ test('content scripts resolve iframe profiles from the top tab URL and refresh o
     assert.match(source, /reportFrameBoostLimit\(true\)/);
     assert.match(source, /getSiteSettingsKey\(data\.siteSettings \|\| \{\}, controlUrl\)/);
     assert.match(source, /isUrlBlockedByEntries\(controlUrl, data\.fqdns \|\| \[\]\)/);
+});
+
+test('normalizer bridge, limiter, persistence, and meter stay wired', () => {
+    const sharedSource = readFileSync(join(root, 'shared.js'), 'utf8');
+    const contentSource = readFileSync(join(root, 'cs.js'), 'utf8');
+    const hookSource = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const popupSource = readFileSync(join(root, 'popup.js'), 'utf8');
+    const backgroundSource = readFileSync(join(root, 'background.js'), 'utf8');
+
+    assert.match(sharedSource, /const BRIDGE_VERSION = 3/);
+    assert.match(sharedSource, /DEFAULT_NORMALIZER_CONFIG/);
+    assert.match(contentSource, /case "setNormalizer"/);
+    assert.match(contentSource, /command === "meterUpdate"/);
+    assert.match(contentSource, /createDynamicsCompressor\(\)/);
+    assert.match(hookSource, /const BRIDGE_VERSION = 3/);
+    assert.match(hookSource, /function updateNormalizerAndMeter\(\)/);
+    assert.match(hookSource, /createDynamicsCompressor\(\)/);
+    assert.match(hookSource, /createAnalyser\(\)/);
+    assert.match(popupSource, /command: "getMeterState"/);
+    assert.match(popupSource, /mutateSiteNormalizerSettings/);
+    assert.match(backgroundSource, /siteNormalizerSettings/);
 });
 
 test('page hook captures MediaStream/srcObject call audio and watches SPA history', () => {
