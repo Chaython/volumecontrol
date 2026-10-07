@@ -34,6 +34,7 @@ const HOTKEY_DELIVERY_RETRY_MS = 120;
 const commandChains = new Map();
 let siteSettingsMutationChain = Promise.resolve();
 let accessListMutationChain = Promise.resolve();
+let normalizerSettingsMutationChain = Promise.resolve();
 
 function mutateSiteSettings(mutation = {}) {
     const run = async () => {
@@ -107,6 +108,42 @@ function mutateSiteSettings(mutation = {}) {
     };
     siteSettingsMutationChain = siteSettingsMutationChain.then(run, run);
     return siteSettingsMutationChain;
+}
+
+
+
+function mutateSiteNormalizerSettings(mutation = {}) {
+    const run = async () => {
+        const data = await storageGet({ siteNormalizerSettings: {} });
+        const siteNormalizerSettings = { ...(data.siteNormalizerSettings || {}) };
+        const type = String(mutation.type || "");
+        const rawKey = String(mutation.key == null ? "" : mutation.key).trim();
+        const normalizedKey = normalizeSiteSettingsEntryInput(rawKey, { includeQuery: true });
+        let key = rawKey && Object.prototype.hasOwnProperty.call(siteNormalizerSettings, rawKey)
+            ? rawKey
+            : normalizedKey;
+
+        if (type === "setForUrl" || type === "removeForUrl") {
+            const url = String(mutation.url || "");
+            const defaultKey = normalizeSiteSettingsEntryInput(mutation.defaultKey || url);
+            key = getSiteSettingsKey(siteNormalizerSettings, url) || defaultKey;
+        }
+
+        if (!key) return { ok: false, reason: "invalid-key" };
+
+        if (type === "setForUrl" || type === "set") {
+            siteNormalizerSettings[key] = { enabled: Boolean(mutation.enabled) };
+        } else if (type === "removeForUrl" || type === "remove") {
+            delete siteNormalizerSettings[key];
+        } else {
+            return { ok: false, reason: "invalid-operation" };
+        }
+
+        await storageSet({ siteNormalizerSettings });
+        return { ok: true, key };
+    };
+    normalizerSettingsMutationChain = normalizerSettingsMutationChain.then(run, run);
+    return normalizerSettingsMutationChain;
 }
 
 
@@ -632,6 +669,16 @@ if (browserApi && browserApi.runtime && browserApi.runtime.onMessage) {
 
         if (message.command === "mutateSiteSettings") {
             mutateSiteSettings(message.mutation)
+                .then((result) => sendResponse(result))
+                .catch((error) => {
+                    handleError(error);
+                    sendResponse({ ok: false, reason: "storage-error" });
+                });
+            return true;
+        }
+
+        if (message.command === "mutateSiteNormalizerSettings") {
+            mutateSiteNormalizerSettings(message.mutation)
                 .then((result) => sendResponse(result))
                 .catch((error) => {
                     handleError(error);
