@@ -761,7 +761,9 @@ function applyFallbackVolume(element, reason = "") {
         // Bluetooth headphones that stay active while a media element plays).
         // We still restore __vc_originalVolume below so unmuting is clean.
         if (tc.vars.muted) {
-            if (element.dataset.vcNativeMuted !== 'true') {
+            // Only claim ownership when we actually change the native mute.
+            // A site-muted element must stay muted when Volume Control unmutes.
+            if (element.dataset.vcNativeMuted !== 'true' && !element.muted) {
                 element.muted = true;
                 element.dataset.vcNativeMuted = 'true';
             }
