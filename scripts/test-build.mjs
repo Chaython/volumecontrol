@@ -122,6 +122,12 @@ for (const browser of ['chrome', 'firefox']) {
         const optionsCss = readFileSync(join(packageDir, 'options.css'), 'utf8');
         assert.match(popupCss, /--vc-range-steps/);
         assert.match(optionsCss, /\.site-debug-group/);
+        // Firefox Android must keep both action and settings layouts usable in
+        // narrow, touch-first extension contexts after minification.
+        assert.match(popupCss, /max-width:\s*480px/);
+        assert.match(popupCss, /touch-action:\s*pan-y/);
+        assert.match(optionsCss, /max-width:\s*600px/);
+        assert.match(optionsCss, /min-width:\s*0/);
     });
 
     test(`${browser}: non-code assets preserve source bytes and encoding`, () => {
