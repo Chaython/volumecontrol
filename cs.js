@@ -43,7 +43,7 @@ const BOOST_LIMIT_NOTES = {
 let pageBridgeResyncInterval = null;
 let controlProfileReady = false;
 let profileControlUrl = "";
-let lastResolvedControlUrl = "";
+
 let startGeneration = 0;
 
 const tc = {
@@ -80,10 +80,7 @@ const tc = {
     // querySelectorAll on every state change.
     knownMediaElements: new Set(),
     audioSuspendPromise: null,
-    hasRememberedSettings: false,
-    ephemeralActiveElement: null,
-    ephemeralSourceKeys: new WeakMap(),
-    ephemeralBoundaryPending: new WeakSet()
+
   }
 };
 
@@ -1387,39 +1384,6 @@ function suspendAudioContextIfIdle() {
     tc.vars.audioSuspendPromise = promise;
 }
 
-function mediaSourceKey(element) {
-    try {
-        if (!element) return "";
-        if (element.srcObject) return "stream:" + String(element.srcObject.id || "");
-        return String(element.currentSrc || element.src || "");
-    } catch (e) {
-        return "";
-    }
-}
-
-function resetEphemeralControlsForMediaBoundary(element) {
-    if (tc.vars.hasRememberedSettings || tc.vars.isBlocked || !element) return;
-    const previousElement = tc.vars.ephemeralActiveElement;
-    const previousSource = tc.vars.ephemeralSourceKeys.get(element) || "";
-    const currentSource = mediaSourceKey(element);
-    const pendingBoundary = tc.vars.ephemeralBoundaryPending.has(element);
-    const changedElement = Boolean(previousElement && previousElement !== element);
-    const changedSource = Boolean(previousSource && currentSource && previousSource !== currentSource);
-
-    if (previousElement && (changedElement || changedSource || pendingBoundary)) {
-        tc.vars.dB = 0;
-        tc.vars.mono = false;
-        tc.vars.muted = false;
-        lastSyncedPageAudioState = null;
-        applyState();
-        syncPageAudioHook();
-    }
-
-    tc.vars.ephemeralActiveElement = element;
-    tc.vars.ephemeralSourceKeys.set(element, currentSource);
-    tc.vars.ephemeralBoundaryPending.delete(element);
-}
-
 function registerMediaElement(element) {
     if (!element) return;
     // Track all media elements (even page-managed ones) so applyState can
@@ -1448,7 +1412,6 @@ function registerMediaElement(element) {
     element.dataset.vcWatched = "true";
 
     const hookIfPlaying = () => {
-        if (isMediaPlaying(element)) resetEphemeralControlsForMediaBoundary(element);
         if (isPageAudioManaged(element)) {
             if (element.dataset.vcFallback === 'true') clearFallbackVolume(element);
             return;
@@ -1486,10 +1449,6 @@ function registerMediaElement(element) {
     // v6.14: a new source must re-earn its EME decryption proof.
     element.addEventListener('emptied', () => {
         resetEmePending(element);
-        tc.vars.ephemeralBoundaryPending.add(element);
-    }, { passive: true });
-    element.addEventListener('loadstart', () => {
-        if (tc.vars.ephemeralActiveElement === element) tc.vars.ephemeralBoundaryPending.add(element);
     }, { passive: true });
     const scheduleSuspend = () => setTimeout(suspendAudioContextIfIdle, 250);
     for (const evt of ['pause', 'ended', 'emptied']) {
@@ -1823,7 +1782,6 @@ async function start() {
         if (!isTopFrame() && controlUrl) profileControlUrl = controlUrl;
         const currentDomain = extractRootDomain(controlUrl);
         const siteSettingsKey = applyEffectiveDebugSettings(data, controlUrl);
-        tc.vars.hasRememberedSettings = Boolean(siteSettingsKey);
         tc.settings.normalizerConfig = normalizeNormalizerConfig(data.normalizerConfig);
         const normalizerSettingsKey = getSiteSettingsKey(data.siteNormalizerSettings || {}, controlUrl);
         const resolvedNormalizerEnabled = normalizerSettingsKey
@@ -1843,8 +1801,8 @@ async function start() {
         let blocked = false;
         if (data.whitelistMode) {
             // Whitelist authorization is independent from Remembered Settings.
-            // This lets users allow a site while keeping each tab/navigation at
-            // its own ephemeral 0 dB state (issue #72).
+            // This lets allowed tabs retain independent temporary controls
+            // through playlist/SPA transitions without saving them to storage.
             const explicitAllowed = (data.whitelist || []).some(entry => isUrlRememberedByEntry(controlUrl, entry));
             const legacyAllowed = !data.whitelistSeparatedV1 && Boolean(siteSettingsKey);
             const allowed = explicitAllowed || legacyAllowed;
@@ -1891,17 +1849,10 @@ async function start() {
             if (s.volume !== undefined) tc.vars.dB = normalizeDb(s.volume);
             if (s.mono !== undefined) tc.vars.mono = s.mono;
             if (s.muted !== undefined) tc.vars.muted = Boolean(s.muted);
-        } else if (lastResolvedControlUrl && controlUrl && controlUrl !== lastResolvedControlUrl) {
-            // "Remember" off means the control state is ephemeral. Reset when
-            // an SPA moves to a new video/page instead of carrying the previous
-            // video's dB/mute/mono state forward. Separate tabs already have
-            // separate content-script state; this also gives issue #72 the
-            // expected new-video default on URL-changing players such as YouTube.
-            tc.vars.dB = 0;
-            tc.vars.mono = false;
-            tc.vars.muted = false;
         }
-        lastResolvedControlUrl = controlUrl;
+        // With Remember off, preserve unsaved volume/mono/mute inside this
+        // document/tab across SPA navigation and playlist changes. New tabs
+        // and actual reloads still start from default 0 dB controls.
 
         applyState();
         ensurePageBridgeResync();

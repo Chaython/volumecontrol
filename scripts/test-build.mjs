@@ -696,11 +696,16 @@ test('whitelist authorization is independent from remembered site settings', () 
     assert.match(options, /type: "addWhitelist"/);
 });
 
-test('non-remembered SPA navigation resets ephemeral tab controls', () => {
+test('unsaved tab controls survive SPA and playlist URL changes without storage persistence', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
-    assert.match(source, /lastResolvedControlUrl/);
-    assert.match(source, /controlUrl !== lastResolvedControlUrl/);
-    assert.match(source, /tc\.vars\.dB = 0/);
+    const start = source.indexOf('        if (siteSettingsKey) {');
+    const end = source.indexOf('        applyState();\n        ensurePageBridgeResync();', start);
+    assert.ok(start >= 0 && end > start);
+    const profileLogic = source.slice(start, end);
+    assert.match(profileLogic, /data\.siteSettings\[siteSettingsKey\]/);
+    assert.doesNotMatch(profileLogic, /tc\.vars\.dB = 0/);
+    assert.doesNotMatch(source, /lastResolvedControlUrl/);
+    assert.match(source, /With Remember off, preserve unsaved volume/);
 });
 
 test('popup ignores stale async volume responses', () => {
@@ -793,11 +798,11 @@ test('page wrapper ownership survives exclusion and re-enable', () => {
     assert.match(source, /window\.Audio !== nativeAudioConstructor/);
 });
 
-test('non-remembered controls reset on same-URL media boundaries', () => {
+test('same-player source changes keep unsaved volume without skipping DRM proof reset', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
-    assert.match(source, /function resetEphemeralControlsForMediaBoundary\(element\)/);
-    assert.match(source, /ephemeralBoundaryPending/);
-    assert.match(source, /element\.addEventListener\('loadstart'/);
+    assert.doesNotMatch(source, /resetEphemeralControlsForMediaBoundary/);
+    assert.doesNotMatch(source, /ephemeralBoundaryPending/);
+    assert.match(source, /element\.addEventListener\('emptied', \(\) => \{\s*resetEmePending\(element\)/);
 });
 
 test('startup preflight bounds native-media burst before authorization resolves', () => {

@@ -388,11 +388,11 @@ try {
                     entry.first = await step('one');
                     entry.second = await step('two');
                     const after = (await send({ command: 'getAudioControlState' }))?.response;
-                    // Remember=off intentionally resets manual controls on
-                    // new source boundaries. Verify that policy, then verify
-                    // the opposite when a saved profile is present.
+                    // Unsaved controls must survive within the active tab,
+                    // including same-element playlist-style source changes.
+                    // Remember only controls persistence after reload/new tab.
                     entry.volumeAfterUnremembered = after?.volume;
-                    entry.unrememberedReset = after?.volume === 0;
+                    entry.unrememberedKept = after?.volume === -13;
                     entry.normalizerKept = after?.normalizerEnabled === true;
                     entry.meter = (await send({ command: 'getMeterState' }))?.response;
                     const saved = await cdp.evaluate(optionsSession,
@@ -410,7 +410,7 @@ try {
                     const rememberedAfter = (await send({ command: 'getAudioControlState' }))?.response;
                     entry.rememberedVolumeKept = rememberedAfter?.volume === -13;
                     entry.status = entry.first.progressed && entry.second.progressed &&
-                        entry.unrememberedReset && entry.normalizerKept &&
+                        entry.unrememberedKept && entry.normalizerKept &&
                         entry.rememberedFirst.progressed && entry.rememberedSecond.progressed &&
                         entry.rememberedVolumeKept ? 'passed' : 'failed';
                 } catch (e) {
