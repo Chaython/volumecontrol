@@ -32,6 +32,10 @@ function mutateSiteSettings(mutation) {
   return runtimeSendMessage({ command: "mutateSiteSettings", mutation });
 }
 
+function mutateSiteNormalizerSettings(mutation) {
+  return runtimeSendMessage({ command: "mutateSiteNormalizerSettings", mutation });
+}
+
 function mutateAccessLists(mutation) {
   return runtimeSendMessage({ command: "mutateAccessLists", mutation });
 }
@@ -48,12 +52,19 @@ const cached = {
   limitNote: null,
   monoCheckbox: null,
   rememberCheckbox: null,
+  normalizerCheckbox: null,
+  normalizerGain: null,
+  peakMeter: null,
+  peakMeterFill: null,
+  peakMeterText: null,
+  normalizerNote: null,
   enableCheckbox: null,
   muteBtn: null,
   activeTab: null,
   maxDb: MAX_DB,
   boostLimited: false,
   monoAvailable: true,
+  normalizerAvailable: true,
   shortcuts: {}
 };
 
@@ -416,6 +427,68 @@ function applyMonoAvailability(state = {}) {
   }
 }
 
+
+function formatMeterDb(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= -90) return "−∞ dBFS";
+  return `${n.toFixed(1)} dBFS`;
+}
+
+function applyNormalizerState(state = {}) {
+  const checkbox = cached.normalizerCheckbox || document.querySelector("#normalizer-checkbox");
+  const gainEl = cached.normalizerGain || document.querySelector("#normalizer-gain");
+  const meter = cached.peakMeter || document.querySelector(".peak-meter");
+  const fill = cached.peakMeterFill || document.querySelector("#peak-meter-fill");
+  const text = cached.peakMeterText || document.querySelector("#peak-meter-text");
+  const note = cached.normalizerNote || document.querySelector("#normalizer-note");
+  const panel = checkbox ? checkbox.closest(".normalizer-panel") : null;
+
+  if (state.normalizerEnabled !== undefined && checkbox) {
+    checkbox.checked = Boolean(state.normalizerEnabled);
+  }
+  const details = document.getElementById("normalizer-details");
+  if (details) details.hidden = !(checkbox && checkbox.checked);
+
+  const available = state.normalizerAvailable !== false;
+  cached.normalizerAvailable = available;
+  if (checkbox) {
+    // Keep the switch available even when this media cannot be processed.
+    checkbox.disabled = false;
+    checkbox.setAttribute("aria-disabled", "false");
+  }
+  if (panel) panel.classList.toggle("is-unavailable", !available);
+  if (note) {
+    const reason = state.normalizerUnavailableReason || state.limitationReason || "";
+    note.textContent = reason === "restricted"
+      ? "Normalization is unavailable for this DRM/restricted media in the current browser."
+      : reason === "cross-origin"
+        ? "Normalization is unavailable because this media cannot be safely routed through WebAudio."
+        : reason === "native-route"
+          ? "Normalization is unavailable while HTML Media Route Override is set to Force native."
+          : "Normalization needs the WebAudio route and is unavailable on this media.";
+    note.classList.toggle("hidden", available);
+  }
+
+  // Chrome runtime messages may JSON-serialize -Infinity as null.
+  // Null means silence / unknown, not a full-scale 0 dBFS peak.
+  const peakDb = typeof state.peakDb === "number" && Number.isFinite(state.peakDb)
+    ? state.peakDb : -Infinity;
+  const clampedPeak = Number.isFinite(peakDb) ? Math.max(-60, Math.min(0, peakDb)) : -60;
+  const percent = ((clampedPeak + 60) / 60) * 100;
+  if (fill) fill.style.width = `${percent.toFixed(2)}%`;
+  if (text) text.textContent = formatMeterDb(peakDb);
+  if (meter) {
+    meter.setAttribute("aria-valuenow", String(clampedPeak.toFixed(1)));
+    meter.setAttribute("aria-valuetext", formatMeterDb(peakDb));
+  }
+
+  const gainDb = Number(state.normalizerGainDb);
+  if (gainEl) {
+    const shown = Number.isFinite(gainDb) ? gainDb : 0;
+    gainEl.textContent = `Gain ${shown >= 0 ? "+" : ""}${shown.toFixed(1)} dB`;
+  }
+}
+
 function applyAudioControlState(state = {}) {
   const maxDb = Number.isFinite(Number(state.maxDb)) ? normalizeDb(state.maxDb) : MAX_DB;
 
@@ -437,6 +510,7 @@ function applyAudioControlState(state = {}) {
   }
 
   applyMonoAvailability(state);
+  applyNormalizerState(state);
 
   // Keep the mute button in sync with the content script's actual state.
   // This matters when a setVolume response carries a muted flag that was
@@ -478,6 +552,15 @@ async function pollAudioControlState(tab) {
     applyAudioControlState(state);
     if (state.mono !== undefined && cached.monoCheckbox) cached.monoCheckbox.checked = Boolean(state.mono);
     if (state.muted !== undefined) applyMuteButtonState(state.muted);
+    return state;
+}
+
+
+async function pollMeterState(tab) {
+    if (!tab || tab.id === undefined || !cached.normalizerCheckbox?.checked) return null;
+    const response = await tabsSendMessage(tab.id, { command: "getMeterState" }, TOP_FRAME_OPTIONS).catch(() => null);
+    const state = response && response.response ? response.response : null;
+    if (state) applyNormalizerState(state);
     return state;
 }
 
@@ -569,6 +652,32 @@ async function toggleMono(tab) {
       await tabsSendMessage(tab.id, { command: "setMono", mono: monoCheckbox.checked }).catch(handleError);
       await saveSiteSettings(tab);
   }
+}
+
+
+async function toggleNormalizer(tab) {
+  const checkbox = cached.normalizerCheckbox || document.querySelector("#normalizer-checkbox");
+  if (!tab || !checkbox || checkbox.disabled || !cached.normalizerAvailable) return;
+
+  const enabled = Boolean(checkbox.checked);
+  applyNormalizerState({ normalizerEnabled: enabled });
+  try {
+    await tabsSendMessage(tab.id, { command: "setNormalizer", enabled });
+    const defaultKey = normalizeSiteSettingsEntryInput(tab.url);
+    if (defaultKey) {
+      const result = await mutateSiteNormalizerSettings({
+        type: "setForUrl",
+        url: tab.url,
+        defaultKey,
+        enabled
+      });
+      if (!result?.ok) throw new Error(result?.reason || "Could not save normalization setting");
+    }
+  } catch (error) {
+    applyNormalizerState({ normalizerEnabled: !enabled });
+    handleError(error);
+  }
+  await refreshAudioControlState(tab);
 }
 
 async function toggleMute(tab, muted) {
@@ -675,12 +784,19 @@ async function initializeControls(tab) {
     const limitNote = document.querySelector("#volume-limit-note");
     const monoCheckbox = document.querySelector("#mono-checkbox");
     const rememberCheckbox = document.querySelector("#remember-checkbox");
+    const normalizerCheckbox = document.querySelector("#normalizer-checkbox");
 
     cached.slider = volumeSlider;
     cached.volumeText = volumeText;
     cached.limitNote = limitNote;
     cached.monoCheckbox = monoCheckbox;
     cached.rememberCheckbox = rememberCheckbox;
+    cached.normalizerCheckbox = normalizerCheckbox;
+    cached.normalizerGain = document.querySelector("#normalizer-gain");
+    cached.peakMeter = document.querySelector(".peak-meter");
+    cached.peakMeterFill = document.querySelector("#peak-meter-fill");
+    cached.peakMeterText = document.querySelector("#peak-meter-text");
+    cached.normalizerNote = document.querySelector("#normalizer-note");
 
     const muteBtn = document.querySelector("#mute-btn");
     cached.muteBtn = muteBtn;
@@ -749,6 +865,7 @@ async function initializeControls(tab) {
     }
 
     if (monoCheckbox) monoCheckbox.addEventListener("change", () => toggleMono(tab));
+    if (normalizerCheckbox) normalizerCheckbox.addEventListener("change", () => toggleNormalizer(tab));
     if (rememberCheckbox) rememberCheckbox.addEventListener("change", () => toggleRemember(tab));
 
     const domain = extractRootDomain(tab.url);
@@ -763,6 +880,9 @@ async function initializeControls(tab) {
     setInterval(() => {
         pollAudioControlState(tab).catch(() => {});
     }, 1000);
+    setInterval(() => {
+        pollMeterState(tab).catch(() => {});
+    }, 125);
 
     try {
         const audioState = await refreshAudioControlState(tab);

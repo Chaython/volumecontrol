@@ -114,16 +114,19 @@ for (const browser of ['chrome', 'firefox']) {
         const popupHtml = readFileSync(join(packageDir, 'popup.html'), 'utf8');
         const optionsHtml = readFileSync(join(packageDir, 'options.html'), 'utf8');
         assert.match(popupHtml, /id="volume-slider"/);
+        assert.match(popupHtml, /id="normalizer-checkbox"/);
+        assert.match(popupHtml, /id="peak-meter-fill"/);
         assert.match(popupHtml, /src="shared\.js"/);
         assert.match(optionsHtml, /id="debugRouteMode"/);
+        assert.match(optionsHtml, /id="normalizerTargetDb"/);
+        assert.match(optionsHtml, /id="normalizerCeilingDb"/);
         assert.match(optionsHtml, /src="options\.js"/);
 
         const popupCss = readFileSync(join(packageDir, 'popup.css'), 'utf8');
         const optionsCss = readFileSync(join(packageDir, 'options.css'), 'utf8');
         assert.match(popupCss, /--vc-range-steps/);
         assert.match(optionsCss, /\.site-debug-group/);
-        // Firefox Android must keep both action and settings layouts usable in
-        // narrow, touch-first extension contexts after minification.
+        // Firefox Android's responsive layouts survive packaged minification.
         assert.match(popupCss, /max-width:\s*480px/);
         assert.match(popupCss, /touch-action:\s*pan-y/);
         assert.match(optionsCss, /max-width:\s*600px/);
@@ -241,6 +244,27 @@ test('content scripts resolve iframe profiles from the top tab URL and refresh o
     assert.match(source, /reportFrameBoostLimit\(true\)/);
     assert.match(source, /getSiteSettingsKey\(data\.siteSettings \|\| \{\}, controlUrl\)/);
     assert.match(source, /isUrlBlockedByEntries\(controlUrl, data\.fqdns \|\| \[\]\)/);
+});
+
+test('normalizer bridge, limiter, persistence, and meter stay wired', () => {
+    const sharedSource = readFileSync(join(root, 'shared.js'), 'utf8');
+    const contentSource = readFileSync(join(root, 'cs.js'), 'utf8');
+    const hookSource = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const popupSource = readFileSync(join(root, 'popup.js'), 'utf8');
+    const backgroundSource = readFileSync(join(root, 'background.js'), 'utf8');
+
+    assert.match(sharedSource, /const BRIDGE_VERSION = 3/);
+    assert.match(sharedSource, /DEFAULT_NORMALIZER_CONFIG/);
+    assert.match(contentSource, /case "setNormalizer"/);
+    assert.match(contentSource, /command === "meterUpdate"/);
+    assert.match(contentSource, /createDynamicsCompressor\(\)/);
+    assert.match(hookSource, /const BRIDGE_VERSION = 3/);
+    assert.match(hookSource, /function updateNormalizerAndMeter\(\)/);
+    assert.match(hookSource, /createDynamicsCompressor\(\)/);
+    assert.match(hookSource, /createAnalyser\(\)/);
+    assert.match(popupSource, /command: "getMeterState"/);
+    assert.match(popupSource, /mutateSiteNormalizerSettings/);
+    assert.match(backgroundSource, /siteNormalizerSettings/);
 });
 
 test('page hook captures MediaStream/srcObject call audio and watches SPA history', () => {
@@ -654,6 +678,37 @@ test('Firefox audio hook smoke uses an HTTP origin for bridge messages', () => {
     assert.match(source, /res\.end\(html\)/);
     assert.match(source, /`http:\/\/127\.0\.0\.1:\$\{port\}\/`/);
     assert.doesNotMatch(source, /pathToFileURL/);
+});
+
+
+test('normalizer defaults off and per-site preferences override the default', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const options = readFileSync(join(root, 'options.js'), 'utf8');
+    assert.match(content, /normalizerDefaultEnabled: false/);
+    assert.match(content, /normalizerSettingsKey\s*\?/);
+    assert.match(content, /:\s*Boolean\(data\.normalizerDefaultEnabled\)/);
+    assert.match(content, /changes\.normalizerDefaultEnabled/);
+    assert.match(options, /storageSet\(\{ normalizerDefaultEnabled: enabled \}\)/);
+});
+
+test('normalizer off state folds popup meter and Options settings', () => {
+    const popupHtml = readFileSync(join(root, 'popup.html'), 'utf8');
+    const optionsHtml = readFileSync(join(root, 'options.html'), 'utf8');
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const options = readFileSync(join(root, 'options.js'), 'utf8');
+    assert.match(popupHtml, /id="normalizer-details"[^>]*hidden/);
+    assert.match(optionsHtml, /id="normalizer-options-details" hidden/);
+    assert.match(optionsHtml, /id="normalizerDefaultEnabled"/);
+    assert.match(popup, /details\.hidden = !\(checkbox && checkbox\.checked\)/);
+    assert.match(options, /normalizerOptionsDetails\.hidden = !active/);
+    assert.match(popup, /!cached\.normalizerCheckbox\?\.checked/);
+});
+
+test('normalizer sampling returns early when switched off', () => {
+    const hook = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(hook, /function updateNormalizerAndMeter\(\) \{\s*if \(!state\.normalizerEnabled\) return;/);
+    assert.match(content, /function sampleIsolatedNormalizer\(\) \{\s*if \(!tc\.vars\.normalizerEnabled\) return;/);
 });
 
 test('CI requires both Chromium and Firefox runtime smoke tests', () => {

@@ -12,6 +12,8 @@ const {
     purgeLegacyDefaultBlocklist,
     getSiteSettingsKey,
     BRIDGE_VERSION,
+    DEFAULT_NORMALIZER_CONFIG,
+    normalizeNormalizerConfig,
     BOOST_LIMIT_NOTE
 } = globalThis.VolumeControlShared;
 const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain;
@@ -50,14 +52,22 @@ const tc = {
     debugMode: false,
     forceDrmCapture: false,
     forceCorsCapture: false,
-    debugRouteMode: "auto"
+    debugRouteMode: "auto",
+    normalizerConfig: normalizeNormalizerConfig(DEFAULT_NORMALIZER_CONFIG)
   },
   vars: {
     dB: 0,
     mono: false,
     muted: false,
+    normalizerEnabled: false,
+    normalizerPeakDb: -Infinity,
+    normalizerGainDb: 0,
     audioCtx: undefined,
     gainNode: undefined,
+    limiterNode: undefined,
+    analyserNode: undefined,
+    analyserBuffer: undefined,
+    normalizerTimer: null,
     isBlocked: false,
     pendingInit: false,
     // Media elements successfully hooked into our AudioContext (source.connect'd).
@@ -128,6 +138,23 @@ if (browserAPI) {
                 applyState();
                 sendResponse({});
                 break;
+            case "setNormalizer":
+                tc.vars.normalizerEnabled = Boolean(msg.enabled);
+                lastSyncedPageAudioState = null;
+                applyState();
+                sendResponse({ response: getAudioControlState() });
+                break;
+            case "getMeterState":
+                sendResponse({
+                    response: {
+                        normalizerEnabled: Boolean(tc.vars.normalizerEnabled),
+                        normalizerAvailable: getNormalizerAvailability().available,
+                        normalizerUnavailableReason: getNormalizerAvailability().reason,
+                        peakDb: Number.isFinite(tc.vars.normalizerPeakDb) ? tc.vars.normalizerPeakDb : -Infinity,
+                        normalizerGainDb: Number.isFinite(tc.vars.normalizerGainDb) ? tc.vars.normalizerGainDb : 0
+                    }
+                });
+                break;
             case "getMono":
                 sendResponse({ response: tc.vars.mono });
                 break;
@@ -166,7 +193,7 @@ function needsAudioRoute() {
     if (tc.vars.isBlocked) return false;
     if (tc.settings.debugRouteMode === "native") return false;
     if (tc.settings.debugRouteMode === "webaudio") return true;
-    return tc.vars.muted || tc.vars.mono || getGainValue(tc.vars.dB) > 1;
+    return tc.vars.muted || tc.vars.mono || tc.vars.normalizerEnabled || getGainValue(tc.vars.dB) > 1;
 }
 
 function getMediaSourceUrl(element) {
@@ -695,16 +722,32 @@ function getMonoAvailability(limit = getBoostLimitInfo()) {
     return { available: true, reason: "" };
 }
 
+function getNormalizerAvailability(limit = getBoostLimitInfo()) {
+    if (tc.settings.debugRouteMode === "native") {
+        return { available: false, reason: "native-route" };
+    }
+    if (limit && limit.boostLimited) {
+        return { available: false, reason: limit.reason || "fallback" };
+    }
+    return { available: true, reason: "" };
+}
+
 function getAudioControlState() {
     enforceBoostLimit({ sync: true });
     const limit = getBoostLimitInfo();
     const monoAvailability = getMonoAvailability(limit);
+    const normalizerAvailability = getNormalizerAvailability(limit);
     return {
         volume: Math.min(normalizeDb(tc.vars.dB), limit.maxDb),
         mono: tc.vars.mono,
         monoAvailable: monoAvailability.available,
         monoUnavailableReason: monoAvailability.reason,
         muted: Boolean(tc.vars.muted),
+        normalizerEnabled: Boolean(tc.vars.normalizerEnabled),
+        normalizerAvailable: normalizerAvailability.available,
+        normalizerUnavailableReason: normalizerAvailability.reason,
+        peakDb: Number.isFinite(tc.vars.normalizerPeakDb) ? tc.vars.normalizerPeakDb : -Infinity,
+        normalizerGainDb: Number.isFinite(tc.vars.normalizerGainDb) ? tc.vars.normalizerGainDb : 0,
         boostLimited: limit.boostLimited,
         maxDb: limit.maxDb,
         limitationReason: limit.reason,
@@ -824,6 +867,8 @@ function syncPageAudioHook() {
         dB: tc.vars.isBlocked ? 0 : normalizeDb(tc.vars.dB),
         mono: !tc.vars.isBlocked && tc.vars.mono,
         muted: !tc.vars.isBlocked && Boolean(tc.vars.muted),
+        normalizerEnabled: !tc.vars.isBlocked && Boolean(tc.vars.normalizerEnabled),
+        normalizerConfig: tc.settings.normalizerConfig,
         debugMode: tc.settings.debugMode,
         forceDrmCapture: tc.settings.forceDrmCapture,
         forceCorsCapture: tc.settings.forceCorsCapture,
@@ -836,6 +881,8 @@ function syncPageAudioHook() {
         lastSyncedPageAudioState.dB === currentState.dB &&
         lastSyncedPageAudioState.mono === currentState.mono &&
         lastSyncedPageAudioState.muted === currentState.muted &&
+        lastSyncedPageAudioState.normalizerEnabled === currentState.normalizerEnabled &&
+        JSON.stringify(lastSyncedPageAudioState.normalizerConfig) === JSON.stringify(currentState.normalizerConfig) &&
         lastSyncedPageAudioState.debugMode === currentState.debugMode &&
         lastSyncedPageAudioState.forceDrmCapture === currentState.forceDrmCapture &&
         lastSyncedPageAudioState.forceCorsCapture === currentState.forceCorsCapture &&
@@ -886,7 +933,10 @@ function applyState() {
     const audioCtx = tc.vars.audioCtx;
     const gainNode = tc.vars.gainNode;
     const isEnabled = !tc.vars.isBlocked;
-    const targetGain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB)) : 1.0;
+    const autoGain = tc.vars.normalizerEnabled
+        ? Math.pow(10, (Number(tc.vars.normalizerGainDb) || 0) / 20)
+        : 1;
+    const targetGain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB) * autoGain) : 1.0;
 
     if (gainNode && audioCtx) {
         const now = audioCtx.currentTime;
@@ -971,12 +1021,92 @@ function applyState() {
     setTimeout(suspendAudioContextIfIdle, 250);
 }
 
+function configureIsolatedLimiter() {
+    const limiter = tc.vars.limiterNode;
+    if (!limiter) return;
+    const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
+    try {
+        limiter.threshold.value = config.ceilingDb;
+        limiter.knee.value = 0;
+        limiter.ratio.value = 20;
+        limiter.attack.value = 0.003;
+        limiter.release.value = 0.12;
+    } catch (e) {
+        if (tc.settings.debugMode) log(`isolated limiter configure failed: ${e && e.message}`, 3);
+    }
+}
+
+function sampleIsolatedNormalizer() {
+    if (!tc.vars.normalizerEnabled) return;
+    const ctx = tc.vars.audioCtx;
+    const analyser = tc.vars.analyserNode;
+    const gainNode = tc.vars.gainNode;
+    if (!ctx || !analyser || !gainNode || ctx.state !== "running") return;
+
+    if (!tc.vars.analyserBuffer || tc.vars.analyserBuffer.length !== analyser.fftSize) {
+        tc.vars.analyserBuffer = new Float32Array(analyser.fftSize);
+    }
+
+    try {
+        analyser.getFloatTimeDomainData(tc.vars.analyserBuffer);
+    } catch (e) {
+        return;
+    }
+
+    let sum = 0;
+    let peak = 0;
+    for (let i = 0; i < tc.vars.analyserBuffer.length; i++) {
+        const sample = tc.vars.analyserBuffer[i];
+        const abs = Math.abs(sample);
+        if (abs > peak) peak = abs;
+        sum += sample * sample;
+    }
+    const rms = Math.sqrt(sum / Math.max(1, tc.vars.analyserBuffer.length));
+    const rmsDb = rms > 0.000001 ? 20 * Math.log10(rms) : -120;
+    tc.vars.normalizerPeakDb = peak > 0.000001 ? 20 * Math.log10(peak) : -Infinity;
+
+    const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
+    let gainDb = Number(tc.vars.normalizerGainDb) || 0;
+    if (tc.vars.normalizerEnabled && !tc.vars.muted && rmsDb > -80) {
+        const desired = Math.max(-18, Math.min(config.maxBoostDb, gainDb + (config.targetDb - rmsDb)));
+        const alpha = 1 - Math.exp(-100 / Math.max(100, config.responseMs));
+        gainDb += (desired - gainDb) * alpha;
+    } else {
+        gainDb += (0 - gainDb) * 0.35;
+    }
+    if (Math.abs(gainDb) < 0.01) gainDb = 0;
+    tc.vars.normalizerGainDb = gainDb;
+
+    configureIsolatedLimiter();
+    try {
+        const now = ctx.currentTime;
+        const manualGain = tc.vars.isBlocked || tc.vars.muted ? (tc.vars.isBlocked ? 1 : 0) : getGainValue(tc.vars.dB);
+        const target = manualGain * (tc.vars.normalizerEnabled ? Math.pow(10, gainDb / 20) : 1);
+        gainNode.gain.cancelScheduledValues(now);
+        gainNode.gain.setTargetAtTime(target, now, 0.035);
+    } catch (e) {}
+}
+
+function ensureIsolatedNormalizerTimer() {
+    if (tc.vars.normalizerTimer !== null) return;
+    tc.vars.normalizerTimer = setInterval(sampleIsolatedNormalizer, 100);
+}
+
 function createGainNode() {
     if (!tc.vars.audioCtx) return;
 
     if (!tc.vars.gainNode) {
         tc.vars.gainNode = tc.vars.audioCtx.createGain();
         tc.vars.gainNode.channelInterpretation = "speakers";
+        tc.vars.limiterNode = tc.vars.audioCtx.createDynamicsCompressor();
+        tc.vars.analyserNode = tc.vars.audioCtx.createAnalyser();
+        tc.vars.analyserNode.fftSize = 1024;
+        tc.vars.analyserNode.smoothingTimeConstant = 0.35;
+        configureIsolatedLimiter();
+        tc.vars.gainNode.connect(tc.vars.limiterNode);
+        tc.vars.limiterNode.connect(tc.vars.analyserNode);
+        tc.vars.analyserNode.connect(tc.vars.audioCtx.destination);
+        ensureIsolatedNormalizerTimer();
     }
     applyState();
 }
@@ -1287,6 +1417,13 @@ function connectOutput(element) {
         // before constructing a replacement context or connect() will throw a
         // cross-context InvalidAccessError.
         tc.vars.gainNode = undefined;
+        tc.vars.limiterNode = undefined;
+        tc.vars.analyserNode = undefined;
+        tc.vars.analyserBuffer = undefined;
+        if (tc.vars.normalizerTimer !== null) {
+            clearInterval(tc.vars.normalizerTimer);
+            tc.vars.normalizerTimer = null;
+        }
         // If the context was closed (e.g. the page itself called .close()
         // on it, or a previous extension version closed it), create a fresh
         // one. Note: any elements previously hooked on the old context have
@@ -1351,7 +1488,6 @@ function connectOutput(element) {
 
         if (source) {
             source.connect(tc.vars.gainNode);
-            tc.vars.gainNode.connect(tc.vars.audioCtx.destination);
 
             element.dataset.vcHooked = "true";
             tc.vars.mediaElements.add(element);
@@ -1515,7 +1651,7 @@ async function start() {
     const generation = ++startGeneration;
     controlProfileReady = false;
     try {
-        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, whitelistSeparatedV1: false, siteSettings: {}, siteDebugSettings: {}, siteDebugSettingsSeparatedV1: false, debugMode: false, forceDrmCapture: false, forceCorsCapture: false, debugRouteMode: "auto", legacyTwitchDefaultsPurged: false });
+        const data = await storageGet({ fqdns: [], whitelist: [], whitelistMode: false, whitelistSeparatedV1: false, siteSettings: {}, siteNormalizerSettings: {}, normalizerDefaultEnabled: false, siteDebugSettings: {}, siteDebugSettingsSeparatedV1: false, debugMode: false, forceDrmCapture: false, forceCorsCapture: false, debugRouteMode: "auto", normalizerConfig: DEFAULT_NORMALIZER_CONFIG, legacyTwitchDefaultsPurged: false });
         if (generation !== startGeneration) return;
 
         // One-time migration (issue #69): V4-era builds seeded default
@@ -1538,6 +1674,11 @@ async function start() {
         const currentDomain = extractRootDomain(controlUrl);
         const siteSettingsKey = applyEffectiveDebugSettings(data, controlUrl);
         tc.vars.hasRememberedSettings = Boolean(siteSettingsKey);
+        tc.settings.normalizerConfig = normalizeNormalizerConfig(data.normalizerConfig);
+        const normalizerSettingsKey = getSiteSettingsKey(data.siteNormalizerSettings || {}, controlUrl);
+        tc.vars.normalizerEnabled = normalizerSettingsKey
+            ? Boolean(data.siteNormalizerSettings[normalizerSettingsKey]?.enabled)
+            : Boolean(data.normalizerDefaultEnabled);
 
         // Debug: show state used to decide blocking
         if (tc.settings.debugMode) {
@@ -1650,6 +1791,12 @@ window.addEventListener("message", (event) => {
         return;
     }
 
+    if (data.command === "meterUpdate") {
+        tc.vars.normalizerPeakDb = Number(data.peakDb);
+        tc.vars.normalizerGainDb = Number(data.normalizerGainDb);
+        return;
+    }
+
     if (data.command !== "requestState") return;
 
     // Reset the sync skip-cache so the next syncPageAudioHook actually sends
@@ -1674,6 +1821,9 @@ if (browserAPI && browserAPI.storage && browserAPI.storage.onChanged) {
             changes.whitelist ||
             changes.fqdns ||
             changes.siteSettings ||
+            changes.siteNormalizerSettings ||
+            changes.normalizerDefaultEnabled ||
+            changes.normalizerConfig ||
             changes.siteDebugSettings ||
             changes.siteDebugSettingsSeparatedV1 ||
             changes.debugMode ||

@@ -5,6 +5,8 @@ const {
     normalizeSiteSettingsEntryInput,
     normalizeBlocklistEntryInput,
     formatDb,
+    DEFAULT_NORMALIZER_CONFIG,
+    normalizeNormalizerConfig,
     storageGet,
     storageSet,
     runtimeSendMessage,
@@ -620,6 +622,20 @@ async function initOptions() {
     const forceDrmCaptureCheckbox = document.getElementById('forceDrmCapture');
     const forceCorsCaptureCheckbox = document.getElementById('forceCorsCapture');
     const debugRouteModeSelect = document.getElementById('debugRouteMode');
+    const normalizerDefaultCheckbox = document.getElementById('normalizerDefaultEnabled');
+    const normalizerOptionsDetails = document.getElementById('normalizer-options-details');
+    const showNormalizerOptions = (enabled) => {
+        const active = Boolean(enabled);
+        if (normalizerDefaultCheckbox) {
+            normalizerDefaultCheckbox.checked = active;
+            normalizerDefaultCheckbox.setAttribute('aria-expanded', String(active));
+        }
+        if (normalizerOptionsDetails) normalizerOptionsDetails.hidden = !active;
+    };
+    const normalizerTargetDb = document.getElementById('normalizerTargetDb');
+    const normalizerMaxBoostDb = document.getElementById('normalizerMaxBoostDb');
+    const normalizerCeilingDb = document.getElementById('normalizerCeilingDb');
+    const normalizerResponseMs = document.getElementById('normalizerResponseMs');
     const addBtn = document.getElementById('addFqdn');
     const newFqdnInput = document.getElementById('newFqdn');
     const listTitle = document.getElementById('listTitle');
@@ -646,6 +662,47 @@ async function initOptions() {
             updateAccessListLabels(enabled);
             await renderFqdnList();
         });
+    }
+
+    const initialNormalizerState = await storageGet({ normalizerDefaultEnabled: false });
+    showNormalizerOptions(initialNormalizerState.normalizerDefaultEnabled);
+    if (normalizerDefaultCheckbox) {
+        normalizerDefaultCheckbox.addEventListener('change', async () => {
+            const enabled = normalizerDefaultCheckbox.checked;
+            showNormalizerOptions(enabled);
+            try {
+                await storageSet({ normalizerDefaultEnabled: enabled });
+            } catch (error) {
+                showNormalizerOptions(!enabled);
+                console.error('Could not save normalizer default:', error);
+            }
+        });
+    }
+    const normalizerInputs = [normalizerTargetDb, normalizerMaxBoostDb, normalizerCeilingDb, normalizerResponseMs];
+    const applyNormalizerConfigToInputs = (rawConfig) => {
+        const config = normalizeNormalizerConfig(rawConfig || DEFAULT_NORMALIZER_CONFIG);
+        if (normalizerTargetDb) normalizerTargetDb.value = String(config.targetDb);
+        if (normalizerMaxBoostDb) normalizerMaxBoostDb.value = String(config.maxBoostDb);
+        if (normalizerCeilingDb) normalizerCeilingDb.value = String(config.ceilingDb);
+        if (normalizerResponseMs) normalizerResponseMs.value = String(config.responseMs);
+    };
+    const saveNormalizerConfig = async () => {
+        const config = normalizeNormalizerConfig({
+            targetDb: normalizerTargetDb && normalizerTargetDb.value,
+            maxBoostDb: normalizerMaxBoostDb && normalizerMaxBoostDb.value,
+            ceilingDb: normalizerCeilingDb && normalizerCeilingDb.value,
+            responseMs: normalizerResponseMs && normalizerResponseMs.value
+        });
+        applyNormalizerConfigToInputs(config);
+        await storageSet({ normalizerConfig: config });
+    };
+    if (normalizerInputs.some(Boolean)) {
+        const data = await storageGet({ normalizerConfig: DEFAULT_NORMALIZER_CONFIG });
+        applyNormalizerConfigToInputs(data.normalizerConfig);
+        for (const input of normalizerInputs.filter(Boolean)) {
+            input.addEventListener('change', saveNormalizerConfig);
+            input.addEventListener('blur', saveNormalizerConfig);
+        }
     }
 
     if (debugModeCheckbox) {
@@ -856,6 +913,12 @@ async function initOptions() {
                 renderFqdnList();
                 fqdnListRenderTimeout = null;
             }, 50);
+        }
+        if (changes.normalizerConfig) {
+            applyNormalizerConfigToInputs(changes.normalizerConfig.newValue);
+        }
+        if (changes.normalizerDefaultEnabled) {
+            showNormalizerOptions(changes.normalizerDefaultEnabled.newValue);
         }
         if (changes.debugMode && debugModeCheckbox) {
             debugModeCheckbox.checked = !!changes.debugMode.newValue;

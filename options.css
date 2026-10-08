@@ -507,6 +507,57 @@ button#openShortcutsPage:hover {
     }
 }
 
+
+/* Normalizer advanced settings */
+.normalizer-setting-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+    gap: 10px 18px;
+}
+
+.normalizer-setting-grid label {
+    display: grid;
+    grid-template-columns: minmax(130px, 1fr) 82px auto;
+    gap: 8px;
+    align-items: center;
+    font-weight: 600;
+}
+
+.normalizer-setting-grid input[type="number"] {
+    width: 82px;
+    box-sizing: border-box;
+    padding: 5px 7px;
+    border: 1px solid #bbb;
+    border-radius: 4px;
+    background: #fff;
+    color: #222;
+}
+
+.setting-unit {
+    font-size: 0.85em;
+    font-weight: normal;
+    color: #666;
+    white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+    .normalizer-setting-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (prefers-color-scheme: dark) {
+    .normalizer-setting-grid input[type="number"] {
+        background: #333;
+        color: #fff;
+        border-color: #555;
+    }
+
+    .setting-unit {
+        color: #aaa;
+    }
+}
+
 /* Settings also opens as a full browser tab on Firefox for Android. */
 @media (max-width: 600px), (pointer: coarse) {
   html { max-width: 100%; overflow-x: hidden; }
@@ -521,3 +572,8 @@ button#openShortcutsPage:hover {
   button { min-height: 40px; }
   .hint { margin-left: 0; }
 }
+
+/* Normalization defaults to off: keep the settings section collapsed. */
+#normalizer-options-details[hidden] { display: none !important; }
+.normalizer-master-switch { margin-bottom: 10px; }
+.normalizer-master-switch label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
