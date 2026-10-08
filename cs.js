@@ -1077,6 +1077,28 @@ function configureIsolatedLimiter() {
     }
 }
 
+function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {
+        // Never amplify the noise floor or reuse stale gain if the analyser
+        // reports silence/errors. This is intentionally independent of the
+        // volume slider so users retain control of the final output level.
+        if (!Number.isFinite(sourceRmsDb) || sourceRmsDb <= -55 ||
+            !Number.isFinite(sourcePeakDb)) return 0;
+
+        const previous = Number.isFinite(previousDb) ? previousDb : 0;
+        // Leave a 2 dB sample-peak margin below the requested compressor
+        // threshold. This reduces sudden overshoot; it is NOT a hard or
+        // inter-sample true-peak guarantee (WebAudio compressors aren't).
+        const rmsTarget = config.targetDb - sourceRmsDb;
+        const peakHeadroom = config.ceilingDb - 2 - sourcePeakDb;
+        const desired = Math.max(-32, Math.min(config.maxBoostDb, rmsTarget, peakHeadroom));
+
+        // Loudness jumps must shed existing boost immediately. Raising gain
+        // is deliberately much slower to avoid pumping from brief quiet gaps.
+        if (desired <= previous) return desired;
+        const alpha = 1 - Math.exp(-100 / Math.max(100, config.responseMs));
+        return previous + (desired - previous) * alpha;
+    }
+
 function sampleIsolatedNormalizer() {
     if (!tc.vars.normalizerEnabled) return;
     const ctx = tc.vars.audioCtx;
@@ -1109,24 +1131,28 @@ function sampleIsolatedNormalizer() {
         tc.vars.inputAnalyserBuffer = new Float32Array(sourceAnalyser.fftSize);
     }
     let sourceRmsDb = -120;
+    let sourcePeakDb = -Infinity;
     try {
         sourceAnalyser.getFloatTimeDomainData(tc.vars.inputAnalyserBuffer);
         let sourceSum = 0;
+        let sourcePeak = 0;
         for (let i = 0; i < tc.vars.inputAnalyserBuffer.length; i++) {
-            sourceSum += tc.vars.inputAnalyserBuffer[i] * tc.vars.inputAnalyserBuffer[i];
+            const sample = tc.vars.inputAnalyserBuffer[i];
+            sourceSum += sample * sample;
+            sourcePeak = Math.max(sourcePeak, Math.abs(sample));
         }
         const sourceRms = Math.sqrt(sourceSum / Math.max(1, tc.vars.inputAnalyserBuffer.length));
         sourceRmsDb = sourceRms > 0.000001 ? 20 * Math.log10(sourceRms) : -120;
+        sourcePeakDb = sourcePeak > 0.000001 ? 20 * Math.log10(sourcePeak) : -Infinity;
     } catch (e) {}
 
     const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
     let gainDb = Number(tc.vars.normalizerGainDb) || 0;
-    if (tc.vars.normalizerEnabled && !tc.vars.muted && sourceRmsDb > -80) {
-        const desired = Math.max(-18, Math.min(config.maxBoostDb, config.targetDb - sourceRmsDb));
-        const alpha = 1 - Math.exp(-100 / Math.max(100, config.responseMs));
-        gainDb += (desired - gainDb) * alpha;
+    const previousGainDb = gainDb;
+    if (tc.vars.normalizerEnabled && !tc.vars.muted && !tc.vars.isBlocked) {
+        gainDb = computeSafeNormalizerGainDb(gainDb, sourceRmsDb, sourcePeakDb, config);
     } else {
-        gainDb += (0 - gainDb) * 0.35;
+        gainDb = 0;
     }
     if (Math.abs(gainDb) < 0.01) gainDb = 0;
     tc.vars.normalizerGainDb = gainDb;
@@ -1137,7 +1163,7 @@ function sampleIsolatedNormalizer() {
         const manualGain = tc.vars.isBlocked || tc.vars.muted ? (tc.vars.isBlocked ? 1 : 0) : getGainValue(tc.vars.dB);
         const target = manualGain * (tc.vars.normalizerEnabled ? Math.pow(10, gainDb / 20) : 1);
         gainNode.gain.cancelScheduledValues(now);
-        gainNode.gain.setTargetAtTime(target, now, 0.035);
+        gainNode.gain.setTargetAtTime(target, now, gainDb < previousGainDb ? 0.008 : 0.035);
     } catch (e) {}
 }
 
@@ -1163,7 +1189,9 @@ function createGainNode() {
         tc.vars.gainNode = tc.vars.audioCtx.createGain();
         tc.vars.gainNode.channelInterpretation = "speakers";
         tc.vars.inputAnalyserNode = tc.vars.audioCtx.createAnalyser();
-        tc.vars.inputAnalyserNode.fftSize = 1024;
+        // Cover most of each 100ms controller interval, rather than a
+        // single ~21ms frame that can miss loud attacks.
+        tc.vars.inputAnalyserNode.fftSize = 4096;
         tc.vars.inputAnalyserNode.smoothingTimeConstant = 0.35;
         tc.vars.inputAnalyserNode.connect(tc.vars.gainNode);
         tc.vars.limiterNode = tc.vars.audioCtx.createDynamicsCompressor();

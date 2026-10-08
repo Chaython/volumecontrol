@@ -720,7 +720,9 @@
             rightGain.gain.value = 0.5;
             analyser.fftSize = 1024;
             analyser.smoothingTimeConstant = 0.35;
-            inputAnalyser.fftSize = 1024;
+            // Roughly 85–93ms of source audio at common 48/44.1 kHz rates;
+            // reduce missed transients between 100ms AGC updates.
+            inputAnalyser.fftSize = 4096;
             inputAnalyser.smoothingTimeConstant = 0.35;
 
             const graph = {
@@ -1632,7 +1634,9 @@
             rightGain.gain.value = 0.5;
             analyser.fftSize = 1024;
             analyser.smoothingTimeConstant = 0.35;
-            inputAnalyser.fftSize = 1024;
+            // Roughly 85–93ms of source audio at common 48/44.1 kHz rates;
+            // reduce missed transients between 100ms AGC updates.
+            inputAnalyser.fftSize = 4096;
             inputAnalyser.smoothingTimeConstant = 0.35;
             // Set the gain value BEFORE connecting the source so there is no
             // brief moment of full-volume (gain=1.0) audio at route creation.
@@ -2594,6 +2598,28 @@
     }
 
 
+    function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {
+        // Never amplify the noise floor or reuse stale gain if the analyser
+        // reports silence/errors. This is intentionally independent of the
+        // volume slider so users retain control of the final output level.
+        if (!Number.isFinite(sourceRmsDb) || sourceRmsDb <= -55 ||
+            !Number.isFinite(sourcePeakDb)) return 0;
+
+        const previous = Number.isFinite(previousDb) ? previousDb : 0;
+        // Leave a 2 dB sample-peak margin below the requested compressor
+        // threshold. This reduces sudden overshoot; it is NOT a hard or
+        // inter-sample true-peak guarantee (WebAudio compressors aren't).
+        const rmsTarget = config.targetDb - sourceRmsDb;
+        const peakHeadroom = config.ceilingDb - 2 - sourcePeakDb;
+        const desired = Math.max(-32, Math.min(config.maxBoostDb, rmsTarget, peakHeadroom));
+
+        // Loudness jumps must shed existing boost immediately. Raising gain
+        // is deliberately much slower to avoid pumping from brief quiet gaps.
+        if (desired <= previous) return desired;
+        const alpha = 1 - Math.exp(-100 / Math.max(100, config.responseMs));
+        return previous + (desired - previous) * alpha;
+    }
+
     function sampleProcessor(processor) {
         if (!processor || !processor.analyser || !processor.context || processor.context.state !== "running") {
             return { peakDb: -Infinity, gainDb: processor && Number(processor.normalizerGainDb) || 0 };
@@ -2622,6 +2648,7 @@
         // Otherwise moving the user's slider changes detected loudness and
         // the normalizer gradually cancels their requested gain adjustment.
         let sourceRmsDb = -120;
+        let sourcePeakDb = -Infinity;
         const sourceAnalyser = processor.inputAnalyser;
         if (sourceAnalyser) {
             if (!processor.inputBuffer || processor.inputBuffer.length !== sourceAnalyser.fftSize) {
@@ -2630,22 +2657,24 @@
             try {
                 sourceAnalyser.getFloatTimeDomainData(processor.inputBuffer);
                 let sourceSum = 0;
+                let sourcePeak = 0;
                 for (let i = 0; i < processor.inputBuffer.length; i++) {
-                    sourceSum += processor.inputBuffer[i] * processor.inputBuffer[i];
+                    const sample = processor.inputBuffer[i];
+                    sourceSum += sample * sample;
+                    sourcePeak = Math.max(sourcePeak, Math.abs(sample));
                 }
                 const sourceRms = Math.sqrt(sourceSum / Math.max(1, processor.inputBuffer.length));
                 sourceRmsDb = sourceRms > 0.000001 ? 20 * Math.log10(sourceRms) : -120;
+                sourcePeakDb = sourcePeak > 0.000001 ? 20 * Math.log10(sourcePeak) : -Infinity;
             } catch (e) {}
         }
         const config = normalizeNormalizerConfig(state.normalizerConfig);
         let gainDb = Number(processor.normalizerGainDb) || 0;
-        if (state.normalizerEnabled && state.extensionActive && state.enabled && !state.muted && sourceRmsDb > -80) {
-            const desired = Math.max(-18, Math.min(config.maxBoostDb, config.targetDb - sourceRmsDb));
-            const intervalMs = 100;
-            const alpha = 1 - Math.exp(-intervalMs / Math.max(100, config.responseMs));
-            gainDb += (desired - gainDb) * alpha;
+        const previousGainDb = gainDb;
+        if (state.normalizerEnabled && state.extensionActive && state.enabled && !state.muted) {
+            gainDb = computeSafeNormalizerGainDb(gainDb, sourceRmsDb, sourcePeakDb, config);
         } else {
-            gainDb += (0 - gainDb) * 0.35;
+            gainDb = 0;
         }
 
         if (Math.abs(gainDb) < 0.01) gainDb = 0;
@@ -2656,7 +2685,7 @@
             const now = processor.context.currentTime;
             const target = effectiveGain() * (state.normalizerEnabled ? dbToGain(gainDb) : 1);
             processor.gain.gain.cancelScheduledValues(now);
-            processor.gain.gain.setTargetAtTime(target, now, 0.035);
+            processor.gain.gain.setTargetAtTime(target, now, gainDb < previousGainDb ? 0.008 : 0.035);
         } catch (e) {}
 
         return { peakDb, gainDb };

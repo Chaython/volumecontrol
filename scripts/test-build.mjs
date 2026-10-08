@@ -266,7 +266,7 @@ test('normalizer input detection is upstream of the manual slider in all audio p
 
 test('moving volume slider cannot cause the MAIN-world normalizer to compensate', () => {
     const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
-    const start = source.indexOf('    function sampleProcessor(processor) {');
+    const start = source.indexOf('    function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
     const end = source.indexOf('    function updateNormalizerAndMeter() {', start);
     assert.ok(start >= 0 && end > start);
     let outputAmplitude = 0.1;
@@ -280,8 +280,8 @@ test('moving volume slider cannot cause the MAIN-world normalizer to compensate'
         gain: { gain: controls }, normalizerGainDb: 0
     };
     const state = { normalizerEnabled: true, extensionActive: true, enabled: true, muted: false };
-    const config = { targetDb: -16, maxBoostDb: 12, responseMs: 100 };
-    const sample = runInNewContext('(' + source.slice(start, end).trim() + ')', {
+    const config = { targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 100 };
+    const sample = runInNewContext('(function () {\n' + source.slice(start, end) + '\nreturn sampleProcessor;\n})()', {
         state, normalizeNormalizerConfig: () => config, configureLimiter: () => {},
         effectiveGain: () => manualGain, dbToGain: dB => 10 ** (dB / 20)
     });
@@ -302,7 +302,7 @@ test('moving volume slider cannot cause the MAIN-world normalizer to compensate'
 
 test('moving volume slider cannot cause the isolated-world normalizer to compensate', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
-    const start = source.indexOf('function sampleIsolatedNormalizer() {');
+    const start = source.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
     const end = source.indexOf('function ensureIsolatedNormalizerTimer() {', start);
     assert.ok(start >= 0 && end > start);
     let outputAmplitude = 0.1;
@@ -317,8 +317,8 @@ test('moving volume slider cannot cause the isolated-world normalizer to compens
         },
         settings: { normalizerConfig: {} }
     };
-    const sample = runInNewContext('(' + source.slice(start, end).trim() + ')', {
-        tc, normalizeNormalizerConfig: () => ({ targetDb: -16, maxBoostDb: 12, responseMs: 100 }),
+    const sample = runInNewContext('(function () {\n' + source.slice(start, end) + '\nreturn sampleIsolatedNormalizer;\n})()', {
+        tc, normalizeNormalizerConfig: () => ({ targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 100 }),
         configureIsolatedLimiter: () => {}, getGainValue: db => 10 ** (db / 20)
     });
     for (let n = 0; n < 40; n++) sample();
@@ -329,6 +329,38 @@ test('moving volume slider cannot cause the isolated-world normalizer to compens
     for (let n = 0; n < 40; n++) sample();
     assert.ok(Math.abs(tc.vars.normalizerGainDb - settledGain) < 0.02);
     assert.ok(Math.abs(controls.lastGain / settledOutput - 0.1) < 0.005);
+});
+
+
+test('automatic normalization gains are bounded by source peaks and silence gate in both worlds', () => {
+    for (const file of ['page-audio-hook.js', 'cs.js']) {
+        const src = readFileSync(join(root, file), 'utf8');
+        const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
+        const end = src.indexOf(file === 'cs.js' ? 'function sampleIsolatedNormalizer() {' : 'function sampleProcessor(processor) {', start);
+        assert.ok(start >= 0 && end > start, file + ': missing gain guard');
+        const update = runInNewContext('(' + src.slice(start, end).trim() + ')');
+        const cfg = { targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
+
+        assert.equal(update(12, -65, -50, cfg), 0, 'no boost of quiet background/noise');
+        assert.equal(update(10, -55, -40, cfg), 0, 'gate boundary resets stale boost');
+        assert.equal(update(10, NaN, -30, cfg), 0, 'bad RMS fails to unity');
+        assert.equal(update(10, -30, NaN, cfg), 0, 'missing peak fails to unity');
+        assert.equal(update(12, -25, -0.1, cfg), -2.9, 'sudden full-scale peak sheds previous boost immediately');
+        assert.ok(update(0, -32, -23, cfg) > 0, 'quiet valid content can gain boost');
+        assert.ok(update(0, -32, -23, cfg) < 12, 'gain increases gradually');
+
+        let gain = 0;
+        for (let n = 0; n < 50; n++) gain = update(gain, -24, -4, cfg);
+        assert.ok(gain <= 1.001, 'source peak headroom must cap RMS-requested boost');
+        assert.ok(gain >= 0.95);
+
+        const highCfg = { ...cfg, maxBoostDb: 24 };
+        let highGain = 0;
+        for (let n = 0; n < 100; n++) highGain = update(highGain, -50, -45, highCfg);
+        assert.ok(highGain <= 24, 'even user-selected high boost remains bounded');
+        assert.match(src, /inputAnalyser(?:Node)?\.fftSize = 4096/);
+        assert.match(src, /0\.008 : 0\.035/);
+    }
 });
 
 test('normalizer bridge, limiter, persistence, and meter stay wired', () => {
