@@ -699,7 +699,7 @@ test('whitelist authorization is independent from remembered site settings', () 
 test('unsaved tab controls survive SPA and playlist URL changes without storage persistence', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
     const start = source.indexOf('        if (siteSettingsKey) {');
-    const end = source.indexOf('        applyState();\n        ensurePageBridgeResync();', start);
+    const end = source.indexOf('        ensurePageBridgeResync();', start);
     assert.ok(start >= 0 && end > start);
     const profileLogic = source.slice(start, end);
     assert.match(profileLogic, /data\.siteSettings\[siteSettingsKey\]/);
