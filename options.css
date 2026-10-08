@@ -506,3 +506,18 @@ button#openShortcutsPage:hover {
         color: #888;
     }
 }
+
+/* Settings also opens as a full browser tab on Firefox for Android. */
+@media (max-width: 600px), (pointer: coarse) {
+  html { max-width: 100%; overflow-x: hidden; }
+  body { min-width: 0; max-width: 100%; padding: 12px; box-sizing: border-box; overflow-wrap: anywhere; }
+  .input-group { flex-wrap: wrap; }
+  .input-group > input[type="text"] { flex: 1 1 180px; min-width: 0; }
+  .list-entry { align-items: flex-start; }
+  .domain-info { min-width: 0; overflow-wrap: anywhere; }
+  .controls-container { width: 100%; justify-content: flex-start; }
+  .setting-group { max-width: 100%; height: auto; min-height: 40px; flex-wrap: wrap; }
+  button, input[type="checkbox"], select { touch-action: manipulation; }
+  button { min-height: 40px; }
+  .hint { margin-left: 0; }
+}
