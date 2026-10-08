@@ -83,7 +83,10 @@ function exclusionOverlayDetail(data, tabUrl) {
 
 document.addEventListener('DOMContentLoaded', () => {
   const slider = document.getElementById('volume-slider');
-  if (slider) {
+  // Focusing on Android summons the soft keyboard and can obscure the
+  // extension overlay. Desktop keeps its keyboard-first behavior.
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  if (slider && !isAndroid) {
       slider.focus();
   }
 
@@ -102,11 +105,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (message.type === "exclusion") showError({ type: "exclusion" });
   });
 
-  document.addEventListener('keydown', () => {
-    if (slider && document.activeElement !== slider) {
-      slider.focus();
-    }
-  }, { once: true });
+  if (!isAndroid) {
+    document.addEventListener('keydown', () => {
+      if (slider && document.activeElement !== slider) {
+        slider.focus();
+      }
+    }, { once: true });
+  }
 
   // Mouse wheel: change volume by WHEEL_STEP_DB per notch while the popup is open.
   // Bound to document so it works anywhere in the popup. Skip when the user is
@@ -135,10 +140,19 @@ document.addEventListener('DOMContentLoaded', () => {
   listenForEvents();
 });
 
-function listenForEvents() {
-  tabsQuery({ active: true, currentWindow: true })
-      .then(handleTabs)
-      .catch(handleError);
+async function listenForEvents() {
+  try {
+    let tabs = await tabsQuery({ active: true, currentWindow: true });
+    // On some Android builds the action UI has its own browsing context.
+    // Fall back to the most recently focused browser window, not an extension tab.
+    if (!tabs?.[0]?.url || /^(moz-extension|about):/.test(tabs[0].url)) {
+      const fallback = await tabsQuery({ active: true, lastFocusedWindow: true });
+      if (fallback?.[0]?.url && !/^(moz-extension|about):/.test(fallback[0].url)) tabs = fallback;
+    }
+    handleTabs(tabs);
+  } catch (error) {
+    handleError(error);
+  }
 }
 
 function handleTabs(tabs) {
