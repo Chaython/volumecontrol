@@ -303,6 +303,55 @@ try {
                 await cdp.evaluate(fixtureSession,
                     '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');m.pause();return true})()');
             }
+            // Real decoded MP4 playlist-style transition: the same media
+            // element moves between two distinct source URLs. This exposes
+            // source-rewiring and tab-volume reset bugs even when YouTube
+            // refuses to provide a playable stream to headless browsers.
+            if (downloaded.some(x => x.path === '/video.mp4')) {
+                const entry = { site: 'Real MP4 same-element playlist transition',
+                    status: 'inconclusive' };
+                results.push(entry);
+                try {
+                    await send({ command: 'setVolume', dB: -13 });
+                    await send({ command: 'setNormalizer', enabled: true });
+                    const step = async index => {
+                        await cdp.evaluate(fixtureSession,
+                            '(()=>{const m=document.getElementById("video");' +
+                            'm.src="/video.mp4?track=' + index + '";m.load();m.play()?.catch?.(()=>{});' +
+                            'return true})()');
+                        const first = await waitFor(async () => {
+                            const x = await cdp.evaluate(fixtureSession,
+                                '(()=>{const m=document.getElementById("video");' +
+                                'return {t:m.currentTime,ready:m.readyState,paused:m.paused,' +
+                                'source:m.currentSrc,error:m.error?.code}})()');
+                            return x.ready >= 2 && !x.paused ? x : null;
+                        }, 12000);
+                        await sleep(650);
+                        const second = await cdp.evaluate(fixtureSession,
+                            'document.getElementById("video").currentTime');
+                        return { from: first.t, to: second,
+                            progressed: second > first.t + 0.2, source: first.source };
+                    };
+                    entry.first = await step('one');
+                    entry.second = await step('two');
+                    const after = (await send({ command: 'getAudioControlState' }))?.response;
+                    entry.volumeKept = after?.volume === -13;
+                    entry.normalizerKept = after?.normalizerEnabled === true;
+                    entry.meter = (await send({ command: 'getMeterState' }))?.response;
+                    entry.status = entry.first.progressed && entry.second.progressed &&
+                        entry.volumeKept && entry.normalizerKept ? 'passed' : 'failed';
+                } catch (e) {
+                    entry.status = 'failed'; entry.reason = e.message;
+                } finally {
+                    try {
+                        await send({ command: 'setNormalizer', enabled: false });
+                        await send({ command: 'setVolume', dB: 0 });
+                        await cdp.evaluate(fixtureSession,
+                            'document.getElementById("video").pause();true');
+                    } catch (_) {}
+                    console.log('RECORDED_PLAYLIST_RESULT=' + JSON.stringify(entry));
+                }
+            }
         } finally {
             await cdp.send('Target.closeTarget', { targetId: fixtureId });
         }
