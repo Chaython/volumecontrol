@@ -64,16 +64,6 @@ jobs:
           Write-Host "Firefox: $($firefox[0].Name) ($($firefox[0].Length) bytes)"
           Write-Host "Chrome:  $($chrome[0].Name) ($($chrome[0].Length) bytes)"
 
-      - name: Upload tested browser extension packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: volume-control-browser-packages
-          path: |
-            dist/volume-control-chrome-v*.zip
-            dist/volume-control-firefox-v*.zip
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Extract release ZIPs for artifact-boundary smoke tests
         shell: pwsh
         run: |
