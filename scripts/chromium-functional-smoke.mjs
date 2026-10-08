@@ -109,10 +109,11 @@ try {
     const targets = await waitFor(async () => {
         const { targetInfos } = await cdp.send('Target.getTargets');
         const tab = targetInfos.find(t => t.type === 'page' && t.url.startsWith(origin));
-        const ext = targetInfos.find(t => t.url.startsWith('chrome-extension://'));
+        const ext = targetInfos.find(t => t.url.startsWith('chrome-extension://') && t.url.includes('/background.js'));
         return tab && ext ? { tab, ext } : null;
     }, 20000);
     const id = new URL(targets.ext.url).hostname;
+    console.log('Extension target: ' + targets.ext.type + ' ' + targets.ext.url);
     const tabSession = await cdp.attach(targets.tab.targetId);
     await waitFor(async () => await cdp.eval(tabSession,
         'document.body.classList.contains("vc-init") && (AudioNode.prototype.__volumeControlPatched || AudioNode.prototype.connect.name === "patchedConnect")'));
@@ -121,6 +122,9 @@ try {
         url: 'chrome-extension://' + id + '/options.html', background: true
     });
     const settingsSession = await cdp.attach(settingsTarget);
+    await sleep(750);
+    console.log('Options target diagnostics: ' + JSON.stringify(await cdp.eval(settingsSession,
+        '({url: location.href, ready: document.readyState, title: document.title, hasOptions: !!document.getElementById("normalizerDefaultEnabled")})')));
     await waitFor(async () => await cdp.eval(settingsSession,
         'document.readyState === "complete" && !!document.querySelector("#normalizerDefaultEnabled")'));
     await cdp.eval(settingsSession,
