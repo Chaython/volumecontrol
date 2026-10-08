@@ -75,7 +75,8 @@ class CDP {
 }
 const temp = mkdtempSync(join(tmpdir(), 'vc-real-media-'));
 const profile = join(temp, 'profile');
-let processRef, cdp, mediaServer, stderr = '';
+let processRef, cdp, mediaServer, baselineBrowser, baselineCDP, stderr = '';
+const mediaRequests = [];
 const results = [];
 const injectionExpression = 'document.body?.classList.contains("vc-init") && ' +
     '(Boolean(AudioNode.prototype.__volumeControlPatched) || AudioNode.prototype.connect.name === "patchedConnect")';
@@ -215,6 +216,9 @@ try {
     }
     mediaServer = createServer((req, res) => {
         const path = new URL(req.url || '/', 'http://localhost').pathname;
+        if (path.endsWith('.mp3') || path.endsWith('.mp4')) {
+            mediaRequests.push({ path, method: req.method, range: req.headers.range || '' });
+        }
         const sample = samples.find(s => s.path === path);
         if (!sample || !sample.bytes) {
             if (path !== '/test.html') {
@@ -299,6 +303,57 @@ try {
         }
     }
 
+
+    // Control experiment: identical recorded media, same headless Edge binary
+    // and HTTP server, but a FRESH browser profile with extensions disabled.
+    // Without this comparison, a Windows Server codec/headless limitation can
+    // easily be mistaken for a Volume Control regression.
+    if (downloaded.length) {
+        const baselineProfile = join(temp, 'baseline-profile');
+        baselineBrowser = spawn(binary, [
+            '--headless=new', '--disable-gpu', '--no-first-run', '--disable-background-networking',
+            '--no-sandbox', '--mute-audio', '--autoplay-policy=no-user-gesture-required',
+            '--remote-debugging-port=0', '--disable-extensions',
+            '--user-data-dir=' + baselineProfile, localPage
+        ], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+        const port = await waitFor(() => {
+            const f = join(baselineProfile, 'DevToolsActivePort');
+            if (!existsSync(f)) return null;
+            const [port, path] = readFileSync(f, 'utf8').trim().split(/\r?\n/);
+            return /^\d+$/.test(port) && path ? { port, path } : null;
+        });
+        baselineCDP = await CDP.open('ws://127.0.0.1:' + port.port + port.path);
+        const btab = await waitFor(async () => {
+            const x = await baselineCDP.send('Target.getTargets');
+            return x.targetInfos.find(t => t.type === 'page' && t.url === localPage);
+        });
+        const bsession = await baselineCDP.attach(btab.targetId);
+        for (const sample of downloaded) {
+            const kind = sample.path.endsWith('.mp3') ? 'audio' : 'video';
+            try {
+                await waitFor(async () => await baselineCDP.evaluate(bsession,
+                    'document.readyState === "complete" && !!document.getElementById(' + JSON.stringify(kind) + ')'));
+                const before = await baselineCDP.evaluate(bsession,
+                    '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');m.load();' +
+                    'm.play()?.catch?.(()=>{});return {t:m.currentTime,ready:m.readyState,network:m.networkState,error:m.error?.code}})()');
+                await sleep(2500);
+                const after = await baselineCDP.evaluate(bsession,
+                    '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');' +
+                    'return {t:m.currentTime,ready:m.readyState,network:m.networkState,' +
+                    'paused:m.paused,error:m.error?.code,src:m.currentSrc}})()');
+                const progressed = after.t > before.t + 0.2;
+                console.log('WITHOUT_EXTENSION_BASELINE=' + JSON.stringify({ kind, before, after, progressed }));
+                results.push({ site: 'Without extension ' + kind, status: progressed ? 'passed' : 'inconclusive',
+                    baseline: true, playback: { before, after, progressed } });
+                await baselineCDP.evaluate(bsession,
+                    '(()=>{document.getElementById(' + JSON.stringify(kind) + ').pause();return true})()');
+            } catch (e) {
+                console.log('WITHOUT_EXTENSION_BASELINE_ERROR=' + JSON.stringify({ kind, error: e.message }));
+            }
+        }
+    }
+    console.log('REAL_MEDIA_HTTP_REQUESTS=' + JSON.stringify(mediaRequests));
+
     const played = results.filter(r => r.playback?.playing || r.playback?.progressed).length;
     console.log('REAL_SITE_REPORT=' + JSON.stringify({ played, results }));
     if (results.some(r => r.status === 'failed')) process.exitCode = 1;
@@ -308,6 +363,11 @@ try {
     if (stderr) console.error('BROWSER_STDERR=' + stderr);
     process.exitCode = 1;
 } finally {
+    if (baselineCDP) try { baselineCDP.socket.close(); } catch (_) {}
+    if (baselineBrowser && baselineBrowser.exitCode === null) {
+        try { baselineBrowser.kill(); } catch (_) {}
+        await Promise.race([new Promise(ok => baselineBrowser.once('exit', ok)), sleep(3000)]);
+    }
     if (cdp) try { cdp.socket.close(); } catch (_) {}
     if (processRef && processRef.exitCode === null) {
         try { processRef.kill(); } catch (_) {}
