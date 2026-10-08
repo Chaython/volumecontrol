@@ -303,6 +303,59 @@ try {
                 await cdp.evaluate(fixtureSession,
                     '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');m.pause();return true})()');
             }
+            // Play two real compressed sources together, and change
+            // normalization while both are actively decoding.
+            if (downloaded.some(x => x.path === '/audio.mp3') &&
+                downloaded.some(x => x.path === '/video.mp4')) {
+                const entry = { site: 'Concurrent decoded MP3 and MP4', status: 'inconclusive' };
+                results.push(entry);
+                try {
+                    await send({ command: 'setVolume', dB: -6 });
+                    await send({ command: 'setNormalizer', enabled: true });
+                    const snapshotBoth = '(()=>{const r={};for(const id of ["audio","video"]){' +
+                        'const m=document.getElementById(id);r[id]={t:m.currentTime,' +
+                        'ready:m.readyState,paused:m.paused};}return r})()';
+                    await cdp.evaluate(fixtureSession,
+                        '(()=>{for(const id of ["audio","video"]){const m=document.getElementById(id);' +
+                        'm.currentTime=0;m.play()?.catch?.(()=>{});}return true})()');
+                    const before = await waitFor(async () => {
+                        const x = await cdp.evaluate(fixtureSession, snapshotBoth);
+                        return x.audio.ready >= 2 && x.video.ready >= 2 &&
+                            !x.audio.paused && !x.video.paused ? x : null;
+                    }, 12000);
+                    await sleep(650);
+                    const after = await cdp.evaluate(fixtureSession, snapshotBoth);
+                    entry.audioProgressed = after.audio.t > before.audio.t + 0.2;
+                    entry.videoProgressed = after.video.t > before.video.t + 0.2;
+                    entry.meter = (await send({ command: 'getMeterState' }))?.response;
+                    entry.finitePeak = typeof entry.meter?.peakDb === 'number' &&
+                        Number.isFinite(entry.meter.peakDb);
+                    entry.boundedGain = typeof entry.meter?.gainDb === 'number' &&
+                        Number.isFinite(entry.meter.gainDb) &&
+                        entry.meter.gainDb >= -32 && entry.meter.gainDb <= 24;
+                    await send({ command: 'setNormalizer', enabled: false });
+                    const offStart = await cdp.evaluate(fixtureSession, snapshotBoth);
+                    await sleep(350);
+                    const offEnd = await cdp.evaluate(fixtureSession, snapshotBoth);
+                    entry.playingAfterDisable = offEnd.audio.t > offStart.audio.t + 0.1 &&
+                        offEnd.video.t > offStart.video.t + 0.1;
+                    entry.status = entry.audioProgressed && entry.videoProgressed &&
+                        entry.finitePeak && entry.boundedGain && entry.playingAfterDisable
+                        ? 'passed' : 'failed';
+                } catch (e) {
+                    entry.status = 'failed';
+                    entry.reason = String(e?.message || e);
+                } finally {
+                    try {
+                        await send({ command: 'setNormalizer', enabled: false });
+                        await send({ command: 'setVolume', dB: 0 });
+                        await cdp.evaluate(fixtureSession,
+                            '(()=>{document.getElementById("audio").pause();' +
+                            'document.getElementById("video").pause();return true})()');
+                    } catch (_) {}
+                    console.log('SIMULTANEOUS_REAL_MEDIA_RESULT=' + JSON.stringify(entry));
+                }
+            }
             // Real decoded MP4 playlist-style transition: the same media
             // element moves between two distinct source URLs. This exposes
             // source-rewiring and tab-volume reset bugs even when YouTube
