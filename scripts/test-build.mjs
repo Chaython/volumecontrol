@@ -643,6 +643,19 @@ test('access-list changes clear stale toolbar feedback', () => {
 });
 
 
+test('fallback mute never claims a site-owned native mute', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(source, /element\.dataset\.vcNativeMuted !== 'true' && !element\.muted/);
+    assert.match(source, /if \(element\.dataset\.vcNativeMuted === 'true'\) \{/);
+});
+
+test('Firefox audio hook smoke uses an HTTP origin for bridge messages', () => {
+    const source = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
+    assert.match(source, /res\.end\(html\)/);
+    assert.match(source, /`http:\/\/127\.0\.0\.1:\$\{port\}\/`/);
+    assert.doesNotMatch(source, /pathToFileURL/);
+});
+
 test('CI requires both Chromium and Firefox runtime smoke tests', () => {
     const workflow = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');
     const chromium = readFileSync(join(root, 'scripts/browser-smoke.mjs'), 'utf8');
