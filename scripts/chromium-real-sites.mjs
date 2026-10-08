@@ -1,0 +1,211 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { spawn } from 'node:child_process';
+
+const extensionRoot = resolve(process.env.VC_EXTENSION_DIR || '');
+if (!existsSync(join(extensionRoot, 'manifest.json'))) throw Error('VC_EXTENSION_DIR must contain the Chrome extension');
+if (typeof WebSocket !== 'function') throw Error('Node 22+ is required');
+const binaries = [process.env.EDGE_PATH, process.env.CHROMIUM_PATH,
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    '/usr/bin/chromium', '/usr/bin/chromium-browser'].filter(Boolean);
+const binary = binaries.find(existsSync);
+if (!binary) throw Error('No Edge/Chromium executable');
+const sites = [
+    { name: 'W3Schools HTML5 video', url: 'https://www.w3schools.com/html/html5_video.asp' },
+    { name: 'W3Schools HTML5 audio', url: 'https://www.w3schools.com/html/html5_audio.asp' },
+    { name: 'YouTube Big Buck Bunny', url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ' }
+];
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function waitFor(fn, timeout = 16000) {
+    const deadline = Date.now() + timeout;
+    let error;
+    while (Date.now() < deadline) {
+        try {
+            const value = await fn();
+            if (value) return value;
+        } catch (e) { error = e; }
+        await sleep(200);
+    }
+    throw Error('Timed out' + (error ? ': ' + error.message : ''));
+}
+class CDP {
+    constructor(socket) {
+        this.socket = socket; this.counter = 0; this.pending = new Map();
+        socket.addEventListener('message', event => {
+            let msg;
+            try { msg = JSON.parse(event.data); } catch (_) { return; }
+            const p = this.pending.get(msg.id);
+            if (!p) return;
+            this.pending.delete(msg.id); clearTimeout(p.timer);
+            if (msg.error) p.reject(Error(msg.error.message));
+            else p.resolve(msg.result || {});
+        });
+    }
+    static async open(url) {
+        const ws = new WebSocket(url);
+        await new Promise((ok, fail) => {
+            const timeout = setTimeout(() => fail(Error('CDP socket timeout')), 10000);
+            ws.addEventListener('open', () => { clearTimeout(timeout); ok(); }, { once: true });
+            ws.addEventListener('error', () => { clearTimeout(timeout); fail(Error('CDP socket error')); }, { once: true });
+        });
+        return new CDP(ws);
+    }
+    send(method, params = {}, sessionId) {
+        const id = ++this.counter;
+        return new Promise((ok, fail) => {
+            const timer = setTimeout(() => { this.pending.delete(id); fail(Error('CDP ' + method + ' timed out')); }, 12000);
+            this.pending.set(id, { resolve: ok, reject: fail, timer });
+            this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+        });
+    }
+    async attach(targetId) {
+        const { sessionId } = await this.send('Target.attachToTarget', { targetId, flatten: true });
+        await this.send('Runtime.enable', {}, sessionId);
+        return sessionId;
+    }
+    async evaluate(session, expression) {
+        const r = await this.send('Runtime.evaluate',
+            { expression, returnByValue: true, awaitPromise: true, userGesture: true }, session);
+        if (r.exceptionDetails) throw Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
+        return r.result?.value;
+    }
+}
+const temp = mkdtempSync(join(tmpdir(), 'vc-real-media-'));
+const profile = join(temp, 'profile');
+let processRef, cdp, stderr = '';
+const results = [];
+const injectionExpression = 'document.body?.classList.contains("vc-init") && ' +
+    '(Boolean(AudioNode.prototype.__volumeControlPatched) || AudioNode.prototype.connect.name === "patchedConnect")';
+const mediaSnapshot = '(()=>{const a=[...document.querySelectorAll("video,audio")];' +
+    'const m=a.find(x=>x.readyState>=2)||a[0];return {' +
+    'url:location.href,title:document.title,ready:document.readyState,mediaCount:a.length,' +
+    'playing:m?!m.paused&&!m.ended:false,t:m?m.currentTime:null,' +
+    'readyState:m?m.readyState:null,errorCode:m?.error?.code||null,' +
+    'source:m?.currentSrc?.slice(0,100)||"",injected:(' + injectionExpression + ')}})()';
+try {
+    console.log('Real media browser: ' + binary);
+    processRef = spawn(binary, [
+        '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+        '--disable-background-networking', '--disable-component-update', '--disable-sync',
+        '--autoplay-policy=no-user-gesture-required', '--mute-audio', '--no-sandbox',
+        '--remote-debugging-port=0', '--user-data-dir=' + profile,
+        '--disable-extensions-except=' + extensionRoot,
+        '--load-extension=' + extensionRoot, 'about:blank'
+    ], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    processRef.stderr.on('data', x => { stderr = (stderr + String(x)).slice(-3000); });
+    const connection = await waitFor(() => {
+        const f = join(profile, 'DevToolsActivePort');
+        if (!existsSync(f)) return null;
+        const [port, path] = readFileSync(f, 'utf8').trim().split(/\r?\n/);
+        return /^\d+$/.test(port) && path ? { port, path } : null;
+    });
+    cdp = await CDP.open('ws://127.0.0.1:' + connection.port + connection.path);
+    const worker = await waitFor(async () => {
+        const { targetInfos } = await cdp.send('Target.getTargets');
+        return targetInfos.find(t => t.type === 'service_worker' &&
+            t.url.startsWith('chrome-extension://') && t.url.includes('/background.js'));
+    });
+    const extensionId = new URL(worker.url).hostname;
+    const { targetId: optionsId } = await cdp.send('Target.createTarget',
+        { url: 'chrome-extension://' + extensionId + '/options.html', background: true });
+    const optionsSession = await cdp.attach(optionsId);
+    await waitFor(async () => await cdp.evaluate(optionsSession,
+        'document.readyState==="complete"&&!!document.getElementById("normalizerDefaultEnabled")'));
+    await cdp.evaluate(optionsSession,
+        'window.probe={' +
+        'tabs:()=>new Promise((ok,fail)=>chrome.tabs.query({},v=>chrome.runtime.lastError?fail(Error(chrome.runtime.lastError.message)):ok(v))),' +
+        'send:(id,cmd)=>new Promise((ok,fail)=>chrome.tabs.sendMessage(id,cmd,{frameId:0},v=>chrome.runtime.lastError?fail(Error(chrome.runtime.lastError.message)):ok(v)))};true');
+    for (const site of sites) {
+        const entry = { site: site.name, url: site.url, status: 'inconclusive' };
+        results.push(entry);
+        let targetId;
+        try {
+            ({ targetId } = await cdp.send('Target.createTarget', { url: site.url, background: true }));
+            const session = await cdp.attach(targetId);
+            const page = await waitFor(async () => {
+                const data = await cdp.evaluate(session, mediaSnapshot);
+                return data && data.ready === 'complete' && data.url.startsWith('https://') ? data : null;
+            }, 26000);
+            entry.page = page;
+            if (!page.injected) {
+                entry.reason = 'Page did not accept extension injection';
+                continue;
+            }
+            const tabId = await waitFor(async () => {
+                const tabs = await cdp.evaluate(optionsSession, 'probe.tabs()');
+                return tabs?.find(t => t.url?.startsWith(site.url))?.id || null;
+            });
+            const send = cmd => cdp.evaluate(optionsSession,
+                'probe.send(' + tabId + ',' + JSON.stringify(cmd) + ')');
+            const state = async () => (await send({ command: 'getAudioControlState' }))?.response;
+            const initial = await state();
+            if (!Number.isFinite(initial?.volume)) throw Error('Audio control state unavailable');
+            await send({ command: 'setVolume', dB: -12 });
+            entry.attenuation = (await state())?.volume === -12;
+            await send({ command: 'setVolume', dB: 0 });
+            if (!entry.attenuation) {
+                entry.status = 'failed'; entry.reason = 'Negative volume control ignored'; continue;
+            }
+            entry.playAttempt = await cdp.evaluate(session,
+                '(()=>{const a=[...document.querySelectorAll("video,audio")];' +
+                'const m=a.find(x=>x.readyState>=2)||a[0];if(!m)return {found:false};' +
+                'try{m.muted=false;const p=m.play();p?.catch?.(()=>{});' +
+                'return {found:true,readyState:m.readyState,src:m.currentSrc?.slice(0,100)}}' +
+                'catch(e){return {found:true,error:String(e)}}})()');
+            if (entry.playAttempt.found) {
+                try {
+                    const before = await waitFor(async () => {
+                        const x = await cdp.evaluate(session, mediaSnapshot);
+                        return x?.playing && x.readyState >= 2 ? x : null;
+                    }, 13000);
+                    await sleep(1700);
+                    const after = await cdp.evaluate(session, mediaSnapshot);
+                    entry.playback = { from: before.t, to: after.t, playing: Boolean(after?.playing && after.t > before.t + 0.3),
+                        readyState: after?.readyState };
+                } catch (e) { entry.playback = { playing: false, reason: e.message }; }
+            }
+            await send({ command: 'setMono', mono: true });
+            entry.mono = (await state())?.mono === true;
+            await send({ command: 'setMono', mono: false });
+            await send({ command: 'setMute', muted: true });
+            entry.mute = (await state())?.muted === true;
+            await send({ command: 'setMute', muted: false });
+            await send({ command: 'setNormalizer', enabled: true });
+            entry.normalizerOn = (await state())?.normalizerEnabled === true;
+            const m = (await send({ command: 'getMeterState' }))?.response;
+            entry.meter = { enabled: m?.normalizerEnabled, available: m?.normalizerAvailable,
+                peakDb: m?.peakDb, gainDb: m?.gainDb };
+            await send({ command: 'setNormalizer', enabled: false });
+            entry.normalizerOff = (await state())?.normalizerEnabled === false;
+            if (!entry.mono || !entry.mute || !entry.normalizerOn || !entry.normalizerOff) {
+                entry.status = 'failed'; entry.reason = 'Real-site tab control failed';
+            } else if (entry.playback?.playing) {
+                entry.status = 'passed';
+            } else {
+                entry.reason = 'Playback did not advance (network/consent/codec/bot restriction possible)';
+            }
+        } catch (e) {
+            entry.reason = String(e?.message || e);
+        } finally {
+            console.log('SITE ' + entry.site + ' ' + JSON.stringify(entry));
+            if (targetId) try { await cdp.send('Target.closeTarget', { targetId }); } catch (_) {}
+        }
+    }
+    const played = results.filter(r => r.playback?.playing).length;
+    console.log('REAL_SITE_REPORT=' + JSON.stringify({ played, results }));
+    if (results.some(r => r.status === 'failed')) process.exitCode = 1;
+    if (!played) console.warn('INCONCLUSIVE: no real stream advanced; do not report a playback pass');
+} catch (e) {
+    console.error('REAL_SITE_RUNNER_FAILURE=' + (e?.stack || e));
+    if (stderr) console.error('BROWSER_STDERR=' + stderr);
+    process.exitCode = 1;
+} finally {
+    if (cdp) try { cdp.socket.close(); } catch (_) {}
+    if (processRef && processRef.exitCode === null) {
+        try { processRef.kill(); } catch (_) {}
+        await Promise.race([new Promise(ok => processRef.once('exit', ok)), sleep(3000)]);
+    }
+    rmSync(temp, { recursive: true, force: true });
+}

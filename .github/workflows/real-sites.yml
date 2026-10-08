@@ -1,0 +1,44 @@
+name: Real streaming-site playback probes
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - scripts/chromium-real-sites.mjs
+      - .github/workflows/real-sites.yml
+
+permissions:
+  contents: read
+
+jobs:
+  real-sites:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          git init .
+          git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
+          git fetch --force --no-tags --depth=1 origin "$env:GITHUB_REF"
+          if ($LASTEXITCODE -ne 0) { throw "Could not fetch current revision" }
+          git checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "Could not check out current revision" }
+
+      - name: Build Chrome extension
+        shell: powershell
+        run: .\scripts\build.ps1
+
+      - name: Extract packaged Chrome extension
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zip = @(Get-ChildItem -LiteralPath dist -Filter "volume-control-chrome-v*.zip")
+          if ($zip.Count -ne 1) { throw "Expected one Chrome ZIP" }
+          Expand-Archive -LiteralPath $zip[0].FullName -DestinationPath "dist/real-site-chrome" -Force
+
+      - name: Probe actual public streaming sites in Chromium
+        env:
+          VC_EXTENSION_DIR: dist/real-site-chrome
+        run: node scripts/chromium-real-sites.mjs
