@@ -330,9 +330,9 @@ try {
                     entry.meter = (await send({ command: 'getMeterState' }))?.response;
                     entry.finitePeak = typeof entry.meter?.peakDb === 'number' &&
                         Number.isFinite(entry.meter.peakDb);
-                    entry.boundedGain = typeof entry.meter?.gainDb === 'number' &&
-                        Number.isFinite(entry.meter.gainDb) &&
-                        entry.meter.gainDb >= -32 && entry.meter.gainDb <= 24;
+                    entry.boundedGain = typeof entry.meter?.normalizerGainDb === 'number' &&
+                        Number.isFinite(entry.meter.normalizerGainDb) &&
+                        entry.meter.normalizerGainDb >= -32 && entry.meter.normalizerGainDb <= 24;
                     await send({ command: 'setNormalizer', enabled: false });
                     const offStart = await cdp.evaluate(fixtureSession, snapshotBoth);
                     await sleep(350);
