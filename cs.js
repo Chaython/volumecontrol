@@ -958,6 +958,18 @@ function routeIsolatedOutput() {
         }
         tc.vars.isolatedOutputUsesLimiter = useLimiter;
     } catch (e) {
+        // A partial rebuild must not leave captured media permanently silent.
+        // Discard partial edges and attempt a direct, gain-limited fallback.
+        tc.vars.isolatedOutputUsesLimiter = null;
+        for (const node of [gainNode, limiterNode, analyserNode]) {
+            try { node.disconnect(); } catch (_) {}
+        }
+        try {
+            gainNode.connect(audioCtx.destination);
+            tc.vars.isolatedOutputUsesLimiter = false;
+        } catch (fallbackError) {
+            if (tc.settings.debugMode) log(`isolated output fallback failed: ${fallbackError && fallbackError.message}`, 3);
+        }
         if (tc.settings.debugMode) log(`isolated output route failed: ${e && e.message}`, 3);
     }
 }
@@ -972,14 +984,19 @@ function applyState() {
     const autoGain = tc.vars.normalizerEnabled
         ? Math.pow(10, (Number(tc.vars.normalizerGainDb) || 0) / 20)
         : 1;
-    const targetGain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB) * autoGain) : 1.0;
-
     if (gainNode && audioCtx) {
         ensureIsolatedNormalizerTimer();
         // The limiter may remain routed during manual boost while Normalize
         // is off. Changes from Options must still update its parameters.
         if (tc.vars.isolatedOutputUsesLimiter) configureIsolatedLimiter();
         routeIsolatedOutput();
+        // If the limiter failed and audio was restored directly, do not
+        // expose automatic gain or positive manual boost without protection.
+        const wantsLimiter = isEnabled &&
+            (tc.vars.normalizerEnabled || (!tc.vars.muted && tc.vars.dB > 0));
+        const unprotected = wantsLimiter && tc.vars.isolatedOutputUsesLimiter !== true;
+        const manualGain = unprotected ? Math.min(1, getGainValue(tc.vars.dB)) : getGainValue(tc.vars.dB);
+        const targetGain = isEnabled ? (tc.vars.muted ? 0 : manualGain * (unprotected ? 1 : autoGain)) : 1;
         const now = audioCtx.currentTime;
 
         if (audioCtx.state === 'running') {
@@ -1161,7 +1178,12 @@ function sampleIsolatedNormalizer() {
     try {
         const now = ctx.currentTime;
         const manualGain = tc.vars.isBlocked || tc.vars.muted ? (tc.vars.isBlocked ? 1 : 0) : getGainValue(tc.vars.dB);
-        const target = manualGain * (tc.vars.normalizerEnabled ? Math.pow(10, gainDb / 20) : 1);
+        // A 100 ms meter update cannot reinstate boost on an unprotected
+        // direct fallback. Retry limiter routing on the next state change.
+        const protectedOutput = tc.vars.isolatedOutputUsesLimiter === true;
+        const target = protectedOutput
+            ? manualGain * (tc.vars.normalizerEnabled ? Math.pow(10, gainDb / 20) : 1)
+            : Math.min(1, manualGain);
         gainNode.gain.cancelScheduledValues(now);
         gainNode.gain.setTargetAtTime(target, now, gainDb < previousGainDb ? 0.008 : 0.035);
     } catch (e) {}

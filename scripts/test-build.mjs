@@ -806,6 +806,93 @@ test('Firefox audio hook smoke uses an HTTP origin for bridge messages', () => {
 });
 
 
+test('isolated audio restores a gain-limited direct path after limiter route failures', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function routeIsolatedOutput() {');
+    const end = source.indexOf('function applyState() {', start);
+    assert.ok(start >= 0 && end > start);
+    let failLimiter = true;
+    const makeNode = (id) => ({
+        id, edges: [],
+        connect(dest) {
+            if (id === 'limiter' && failLimiter) throw new Error('connection refused');
+            this.edges.push(dest);
+        },
+        disconnect() { this.edges = []; }
+    });
+    const gainNode = makeNode('gain');
+    const limiterNode = makeNode('limiter');
+    const analyserNode = makeNode('analyser');
+    const destination = {};
+    const tc = {
+        vars: { audioCtx: { destination }, gainNode, limiterNode, analyserNode,
+            isBlocked: false, normalizerEnabled: true, muted: false, dB: 20,
+            isolatedOutputUsesLimiter: null },
+        settings: { debugMode: false }
+    };
+    const wire = runInNewContext('(' + source.slice(start, end).trim() + ')', {
+        tc, configureIsolatedLimiter: () => {}, log: () => {}
+    });
+    wire();
+    assert.equal(tc.vars.isolatedOutputUsesLimiter, false);
+    assert.equal(gainNode.edges.length, 1);
+    assert.equal(gainNode.edges[0], destination);
+    assert.equal(limiterNode.edges.length, 0, 'partial edges must be removed');
+
+    // If a later settings change retries after a transient failure, the
+    // limiter can be connected without stacking paths to the destination.
+    failLimiter = false;
+    wire();
+    assert.equal(tc.vars.isolatedOutputUsesLimiter, true);
+    assert.equal(gainNode.edges.length, 1);
+    assert.equal(gainNode.edges[0], limiterNode);
+    assert.equal(limiterNode.edges[0], analyserNode);
+    assert.equal(analyserNode.edges[0], destination);
+
+    // Also check the two writer paths: state updates and 100ms AGC sampling
+    // must not reapply a positive gain after unprotected fallback.
+    assert.match(source, /const unprotected = wantsLimiter && tc\.vars\.isolatedOutputUsesLimiter !== true/);
+    assert.match(source, /manualGain \* \(unprotected \? 1 : autoGain\)/);
+    assert.match(source, /const protectedOutput = tc\.vars\.isolatedOutputUsesLimiter === true/);
+    assert.match(source, /: Math\.min\(1, manualGain\)/);
+});
+
+test('normalizer popup preserves restrictions and pending checkbox state', () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = source.indexOf('function applyNormalizerState(state = {}) {');
+    const end = source.indexOf('function applyAudioControlState(state = {}) {', start);
+    assert.ok(start >= 0 && end > start);
+    const toggles = [];
+    const classList = { toggle(name, enabled) { toggles.push({ name, enabled }); } };
+    const panel = { classList };
+    const checkbox = { checked: true, disabled: false,
+        closest: () => panel, setAttribute: () => {} };
+    const details = { hidden: false };
+    const note = { textContent: '', classList };
+    const cached = {
+        normalizerCheckbox: checkbox, normalizerNote: note,
+        normalizerAvailable: false, normalizerPending: true
+    };
+    const apply = runInNewContext('(' + source.slice(start, end).trim() + ')', {
+        cached,
+        document: { querySelector: () => null, getElementById: () => details },
+        formatMeterDb: () => '−∞ dBFS'
+    });
+    apply({ normalizerEnabled: false }); // stale state arrives while saving
+    assert.equal(checkbox.checked, true);
+    assert.equal(details.hidden, false);
+    assert.equal(cached.normalizerAvailable, false);
+    assert.ok(toggles.some(x => x.name === 'is-unavailable' && x.enabled));
+
+    cached.normalizerPending = false;
+    apply({ normalizerEnabled: false });
+    assert.equal(checkbox.checked, false);
+    assert.equal(details.hidden, true);
+    // Only an explicit availability verdict can clear the restriction.
+    apply({ normalizerAvailable: true });
+    assert.equal(cached.normalizerAvailable, true);
+});
+
 test('normalizer preference saves even without an active audio route or tab receiver', async () => {
     const source = readFileSync(join(root, 'popup.js'), 'utf8');
     const start = source.indexOf('async function toggleNormalizer(tab) {');

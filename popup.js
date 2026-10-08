@@ -66,6 +66,7 @@ const cached = {
   boostLimited: false,
   monoAvailable: true,
   normalizerAvailable: true,
+  normalizerPending: false,
   shortcuts: {}
 };
 
@@ -444,14 +445,16 @@ function applyNormalizerState(state = {}) {
   const note = cached.normalizerNote || document.querySelector("#normalizer-note");
   const panel = checkbox ? checkbox.closest(".normalizer-panel") : null;
 
-  if (state.normalizerEnabled !== undefined && checkbox) {
+  if (state.normalizerEnabled !== undefined && checkbox && !cached.normalizerPending) {
     checkbox.checked = Boolean(state.normalizerEnabled);
   }
   const details = document.getElementById("normalizer-details");
   if (details) details.hidden = !(checkbox && checkbox.checked);
 
-  const available = state.normalizerAvailable !== false;
-  cached.normalizerAvailable = available;
+  if (state.normalizerAvailable !== undefined) {
+    cached.normalizerAvailable = state.normalizerAvailable !== false;
+  }
+  const available = cached.normalizerAvailable;
   if (checkbox) {
     // Keep the switch available even when this media cannot be processed.
     checkbox.disabled = false;
@@ -665,6 +668,7 @@ async function toggleNormalizer(tab) {
 
   const enabled = Boolean(checkbox.checked);
   const requestGeneration = ++normalizerRequestGeneration;
+  cached.normalizerPending = true;
   applyNormalizerState({ normalizerEnabled: enabled });
   try {
     const defaultKey = normalizeSiteSettingsEntryInput(tab.url);
@@ -683,12 +687,14 @@ async function toggleNormalizer(tab) {
     await tabsSendMessage(tab.id, { command: "setNormalizer", enabled }, TOP_FRAME_OPTIONS).catch(() => {});
   } catch (error) {
     if (requestGeneration === normalizerRequestGeneration) {
+      cached.normalizerPending = false;
       applyNormalizerState({ normalizerEnabled: !enabled });
       handleError(error);
     }
     return;
   }
   if (requestGeneration === normalizerRequestGeneration) {
+    cached.normalizerPending = false;
     await refreshAudioControlState(tab);
   }
 }
