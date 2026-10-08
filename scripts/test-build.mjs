@@ -673,6 +673,14 @@ test('fallback mute never claims a site-owned native mute', () => {
     assert.match(source, /if \(element\.dataset\.vcNativeMuted === 'true'\) \{/);
 });
 
+test('Firefox audio smoke waits for state transitions instead of fixed 60ms timing', () => {
+    const source = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
+    assert.match(source, /const waitFor = async/);
+    assert.match(source, /disabledRestored = await waitFor/);
+    assert.match(source, /reenabledPatched = await waitFor/);
+    assert.doesNotMatch(source, /await sleep\(60\)/);
+});
+
 test('Firefox audio hook smoke uses an HTTP origin for bridge messages', () => {
     const source = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
     assert.match(source, /res\.end\(html\)/);

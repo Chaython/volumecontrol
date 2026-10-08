@@ -82,6 +82,16 @@ window.__vcNativeVolume = Object.getOwnPropertyDescriptor(HTMLMediaElement.proto
 <script>
 (async () => {
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    // A busy Firefox event loop may need more than a fixed 60ms to process
+    // postMessage. Wait for actual state, but stay below the 3s mute failsafe.
+    const waitFor = async (predicate, timeoutMs = 1800) => {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(25);
+        }
+        return predicate();
+    };
     const token = "ffffffffffffffffffffffffffffffff";
     const preflightPatched = AudioNode.prototype.connect !== window.__vcNativeConnect;
 
@@ -95,7 +105,7 @@ window.__vcNativeVolume = Object.getOwnPropertyDescriptor(HTMLMediaElement.proto
         target: "volume-control-page-audio",
         token,
         command: "setState",
-        version: 2,
+        version: 3,
         enabled: false,
         dB: 0,
         mono: false,
@@ -105,12 +115,10 @@ window.__vcNativeVolume = Object.getOwnPropertyDescriptor(HTMLMediaElement.proto
         forceCorsCapture: false,
         debugRouteMode: "auto"
     }, "*");
-    await sleep(60);
-
-    const disabledRestored =
+    const disabledRestored = await waitFor(() =>
         AudioNode.prototype.connect === window.__vcNativeConnect &&
         AudioNode.prototype.disconnect === window.__vcNativeDisconnect &&
-        Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "volume").set === window.__vcNativeVolume.set;
+        Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "volume").set === window.__vcNativeVolume.set);
     const preflightRestored = earlyAudio.muted === false;
 
     window.postMessage({
@@ -118,7 +126,7 @@ window.__vcNativeVolume = Object.getOwnPropertyDescriptor(HTMLMediaElement.proto
         target: "volume-control-page-audio",
         token,
         command: "setState",
-        version: 2,
+        version: 3,
         enabled: true,
         dB: -6,
         mono: false,
@@ -128,9 +136,8 @@ window.__vcNativeVolume = Object.getOwnPropertyDescriptor(HTMLMediaElement.proto
         forceCorsCapture: false,
         debugRouteMode: "auto"
     }, "*");
-    await sleep(60);
-
-    const reenabledPatched = AudioNode.prototype.connect !== window.__vcNativeConnect;
+    const reenabledPatched = await waitFor(() =>
+        AudioNode.prototype.connect !== window.__vcNativeConnect);
     const result = { preflightPatched, preflightMuted, preflightRestored, disabledRestored, reenabledPatched };
     const pass = Object.values(result).every(Boolean);
     location.href = "http://127.0.0.1:${port}/result?pass=" + (pass ? "1" : "0") +
