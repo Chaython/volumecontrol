@@ -384,3 +384,26 @@ input:checked + .slider:before { transform: translateX(16px); }
 #popup-content.is-muted #volume-slider {
     cursor: not-allowed;
 }
+
+/* Firefox for Android renders action popups as narrow overlays. Keep all controls reachable without horizontal scrolling. */
+@media (max-width: 480px), (pointer: coarse) {
+  html, body { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
+  #popup-content, #error-content { width: 100%; box-sizing: border-box; }
+  .top-controls { padding: 8px 12px 0; margin-bottom: 12px; }
+  .bot-controls { padding: 0 12px 12px; gap: 12px; flex-wrap: wrap; margin-bottom: 0; }
+  .left, .right { gap: 12px; flex-wrap: wrap; }
+  .right { margin-left: auto; }
+  .switch-container, .settings, .mute-btn { min-height: 44px; }
+  .switch-container { gap: 0; }
+  .switch { width: 44px; height: 28px; }
+  .slider { border-radius: 28px; }
+  .slider:before { width: 20px; height: 20px; }
+  input:checked + .slider:before { transform: translateX(16px); }
+  .settings { padding: 8px; }
+  .mute-btn { padding: 6px 10px; }
+  input[type=range] { height: 44px; margin: 4px 0 8px; touch-action: pan-y; }
+  input[type=range]::-moz-range-track { height: 12px; }
+  input[type=range]::-moz-range-thumb { width: 24px; height: 32px; border-radius: 7px; }
+  input[type=range]::-webkit-slider-thumb { width: 24px; height: 32px; margin-top: -11px; border-radius: 7px; }
+  #volume-text { font-size: 18px; min-height: 36px; }
+}
