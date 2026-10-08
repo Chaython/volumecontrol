@@ -1860,7 +1860,14 @@ async function start() {
         // Debug: log final decision
         if (tc.settings.debugMode) log(`start(): blocked=${blocked}`, 4);
 
-        // Ensure the content script's blocked flag reflects the current state (clear it when unblocked)
+        // Entering or leaving the blocklist must not bring back old
+        // automatic boost. A fast block/unblock could happen before the
+        // 100ms normalizer sampler clears its previous +dB gain.
+        if (tc.vars.isBlocked !== blocked) {
+            tc.vars.normalizerGainDb = 0;
+            tc.vars.normalizerPeakDb = -Infinity;
+            lastSyncedPageAudioState = null;
+        }
         tc.vars.isBlocked = blocked;
         controlProfileReady = true;
         if (blocked) {
@@ -1947,8 +1954,15 @@ window.addEventListener("message", (event) => {
     }
 
     if (data.command === "meterUpdate") {
-        tc.vars.normalizerPeakDb = Number(data.peakDb);
-        tc.vars.normalizerGainDb = Number(data.normalizerGainDb);
+        // Chrome's JSON-based extension messaging may turn non-finite
+        // numbers into null. A null peak means silence/unknown, never 0
+        // dBFS (full-scale), and missing gain must not become NaN.
+        tc.vars.normalizerPeakDb =
+            typeof data.peakDb === "number" && Number.isFinite(data.peakDb)
+                ? data.peakDb : -Infinity;
+        tc.vars.normalizerGainDb =
+            typeof data.normalizerGainDb === "number" && Number.isFinite(data.normalizerGainDb)
+                ? data.normalizerGainDb : 0;
         return;
     }
 

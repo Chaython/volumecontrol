@@ -1120,6 +1120,54 @@ test('isolated Normalize off clamps output before bypassing its compressor', () 
     assert.equal(gainNode.edges[0], limiterNode);
 });
 
+
+test('site-block toggles discard stale automatic gain before audio can be re-enabled', () => {
+    const src = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = src.indexOf('        if (tc.vars.isBlocked !== blocked) {');
+    const end = src.indexOf('        controlProfileReady = true;', start);
+    assert.ok(start >= 0 && end > start, 'block transition reset must exist');
+    const apply = runInNewContext('(function(tc, blocked) {\n' +
+        'let lastSyncedPageAudioState = "cached";\n' +
+        src.slice(start, end) +
+        '\nreturn lastSyncedPageAudioState;\n})');
+    const tc = { vars: { isBlocked: false, normalizerGainDb: 12, normalizerPeakDb: -3 } };
+    assert.equal(apply(tc, true), null);
+    assert.equal(tc.vars.isBlocked, true);
+    assert.equal(tc.vars.normalizerGainDb, 0);
+    assert.equal(tc.vars.normalizerPeakDb, -Infinity);
+
+    tc.vars.normalizerGainDb = 15;
+    tc.vars.normalizerPeakDb = -2;
+    assert.equal(apply(tc, false), null);
+    assert.equal(tc.vars.isBlocked, false);
+    assert.equal(tc.vars.normalizerGainDb, 0, 're-enable must not replay stale +15 dB');
+    assert.equal(tc.vars.normalizerPeakDb, -Infinity);
+
+    tc.vars.normalizerGainDb = 3;
+    assert.equal(apply(tc, false), 'cached', 'unchanged blocking must not reset active normalizer');
+    assert.equal(tc.vars.normalizerGainDb, 3);
+});
+
+test('MAIN-world meter messages treat null and missing peaks as silence', () => {
+    const src = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = src.indexOf('    if (data.command === "meterUpdate") {');
+    const end = src.indexOf('    if (data.command !== "requestState") return;', start);
+    assert.ok(start >= 0 && end > start, 'meter bridge listener must exist');
+    const handle = runInNewContext('(function(tc, data) {\n' + src.slice(start, end) + '\n})');
+    const tc = { vars: { normalizerPeakDb: -5, normalizerGainDb: 4 } };
+    for (const peakDb of [null, undefined, '0', NaN, -Infinity]) {
+        handle(tc, { command: 'meterUpdate', peakDb, normalizerGainDb: null });
+        assert.equal(tc.vars.normalizerPeakDb, -Infinity, 'invalid/nonfinite peak must not appear as 0 dBFS');
+        assert.equal(tc.vars.normalizerGainDb, 0);
+    }
+    handle(tc, { command: 'meterUpdate', peakDb: -18.7, normalizerGainDb: 2.3 });
+    assert.equal(tc.vars.normalizerPeakDb, -18.7);
+    assert.equal(tc.vars.normalizerGainDb, 2.3);
+    handle(tc, { command: 'meterUpdate', peakDb: 0, normalizerGainDb: -4 });
+    assert.equal(tc.vars.normalizerPeakDb, 0, 'valid full-scale reading remains valid');
+    assert.equal(tc.vars.normalizerGainDb, -4);
+});
+
 test('normalizer popup preserves restrictions and pending checkbox state', () => {
     const source = readFileSync(join(root, 'popup.js'), 'utf8');
     const start = source.indexOf('function applyNormalizerState(state = {}) {');
