@@ -247,6 +247,90 @@ test('content scripts resolve iframe profiles from the top tab URL and refresh o
     assert.match(source, /isUrlBlockedByEntries\(controlUrl, data\.fqdns \|\| \[\]\)/);
 });
 
+
+test('normalizer input detection is upstream of the manual slider in all audio paths', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(page, /connectNative\(inputAnalyser, gain\)/);
+    assert.match(page, /connectNative\(source, inputAnalyser\)/);
+    assert.match(page, /connectNative\(source, graph\.inputAnalyser/);
+    assert.match(page, /connectNative\(this, graph\.inputAnalyser/);
+    assert.match(page, /connectNative\(masterGain, graph\.inputAnalyser\)/);
+    assert.match(page, /sourceAnalyser\.getFloatTimeDomainData\(processor\.inputBuffer\)/);
+    assert.doesNotMatch(page, /gainDb \+ \(config\.targetDb - rmsDb\)/);
+    assert.match(content, /tc\.vars\.inputAnalyserNode\.connect\(tc\.vars\.gainNode\)/);
+    assert.match(content, /source\.connect\(tc\.vars\.inputAnalyserNode\)/);
+    assert.match(content, /sourceAnalyser\.getFloatTimeDomainData\(tc\.vars\.inputAnalyserBuffer\)/);
+    assert.doesNotMatch(content, /gainDb \+ \(config\.targetDb - rmsDb\)/);
+});
+
+test('moving volume slider cannot cause the MAIN-world normalizer to compensate', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function sampleProcessor(processor) {');
+    const end = source.indexOf('    function updateNormalizerAndMeter() {', start);
+    assert.ok(start >= 0 && end > start);
+    let outputAmplitude = 0.1;
+    let manualGain = 1;
+    const input = { fftSize: 1024, getFloatTimeDomainData: (data) => data.fill(0.1) };
+    const output = { fftSize: 1024, getFloatTimeDomainData: (data) => data.fill(outputAmplitude) };
+    const controls = { lastGain: null, cancelScheduledValues() {}, setTargetAtTime(gain) { this.lastGain = gain; } };
+    const processor = {
+        inputAnalyser: input, analyser: output,
+        context: { state: 'running', currentTime: 1 },
+        gain: { gain: controls }, normalizerGainDb: 0
+    };
+    const state = { normalizerEnabled: true, extensionActive: true, enabled: true, muted: false };
+    const config = { targetDb: -16, maxBoostDb: 12, responseMs: 100 };
+    const sample = runInNewContext('(' + source.slice(start, end).trim() + ')', {
+        state, normalizeNormalizerConfig: () => config, configureLimiter: () => {},
+        effectiveGain: () => manualGain, dbToGain: dB => 10 ** (dB / 20)
+    });
+    for (let n = 0; n < 40; n++) sample(processor);
+    const settledGain = processor.normalizerGainDb;
+    const settledOutput = controls.lastGain;
+
+    // Move the volume slider -20 dB. The post-fader output drops 20 dB,
+    // but the normalizer's SOURCE detector sees exactly the same source.
+    manualGain = 0.1;
+    outputAmplitude = 0.01;
+    for (let n = 0; n < 40; n++) sample(processor);
+    assert.ok(Math.abs(processor.normalizerGainDb - settledGain) < 0.02,
+        'AGC gain must not move in response to manual slider changes');
+    assert.ok(Math.abs(controls.lastGain / settledOutput - 0.1) < 0.005,
+        'manual slider attenuation must remain a -20 dB adjustment');
+});
+
+test('moving volume slider cannot cause the isolated-world normalizer to compensate', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function sampleIsolatedNormalizer() {');
+    const end = source.indexOf('function ensureIsolatedNormalizerTimer() {', start);
+    assert.ok(start >= 0 && end > start);
+    let outputAmplitude = 0.1;
+    const output = { fftSize: 1024, getFloatTimeDomainData: (data) => data.fill(outputAmplitude) };
+    const input = { fftSize: 1024, getFloatTimeDomainData: (data) => data.fill(0.1) };
+    const controls = { lastGain: null, cancelScheduledValues() {}, setTargetAtTime(gain) { this.lastGain = gain; } };
+    const tc = {
+        vars: {
+            normalizerEnabled: true, normalizerGainDb: 0, muted: false, isBlocked: false, dB: 0,
+            audioCtx: { state: 'running', currentTime: 1 }, analyserNode: output,
+            inputAnalyserNode: input, gainNode: { gain: controls }
+        },
+        settings: { normalizerConfig: {} }
+    };
+    const sample = runInNewContext('(' + source.slice(start, end).trim() + ')', {
+        tc, normalizeNormalizerConfig: () => ({ targetDb: -16, maxBoostDb: 12, responseMs: 100 }),
+        configureIsolatedLimiter: () => {}, getGainValue: db => 10 ** (db / 20)
+    });
+    for (let n = 0; n < 40; n++) sample();
+    const settledGain = tc.vars.normalizerGainDb;
+    const settledOutput = controls.lastGain;
+    tc.vars.dB = -20;
+    outputAmplitude = 0.01;
+    for (let n = 0; n < 40; n++) sample();
+    assert.ok(Math.abs(tc.vars.normalizerGainDb - settledGain) < 0.02);
+    assert.ok(Math.abs(controls.lastGain / settledOutput - 0.1) < 0.005);
+});
+
 test('normalizer bridge, limiter, persistence, and meter stay wired', () => {
     const sharedSource = readFileSync(join(root, 'shared.js'), 'utf8');
     const contentSource = readFileSync(join(root, 'cs.js'), 'utf8');

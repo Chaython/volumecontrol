@@ -264,7 +264,7 @@
         const graph = graphs.get(nodeFromRef(entry.contextRef));
         if (!graph) return false;
         try {
-            disconnectNative(source, graph.gain, entry.outputIndex, 0);
+            disconnectNative(source, graph.inputAnalyser, entry.outputIndex, 0);
             return true;
         } catch (e) {
             log(`tracked route disconnect failed: ${e && e.message}`);
@@ -595,7 +595,7 @@
 
         disconnectMediaRouteOutput(route);
 
-        // Do NOT disconnect route.source from route.gain, and do NOT delete the
+        // Do NOT disconnect route.source from route.inputAnalyser, and do NOT delete the
         // route from mediaRoutes. The MediaElementSourceNode can only be created
         // once per element per context, so we must keep the existing source node
         // alive so it can be reconnected when playback resumes (e.g., after
@@ -706,6 +706,8 @@
 
         try {
             const gain = markNode(context.createGain());
+            // Measure source RMS before the slider and automatic gain.
+            const inputAnalyser = markNode(context.createAnalyser());
             const splitter = markNode(context.createChannelSplitter(2));
             const leftGain = markNode(context.createGain());
             const rightGain = markNode(context.createGain());
@@ -718,14 +720,18 @@
             rightGain.gain.value = 0.5;
             analyser.fftSize = 1024;
             analyser.smoothingTimeConstant = 0.35;
+            inputAnalyser.fftSize = 1024;
+            inputAnalyser.smoothingTimeConstant = 0.35;
 
             const graph = {
-                context, gain, splitter, leftGain, rightGain, merger, limiter, analyser,
+                context, gain, inputAnalyser, splitter, leftGain, rightGain, merger, limiter, analyser,
                 currentMode: null,
                 normalizerGainDb: 0,
                 meterPeakDb: -Infinity,
-                meterBuffer: new Float32Array(analyser.fftSize)
+                meterBuffer: new Float32Array(analyser.fftSize),
+                inputBuffer: new Float32Array(inputAnalyser.fftSize)
             };
+            connectNative(inputAnalyser, gain);
             graphs.set(context, graph);
             addTrackedContext(context);
             wireGraph(graph);
@@ -1396,7 +1402,7 @@
             }
 
             try {
-                connectNative(source, graph.gain, entry.outputIndex, 0);
+                connectNative(source, graph.inputAnalyser, entry.outputIndex, 0);
                 entry.routed = true;
             } catch (e) {
                 log(`recorded destination route failed: ${e && e.message}`);
@@ -1430,7 +1436,7 @@
             if (!graph) continue;
 
             try {
-                disconnectNative(source, graph.gain, entry.outputIndex, 0);
+                disconnectNative(source, graph.inputAnalyser, entry.outputIndex, 0);
             } catch (e) {
                 log(`unroute disconnect failed: ${e && e.message}`);
                 continue;
@@ -1442,7 +1448,7 @@
             } catch (e) {
                 log(`unroute reconnect failed: ${e && e.message}`);
                 try {
-                    connectNative(source, graph.gain, entry.outputIndex, 0);
+                    connectNative(source, graph.inputAnalyser, entry.outputIndex, 0);
                     entry.routed = true;
                 } catch (rollbackError) {
                     log(`unroute rollback failed: ${rollbackError && rollbackError.message}`);
@@ -1481,7 +1487,7 @@
         }
 
         try {
-            connectNative(masterGain, graph.gain);
+            connectNative(masterGain, graph.inputAnalyser);
             howlerRoutes.set(masterGain, { context: howler.ctx, graph });
             trackDestinationConnection(masterGain, howler.ctx.destination, undefined, undefined, true);
             log("Howler master gain routed");
@@ -1508,7 +1514,7 @@
         const graph = route.graph;
         if (graph) {
             try {
-                disconnectNative(masterGain, graph.gain);
+                disconnectNative(masterGain, graph.inputAnalyser);
             } catch (e) {
                 log(`Howler unroute disconnect failed: ${e && e.message}`);
             }
@@ -1612,6 +1618,8 @@
 
             const source = routeSource.source;
             const gain = markNode(context.createGain());
+            // Measure source RMS before the slider and automatic gain.
+            const inputAnalyser = markNode(context.createAnalyser());
             const splitter = markNode(context.createChannelSplitter(2));
             const leftGain = markNode(context.createGain());
             const rightGain = markNode(context.createGain());
@@ -1624,15 +1632,19 @@
             rightGain.gain.value = 0.5;
             analyser.fftSize = 1024;
             analyser.smoothingTimeConstant = 0.35;
+            inputAnalyser.fftSize = 1024;
+            inputAnalyser.smoothingTimeConstant = 0.35;
             // Set the gain value BEFORE connecting the source so there is no
             // brief moment of full-volume (gain=1.0) audio at route creation.
             gain.gain.value = effectiveGain();
-            connectNative(source, gain);
+            connectNative(source, inputAnalyser);
+            connectNative(inputAnalyser, gain);
 
             const route = {
                 context,
                 source,
                 gain,
+                inputAnalyser,
                 splitter,
                 leftGain,
                 rightGain,
@@ -1642,6 +1654,7 @@
                 normalizerGainDb: 0,
                 meterPeakDb: -Infinity,
                 meterBuffer: new Float32Array(analyser.fftSize),
+                inputBuffer: new Float32Array(inputAnalyser.fftSize),
                 sourceKind: routeSource.kind,
                 muteNative: Boolean(routeSource.muteNative),
                 stream: routeSource.stream || null,
@@ -1994,7 +2007,7 @@
                 if (graph) {
                     const entry = trackDestinationConnection(this, destination, outputIndex, inputIndex, true);
                     try {
-                        connectNative(this, graph.gain, outputIndex, 0);
+                        connectNative(this, graph.inputAnalyser, outputIndex, 0);
                         return destination;
                     } catch (e) {
                         entry.routed = false;
@@ -2595,24 +2608,39 @@
             return { peakDb: -Infinity, gainDb: Number(processor.normalizerGainDb) || 0 };
         }
 
-        let sum = 0;
         let peak = 0;
         for (let i = 0; i < processor.meterBuffer.length; i++) {
             const sample = processor.meterBuffer[i];
             const abs = Math.abs(sample);
             if (abs > peak) peak = abs;
-            sum += sample * sample;
         }
 
-        const rms = Math.sqrt(sum / Math.max(1, processor.meterBuffer.length));
-        const rmsDb = rms > 0.000001 ? 20 * Math.log10(rms) : -120;
         const peakDb = peak > 0.000001 ? 20 * Math.log10(peak) : -Infinity;
         processor.meterPeakDb = peakDb;
 
+        // The output analyser supplies peak metering only; source RMS feeds AGC.
+        // Otherwise moving the user's slider changes detected loudness and
+        // the normalizer gradually cancels their requested gain adjustment.
+        let sourceRmsDb = -120;
+        const sourceAnalyser = processor.inputAnalyser;
+        if (sourceAnalyser) {
+            if (!processor.inputBuffer || processor.inputBuffer.length !== sourceAnalyser.fftSize) {
+                processor.inputBuffer = new Float32Array(sourceAnalyser.fftSize);
+            }
+            try {
+                sourceAnalyser.getFloatTimeDomainData(processor.inputBuffer);
+                let sourceSum = 0;
+                for (let i = 0; i < processor.inputBuffer.length; i++) {
+                    sourceSum += processor.inputBuffer[i] * processor.inputBuffer[i];
+                }
+                const sourceRms = Math.sqrt(sourceSum / Math.max(1, processor.inputBuffer.length));
+                sourceRmsDb = sourceRms > 0.000001 ? 20 * Math.log10(sourceRms) : -120;
+            } catch (e) {}
+        }
         const config = normalizeNormalizerConfig(state.normalizerConfig);
         let gainDb = Number(processor.normalizerGainDb) || 0;
-        if (state.normalizerEnabled && state.extensionActive && state.enabled && !state.muted && rmsDb > -80) {
-            const desired = Math.max(-18, Math.min(config.maxBoostDb, gainDb + (config.targetDb - rmsDb)));
+        if (state.normalizerEnabled && state.extensionActive && state.enabled && !state.muted && sourceRmsDb > -80) {
+            const desired = Math.max(-18, Math.min(config.maxBoostDb, config.targetDb - sourceRmsDb));
             const intervalMs = 100;
             const alpha = 1 - Math.exp(-intervalMs / Math.max(100, config.responseMs));
             gainDb += (desired - gainDb) * alpha;

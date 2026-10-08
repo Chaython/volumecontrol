@@ -65,6 +65,8 @@ const tc = {
     isolatedOutputUsesLimiter: null,
     audioCtx: undefined,
     gainNode: undefined,
+    inputAnalyserNode: undefined,
+    inputAnalyserBuffer: undefined,
     limiterNode: undefined,
     analyserNode: undefined,
     analyserBuffer: undefined,
@@ -1079,8 +1081,9 @@ function sampleIsolatedNormalizer() {
     if (!tc.vars.normalizerEnabled) return;
     const ctx = tc.vars.audioCtx;
     const analyser = tc.vars.analyserNode;
+    const sourceAnalyser = tc.vars.inputAnalyserNode;
     const gainNode = tc.vars.gainNode;
-    if (!ctx || !analyser || !gainNode || ctx.state !== "running") return;
+    if (!ctx || !analyser || !sourceAnalyser || !gainNode || ctx.state !== "running") return;
 
     if (!tc.vars.analyserBuffer || tc.vars.analyserBuffer.length !== analyser.fftSize) {
         tc.vars.analyserBuffer = new Float32Array(analyser.fftSize);
@@ -1092,22 +1095,34 @@ function sampleIsolatedNormalizer() {
         return;
     }
 
-    let sum = 0;
     let peak = 0;
     for (let i = 0; i < tc.vars.analyserBuffer.length; i++) {
         const sample = tc.vars.analyserBuffer[i];
         const abs = Math.abs(sample);
         if (abs > peak) peak = abs;
-        sum += sample * sample;
     }
-    const rms = Math.sqrt(sum / Math.max(1, tc.vars.analyserBuffer.length));
-    const rmsDb = rms > 0.000001 ? 20 * Math.log10(rms) : -120;
     tc.vars.normalizerPeakDb = peak > 0.000001 ? 20 * Math.log10(peak) : -Infinity;
+
+    // Read loudness before manual volume, automatic gain, and output limiting.
+    // The final output analyser remains dedicated to peak-meter feedback.
+    if (!tc.vars.inputAnalyserBuffer || tc.vars.inputAnalyserBuffer.length !== sourceAnalyser.fftSize) {
+        tc.vars.inputAnalyserBuffer = new Float32Array(sourceAnalyser.fftSize);
+    }
+    let sourceRmsDb = -120;
+    try {
+        sourceAnalyser.getFloatTimeDomainData(tc.vars.inputAnalyserBuffer);
+        let sourceSum = 0;
+        for (let i = 0; i < tc.vars.inputAnalyserBuffer.length; i++) {
+            sourceSum += tc.vars.inputAnalyserBuffer[i] * tc.vars.inputAnalyserBuffer[i];
+        }
+        const sourceRms = Math.sqrt(sourceSum / Math.max(1, tc.vars.inputAnalyserBuffer.length));
+        sourceRmsDb = sourceRms > 0.000001 ? 20 * Math.log10(sourceRms) : -120;
+    } catch (e) {}
 
     const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
     let gainDb = Number(tc.vars.normalizerGainDb) || 0;
-    if (tc.vars.normalizerEnabled && !tc.vars.muted && rmsDb > -80) {
-        const desired = Math.max(-18, Math.min(config.maxBoostDb, gainDb + (config.targetDb - rmsDb)));
+    if (tc.vars.normalizerEnabled && !tc.vars.muted && sourceRmsDb > -80) {
+        const desired = Math.max(-18, Math.min(config.maxBoostDb, config.targetDb - sourceRmsDb));
         const alpha = 1 - Math.exp(-100 / Math.max(100, config.responseMs));
         gainDb += (desired - gainDb) * alpha;
     } else {
@@ -1147,6 +1162,10 @@ function createGainNode() {
     if (!tc.vars.gainNode) {
         tc.vars.gainNode = tc.vars.audioCtx.createGain();
         tc.vars.gainNode.channelInterpretation = "speakers";
+        tc.vars.inputAnalyserNode = tc.vars.audioCtx.createAnalyser();
+        tc.vars.inputAnalyserNode.fftSize = 1024;
+        tc.vars.inputAnalyserNode.smoothingTimeConstant = 0.35;
+        tc.vars.inputAnalyserNode.connect(tc.vars.gainNode);
         tc.vars.limiterNode = tc.vars.audioCtx.createDynamicsCompressor();
         tc.vars.analyserNode = tc.vars.audioCtx.createAnalyser();
         tc.vars.analyserNode.fftSize = 1024;
@@ -1465,6 +1484,8 @@ function connectOutput(element) {
         // before constructing a replacement context or connect() will throw a
         // cross-context InvalidAccessError.
         tc.vars.gainNode = undefined;
+        tc.vars.inputAnalyserNode = undefined;
+        tc.vars.inputAnalyserBuffer = undefined;
         tc.vars.limiterNode = undefined;
         tc.vars.analyserNode = undefined;
         tc.vars.analyserBuffer = undefined;
@@ -1535,7 +1556,7 @@ function connectOutput(element) {
         }
 
         if (source) {
-            source.connect(tc.vars.gainNode);
+            source.connect(tc.vars.inputAnalyserNode);
 
             element.dataset.vcHooked = "true";
             tc.vars.mediaElements.add(element);
