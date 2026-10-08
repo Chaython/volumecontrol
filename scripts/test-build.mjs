@@ -711,6 +711,12 @@ test('normalizer sampling returns early when switched off', () => {
     assert.match(content, /function sampleIsolatedNormalizer\(\) \{\s*if \(!tc\.vars\.normalizerEnabled\) return;/);
 });
 
+test('Firefox installed-extension smoke uses Firefox headless environment, not unsupported web-ext flag', () => {
+    const source = readFileSync(join(root, 'scripts/firefox-extension-smoke.mjs'), 'utf8');
+    assert.doesNotMatch(source, /^\s*'--headless',/m);
+    assert.match(source, /MOZ_HEADLESS: '1'/);
+});
+
 test('CI requires both Chromium and Firefox runtime smoke tests', () => {
     const workflow = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');
     const chromium = readFileSync(join(root, 'scripts/browser-smoke.mjs'), 'utf8');

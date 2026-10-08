@@ -90,7 +90,6 @@ try {
         // "firefox" is a documented web-ext binary alias. On Windows this
         // avoids passing "C:\\Program Files\\..." through cmd.exe entirely.
         '--firefox', isWindows ? 'firefox' : browser,
-        '--headless',
         '--no-reload',
         '--start-url', `http://127.0.0.1:${port}/`
     ];
@@ -100,6 +99,9 @@ try {
         shell: isWindows,
         cwd: isWindows ? extensionRoot : undefined,
         windowsHide: true,
+        // web-ext 10.7 has no --headless option. Firefox itself honors this
+        // environment variable when launched by web-ext on CI runners.
+        env: { ...process.env, MOZ_HEADLESS: '1' },
         stdio: ['ignore', 'pipe', 'pipe']
     });
     const appendDiagnostic = chunk => {
