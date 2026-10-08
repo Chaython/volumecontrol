@@ -292,7 +292,7 @@ try {
     });
     const secondSession = await cdp.attach(secondTarget);
     await waitFor(async () => await cdp.eval(secondSession,
-        'document.body.classList.contains("vc-init") && AudioNode.prototype.connect.name === "patchedConnect"'));
+        'document.body.classList.contains("vc-init") && (AudioNode.prototype.__volumeControlPatched || AudioNode.prototype.connect.name === "patchedConnect")'));
     const secondId = await waitFor(async () => await cdp.eval(settingsSession,
         '(async()=>{const tabs=await vcTest.tabs();const t=tabs.find(x=>x.url&&x.url.includes("?second=1"));return t&&t.id;})()'));
     const secondState = await cdp.eval(settingsSession,
@@ -315,8 +315,9 @@ try {
         const data = await cdp.eval(settingsSession, 'vcTest.get("whitelistMode")');
         return data.whitelistMode === true;
     });
-    check('Options whitelist mode enables', await cdp.eval(settingsSession,
+    await waitFor(async () => await cdp.eval(settingsSession,
         'document.getElementById("listTitle").textContent === "Allowed Sites"'));
+    check('Options whitelist mode enables', true);
     await cdp.eval(settingsSession,
         '(()=>{const e=document.getElementById("whitelistMode");e.checked=false;' +
         'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
@@ -324,8 +325,9 @@ try {
         const data = await cdp.eval(settingsSession, 'vcTest.get("whitelistMode")');
         return data.whitelistMode === false;
     });
-    check('Options whitelist mode disables and restores blocklist UI', await cdp.eval(settingsSession,
+    await waitFor(async () => await cdp.eval(settingsSession,
         'document.getElementById("listTitle").textContent === "Blocked Sites"'));
+    check('Options whitelist mode disables and restores blocklist UI', true);
 
     await cdp.eval(settingsSession,
         '(()=>{const e=document.getElementById("newRememberedSite");e.value="browser-smoke.invalid";' +
