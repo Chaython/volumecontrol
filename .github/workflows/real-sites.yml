@@ -26,6 +26,9 @@ jobs:
           git checkout --detach FETCH_HEAD
           if ($LASTEXITCODE -ne 0) { throw "Could not check out current revision" }
 
+      - name: Install pinned build dependencies
+        run: npm ci
+
       - name: Build Chrome extension
         shell: powershell
         run: .\scripts\build.ps1
