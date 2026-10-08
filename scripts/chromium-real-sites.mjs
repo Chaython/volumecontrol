@@ -467,7 +467,7 @@ try {
                 'selectedVideo:document.querySelector("ytd-playlist-panel-video-renderer[selected]")?.getAttribute("video-id")||null,' +
                 'nextButton:!!document.querySelector(".ytp-next-button"),' +
                 'videoReady:document.querySelector("video")?.readyState||0,' +
-                'videoTime:document.querySelector("video")?.currentTime||0})())';
+                'videoTime:document.querySelector("video")?.currentTime||0}))()';
             result.before = await browserCdp.evaluate(session, read);
             let tabId, send;
             if (extensionEnabled) {
