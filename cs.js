@@ -1954,6 +1954,10 @@ window.addEventListener("message", (event) => {
     }
 
     if (data.command === "meterUpdate") {
+        // Ignore an in-flight page meter tick if Normalize was just disabled
+        // or the site became blocked. Otherwise it could restore the old
+        // automatic gain after our blocklist/Normalize reset.
+        if (!tc.vars.normalizerEnabled || tc.vars.isBlocked) return;
         // Chrome's JSON-based extension messaging may turn non-finite
         // numbers into null. A null peak means silence/unknown, never 0
         // dBFS (full-scale), and missing gain must not become NaN.

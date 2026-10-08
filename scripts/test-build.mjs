@@ -1154,7 +1154,8 @@ test('MAIN-world meter messages treat null and missing peaks as silence', () => 
     const end = src.indexOf('    if (data.command !== "requestState") return;', start);
     assert.ok(start >= 0 && end > start, 'meter bridge listener must exist');
     const handle = runInNewContext('(function(tc, data) {\n' + src.slice(start, end) + '\n})');
-    const tc = { vars: { normalizerPeakDb: -5, normalizerGainDb: 4 } };
+    const tc = { vars: { normalizerEnabled: true, isBlocked: false,
+        normalizerPeakDb: -5, normalizerGainDb: 4 } };
     for (const peakDb of [null, undefined, '0', NaN, -Infinity]) {
         handle(tc, { command: 'meterUpdate', peakDb, normalizerGainDb: null });
         assert.equal(tc.vars.normalizerPeakDb, -Infinity, 'invalid/nonfinite peak must not appear as 0 dBFS');
@@ -1166,6 +1167,14 @@ test('MAIN-world meter messages treat null and missing peaks as silence', () => 
     handle(tc, { command: 'meterUpdate', peakDb: 0, normalizerGainDb: -4 });
     assert.equal(tc.vars.normalizerPeakDb, 0, 'valid full-scale reading remains valid');
     assert.equal(tc.vars.normalizerGainDb, -4);
+
+    tc.vars.normalizerEnabled = false;
+    handle(tc, { command: 'meterUpdate', peakDb: -1, normalizerGainDb: 15 });
+    assert.equal(tc.vars.normalizerGainDb, -4, 'disabled normalizer must ignore in-flight meter tick');
+    tc.vars.normalizerEnabled = true;
+    tc.vars.isBlocked = true;
+    handle(tc, { command: 'meterUpdate', peakDb: -1, normalizerGainDb: 15 });
+    assert.equal(tc.vars.normalizerGainDb, -4, 'blocked site must ignore in-flight meter tick');
 });
 
 test('normalizer popup preserves restrictions and pending checkbox state', () => {
