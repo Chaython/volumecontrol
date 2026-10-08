@@ -1647,7 +1647,38 @@
         }
     }
 
+    function resetMediaBoundaryGain(route) {
+        // Reusing an HTMLMediaElement keeps its previous AudioParam. The
+        // normalizer may have amplified a quiet track significantly. A
+        // 15ms ramp after the next track starts is too late to avoid a short
+        // loud burst, even when the rest of the output is limiter-protected.
+        try {
+            const param = route.gain.gain;
+            const now = route.context.currentTime;
+            const limited = route.outputConnected && !route.limiterFallbackActive &&
+                typeof route.currentMode === "string" && route.currentMode.endsWith("-limited");
+            const manual = effectiveGain();
+            // Never expose positive gain if this path is direct or still
+            // waiting for the limiter to reconnect.
+            const safe = limited ? manual : Math.min(1, manual);
+            param.cancelScheduledValues(now);
+            param.setValueAtTime(Math.max(0, safe), now);
+            return true;
+        } catch (e) {
+            // If we cannot reset a stale boosted AudioParam, disconnect the
+            // route until a future state sync can safely reset it. The reset
+            // flag stays set to guard every attempted reconnection.
+            disconnectMediaRouteOutput(route);
+            log(`source boundary gain reset failed: ${e && e.message}`);
+            return false;
+        }
+    }
+
     function wireMediaRoute(route) {
+        if (route.sourceGainResetPending) {
+            if (!resetMediaBoundaryGain(route)) return;
+            route.sourceGainResetPending = false;
+        }
         // A ceiling change is independent of routing/mono/boost mode.
         configureLimiter(route);
         // Skip the disconnect/reconnect cycle if the routing mode hasn't changed
@@ -2023,6 +2054,7 @@
                     // a quiet track into the next (potentially loud) track.
                     route.normalizerGainDb = 0;
                     route.meterPeakDb = -Infinity;
+                    route.sourceGainResetPending = true;
                     setNativeVolume(element, route.muteNative ? 0 : getMediaState(element).baseVolume);
                     wireMediaRoute(route);
                 } else {

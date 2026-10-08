@@ -711,7 +711,7 @@ test('unsaved tab controls survive SPA and playlist URL changes without storage 
 test('opening Remembered popup never replays potentially stale storage into a live tab', () => {
     const source = readFileSync(join(root, 'popup.js'), 'utf8');
     const start = source.indexOf('        const audioState = await refreshAudioControlState(tab);');
-    const end = source.indexOf('    } catch (e) {\n        handleError(e);', start);
+    const end = source.indexOf('    } catch (e) {', start);
     assert.ok(start >= 0 && end > start);
     const initialization = source.slice(start, end);
     assert.match(initialization, /if \(saved\) \{/);
@@ -1470,6 +1470,48 @@ test('normalizer source peak detector windows overlap 100ms updates in both worl
     assert.match(isolated, /tc\.vars\.inputAnalyserNode\.fftSize = 8192/);
     assert.match(docs, /8,192 samples/);
 });
+
+test('reused media source resets stale automatic gain before next track and fails closed', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = page.indexOf('    function resetMediaBoundaryGain(route) {');
+    const end = page.indexOf('    function wireMediaRoute(route) {', start);
+    assert.ok(start >= 0 && end > start);
+    let manual = 1;
+    let disconnected = false;
+    const reset = runInNewContext('(' + page.slice(start, end).trim() + ')', {
+        effectiveGain: () => manual,
+        disconnectMediaRouteOutput: route => { disconnected = true; route.outputConnected = false; },
+        log: () => {}
+    });
+    const param = {
+        value: 12,
+        cancelScheduledValues() {},
+        setValueAtTime(value) { this.value = value; }
+    };
+    const route = {
+        gain: { gain: param },
+        context: { currentTime: 3 },
+        currentMode: 'stereo-limited',
+        outputConnected: true,
+        limiterFallbackActive: false,
+        normalizerGainDb: 12
+    };
+    assert.equal(reset(route), true);
+    assert.equal(param.value, 1, 'old +12 dB automatic boost cannot leak into next track');
+    manual = 3;
+    param.value = 9;
+    route.currentMode = 'stereo-direct';
+    assert.equal(reset(route), true);
+    assert.equal(param.value, 1, 'unlimited positive gain cannot play on a direct route');
+    param.value = 15;
+    param.cancelScheduledValues = () => { throw Error('AudioParam error'); };
+    assert.equal(reset(route), false);
+    assert.equal(disconnected, true, 'failed gain clamp disconnects output');
+    assert.equal(route.outputConnected, false);
+    assert.match(page, /route\.sourceGainResetPending = true/);
+    assert.match(page, /if \(route\.sourceGainResetPending\) \{\s*if \(!resetMediaBoundaryGain\(route\)\) return;\s*route\.sourceGainResetPending = false/);
+});
+
 test('normalizer resets accumulated automatic gain on toggles and media changes', () => {
     const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
     const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
