@@ -1288,13 +1288,18 @@ test('normalization off bypasses compressor but positive boosts retain limiting'
         disconnect() { this.edges = []; }
     });
     const gainNode = node(), limiterNode = node(), analyserNode = node(), destination = {};
+    gainNode.gain = {
+        value: 1,
+        cancelScheduledValues() {},
+        setValueAtTime(value) { this.value = value; }
+    };
     const tc = {
-        vars: { audioCtx: { destination }, gainNode, limiterNode, analyserNode,
+        vars: { audioCtx: { destination, currentTime: 1 }, gainNode, limiterNode, analyserNode,
             normalizerEnabled: false, muted: false, dB: 0, isBlocked: false, isolatedOutputUsesLimiter: null },
         settings: { debugMode: false }
     };
     const wire = runInNewContext('(' + isolated.slice(fStart, fEnd).trim() + ')', {
-        tc, configureIsolatedLimiter: () => {}, log: () => {}
+        tc, configureIsolatedLimiter: () => {}, getGainValue: dB => 10 ** (dB / 20), log: () => {}
     });
     wire();
     assert.equal(gainNode.edges[0], destination);
