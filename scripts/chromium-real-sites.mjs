@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -74,7 +75,7 @@ class CDP {
 }
 const temp = mkdtempSync(join(tmpdir(), 'vc-real-media-'));
 const profile = join(temp, 'profile');
-let processRef, cdp, stderr = '';
+let processRef, cdp, mediaServer, stderr = '';
 const results = [];
 const injectionExpression = 'document.body?.classList.contains("vc-init") && ' +
     '(Boolean(AudioNode.prototype.__volumeControlPatched) || AudioNode.prototype.connect.name === "patchedConnect")';
@@ -193,7 +194,112 @@ try {
             if (targetId) try { await cdp.send('Target.closeTarget', { targetId }); } catch (_) {}
         }
     }
-    const played = results.filter(r => r.playback?.playing).length;
+
+    // These are REAL compressed audio/video samples downloaded from public
+    // educational sites, not generated tones. Serving them from localhost
+    // separates playback bugs from external website automation restrictions.
+    const samples = [
+        { path: '/audio.mp3', type: 'audio/mpeg', url: 'https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3' },
+        { path: '/video.mp4', type: 'video/mp4', url: 'https://www.w3schools.com/html/mov_bbb.mp4' }
+    ];
+    for (const s of samples) {
+        try {
+            const response = await fetch(s.url, { signal: AbortSignal.timeout(20000) });
+            if (!response.ok) throw Error('HTTP ' + response.status);
+            s.bytes = Buffer.from(await response.arrayBuffer());
+            if (s.bytes.length < 1000 || s.bytes.length > 25_000_000) throw Error('Unexpected media length ' + s.bytes.length);
+            console.log('DOWNLOADED_REAL_MEDIA ' + s.path + ' ' + s.bytes.length + ' bytes');
+        } catch (error) {
+            console.warn('REAL_MEDIA_DOWNLOAD_FAILED ' + s.url + ' ' + error.message);
+        }
+    }
+    mediaServer = createServer((req, res) => {
+        const path = new URL(req.url || '/', 'http://localhost').pathname;
+        const sample = samples.find(s => s.path === path);
+        if (!sample || !sample.bytes) {
+            if (path !== '/test.html') {
+                res.writeHead(404); res.end('Media unavailable'); return;
+            }
+            res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+            res.end('<!doctype html><meta charset="utf-8"><title>Real recorded media fixture</title>' +
+                '<video id="video" controls preload="auto" src="/video.mp4"></video>' +
+                '<audio id="audio" controls preload="auto" src="/audio.mp3"></audio>');
+            return;
+        }
+        const range = /^bytes=(\d+)-(\d*)/.exec(req.headers.range || '');
+        const start = range ? Math.min(sample.bytes.length - 1, Number(range[1])) : 0;
+        const end = range && range[2] ? Math.min(sample.bytes.length - 1, Number(range[2])) : sample.bytes.length - 1;
+        res.writeHead(range ? 206 : 200, {
+            'Content-Type': sample.type,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': end - start + 1,
+            ...(range ? { 'Content-Range': 'bytes ' + start + '-' + end + '/' + sample.bytes.length } : {})
+        });
+        res.end(sample.bytes.subarray(start, end + 1));
+    });
+    await new Promise((ok, fail) => {
+        mediaServer.once('error', fail);
+        mediaServer.listen(0, '127.0.0.1', ok);
+    });
+    const localPage = 'http://127.0.0.1:' + mediaServer.address().port + '/test.html';
+    const downloaded = samples.filter(s => s.bytes);
+    if (downloaded.length) {
+        const { targetId: fixtureId } = await cdp.send('Target.createTarget', { url: localPage, background: true });
+        const fixtureSession = await cdp.attach(fixtureId);
+        try {
+            await waitFor(async () => await cdp.evaluate(fixtureSession,
+                'document.body?.classList.contains("vc-init")'), 12000);
+            const tabId = await waitFor(async () => {
+                const tabs = await cdp.evaluate(optionsSession, 'probe.tabs()');
+                return tabs?.find(t => t.url === localPage)?.id || null;
+            });
+            const send = cmd => cdp.evaluate(optionsSession,
+                'probe.send(' + tabId + ',' + JSON.stringify(cmd) + ')');
+            for (const s of downloaded) {
+                const kind = s.path === '/video.mp4' ? 'video' : 'audio';
+                const started = await cdp.evaluate(fixtureSession,
+                    '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');' +
+                    'm.muted=false;m.preload="auto";const p=m.play();p?.catch?.(()=>{});' +
+                    'return {readyState:m.readyState,src:m.currentSrc}})()');
+                try {
+                    const before = await waitFor(async () => {
+                        const x = await cdp.evaluate(fixtureSession,
+                            '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');' +
+                            'return {t:m.currentTime,ready:m.readyState,paused:m.paused,error:m.error?.code}})()');
+                        return x.ready >= 2 && !x.paused ? x : null;
+                    }, 12000);
+                    await sleep(850);
+                    const after = await cdp.evaluate(fixtureSession,
+                        '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');' +
+                        'return {t:m.currentTime,ready:m.readyState,paused:m.paused,error:m.error?.code}})()');
+                    const progressed = after.t > before.t + 0.2;
+                    await send({ command: 'setVolume', dB: -12 });
+                    const down = (await send({ command: 'getAudioControlState' }))?.response?.volume === -12;
+                    await send({ command: 'setNormalizer', enabled: true });
+                    await sleep(300);
+                    const meter = (await send({ command: 'getMeterState' }))?.response;
+                    await send({ command: 'setNormalizer', enabled: false });
+                    await send({ command: 'setVolume', dB: 0 });
+                    const entry = { site: 'Downloaded real ' + kind, source: s.url,
+                        status: progressed && down ? 'passed' : 'failed', playback: { before, after, progressed },
+                        attenuation: down, meter };
+                    results.push(entry);
+                    console.log('RECORDED_MEDIA_RESULT=' + JSON.stringify(entry));
+                } catch (error) {
+                    const entry = { site: 'Downloaded real ' + kind, source: s.url,
+                        status: 'failed', reason: error.message, started };
+                    results.push(entry);
+                    console.log('RECORDED_MEDIA_RESULT=' + JSON.stringify(entry));
+                }
+                await cdp.evaluate(fixtureSession,
+                    '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');m.pause();return true})()');
+            }
+        } finally {
+            await cdp.send('Target.closeTarget', { targetId: fixtureId });
+        }
+    }
+
+    const played = results.filter(r => r.playback?.playing || r.playback?.progressed).length;
     console.log('REAL_SITE_REPORT=' + JSON.stringify({ played, results }));
     if (results.some(r => r.status === 'failed')) process.exitCode = 1;
     if (!played) console.warn('INCONCLUSIVE: no real stream advanced; do not report a playback pass');
@@ -207,5 +313,6 @@ try {
         try { processRef.kill(); } catch (_) {}
         await Promise.race([new Promise(ok => processRef.once('exit', ok)), sleep(3000)]);
     }
+    if (mediaServer) await new Promise(ok => { try { mediaServer.close(ok); } catch (_) { ok(); } });
     rmSync(temp, { recursive: true, force: true });
 }
