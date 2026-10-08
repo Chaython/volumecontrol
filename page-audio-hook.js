@@ -634,6 +634,26 @@
         }
     }
 
+    function clampDirectOutputGain(processor) {
+        // Do not expose the previous (possibly >1) auto/manual gain on the
+        // first audio block after a limited -> direct route transition.
+        // Reconnecting before the ordinary 15 ms ramp would bypass the
+        // compressor while that old boost is still audible.
+        try {
+            const param = processor.gain.gain;
+            const now = processor.context.currentTime;
+            const safeGain = Math.max(0, Math.min(1, effectiveGain()));
+            param.cancelScheduledValues(now);
+            param.setValueAtTime(safeGain, now);
+            return true;
+        } catch (e) {
+            log(`direct output safety clamp failed: ${e && e.message}`);
+            // Keep the old limited route connected and retry on a future
+            // state sync; never open a direct path with an unknown AudioParam.
+            return false;
+        }
+    }
+
     function setGainValue(graph) {
         const autoGain = state.normalizerEnabled ? dbToGain(graph.normalizerGainDb || 0) : 1;
         const targetGain = graph.limiterFallbackActive
@@ -694,6 +714,7 @@
             setGainValue(graph);
             return;
         }
+        if (!safetyLimiterRequired() && !clampDirectOutputGain(graph)) return;
 
         safeDisconnect(graph.gain);
         safeDisconnect(graph.splitter);
@@ -1616,6 +1637,7 @@
             setMediaGainValue(route);
             return;
         }
+        if (!safetyLimiterRequired() && !clampDirectOutputGain(route)) return;
 
         disconnectMediaRouteOutput(route);
 

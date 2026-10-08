@@ -993,6 +993,133 @@ test('isolated audio restores a gain-limited direct path after limiter route fai
     assert.match(source, /: Math\.min\(1, manualGain\)/);
 });
 
+
+test('limiter-to-direct transitions clamp boosted MAIN-world page output before reconnect', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function clampUnprotectedOutput(processor) {');
+    const end = source.indexOf('    function ensureGraph(context) {', start);
+    assert.ok(start >= 0 && end > start);
+    const output = { label: 'destination' };
+    const nodes = Object.fromEntries(['gain','splitter','leftGain','rightGain','merger','limiter','analyser'].map(name => [name, {
+        label: name, edges: []
+    }]));
+    const gain = { value: 8, cancelScheduledValues() {},
+        setValueAtTime(value) { this.value = value; },
+        linearRampToValueAtTime(value) { this.value = value; } };
+    nodes.gain.gain = gain;
+    const graph = { ...nodes, context: { state: 'running', currentTime: 2, destination: output },
+        currentMode: 'stereo-limited', limiterFallbackActive: false, normalizerGainDb: 12 };
+    const oldLimited = [nodes.limiter];
+    nodes.gain.edges = oldLimited.slice();
+    nodes.limiter.edges = [nodes.analyser];
+    nodes.analyser.edges = [output];
+    let safeAtConnection = null;
+    const state = { extensionActive: true, enabled: true, normalizerEnabled: false,
+        mono: false, muted: false, dB: -10 };
+    const wireGraph = runInNewContext('(() => {\n' + source.slice(start,end) + '\nreturn wireGraph;})()', {
+        state, log: () => {}, configureLimiter: () => {},
+        effectiveGain: () => 10 ** (-10 / 20),
+        dbToGain: v => 10 ** (v/20),
+        connectNative: (a,b) => {
+            if (a === nodes.gain && b === output) safeAtConnection = gain.value <= 1;
+            a.edges.push(b);
+        },
+        safeDisconnect: n => { n.edges = []; }
+    });
+    wireGraph(graph);
+    assert.equal(safeAtConnection, true, 'direct connection must never receive old boosted gain');
+    assert.equal(graph.currentMode, 'stereo-direct');
+    assert.equal(graph.gain.edges[0], output);
+    assert.ok(gain.value < 1);
+    // A failed clamp must preserve the existing compressor instead of
+    // disconnecting it and opening an unsafe direct connection.
+    graph.currentMode = 'stereo-limited';
+    nodes.gain.edges = oldLimited.slice();
+    gain.value = 9;
+    gain.cancelScheduledValues = () => { throw Error('closed AudioParam'); };
+    wireGraph(graph);
+    assert.equal(graph.currentMode, 'stereo-limited');
+    assert.equal(nodes.gain.edges[0], nodes.limiter);
+});
+
+test('MAIN-world media route clamps before bypassing limiter on Normalize off', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function setMediaGainValue(route) {');
+    const end = source.indexOf('    function ensureMediaRoute(element) {', start);
+    assert.ok(start >= 0 && end > start);
+    const destination = {};
+    const nodes = Object.fromEntries(['gain','splitter','leftGain','rightGain','merger','limiter','analyser'].map(n=>[n,{ edges: [] }]));
+    const param = { value: 7, cancelScheduledValues() {},
+        setValueAtTime(v) { this.value = v; }, linearRampToValueAtTime(v) { this.value = v; } };
+    nodes.gain.gain = param;
+    const route = { ...nodes, context: { state: 'running', currentTime: 1, destination },
+        currentMode: 'stereo-limited', outputConnected: true, limiterFallbackActive: false, normalizerGainDb: 10 };
+    let safeAtConnection = null;
+    const wire = runInNewContext('(() => {\n' + source.slice(start,end) + '\nreturn wireMediaRoute;})()', {
+        state: { extensionActive: true, enabled: true, normalizerEnabled: false, muted: false, mono: false, dB: -10 },
+        log: () => {}, configureLimiter: () => {}, safetyLimiterRequired: () => false,
+        currentRoutingMode: () => 'stereo-direct',
+        dbToGain: v => 10 ** (v/20), effectiveGain: () => 10 ** (-10/20),
+        connectNative: (a,b) => {
+            if (a === nodes.gain && b === destination) safeAtConnection = param.value <= 1;
+            a.edges.push(b);
+        },
+        clampUnprotectedOutput: () => true,
+        clampDirectOutputGain: processor => {
+            const p=processor.gain.gain; p.cancelScheduledValues(1);
+            p.setValueAtTime(10 ** (-10/20), 1); return true;
+        },
+        disconnectMediaRouteOutput: processor => {
+            for (const n of Object.values(nodes)) n.edges = [];
+            processor.outputConnected = false;
+        }
+    });
+    wire(route);
+    assert.equal(safeAtConnection, true);
+    assert.equal(route.currentMode, 'stereo-direct');
+    assert.equal(route.outputConnected, true);
+    assert.equal(route.gain.edges[0], destination);
+    assert.match(source, /if \(!safetyLimiterRequired\(\) && !clampDirectOutputGain\(route\)\) return;/);
+});
+
+test('isolated Normalize off clamps output before bypassing its compressor', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function routeIsolatedOutput() {');
+    const end = source.indexOf('function applyState() {', start);
+    assert.ok(start >= 0 && end > start);
+    const destination = {};
+    const gainNode = { edges: [], connect(to) {
+        if (to === destination) this.safeAtConnect = this.gain.value <= 1;
+        this.edges.push(to);
+    }, disconnect() { this.edges = []; } };
+    const limiterNode = { edges: [], connect(to) { this.edges.push(to); },
+        disconnect() { this.edges = []; } };
+    const analyserNode = { edges: [], connect(to) { this.edges.push(to); },
+        disconnect() { this.edges = []; } };
+    gainNode.gain = { value: 8, cancelScheduledValues() {},
+        setValueAtTime(v) { this.value = v; } };
+    const tc = { vars: { audioCtx: { destination, currentTime: 2 }, gainNode, limiterNode,
+        analyserNode, isolatedOutputUsesLimiter: true, isBlocked: false,
+        normalizerEnabled: false, muted: false, dB: -10 },
+        settings: { debugMode: false } };
+    const wire = runInNewContext('(' + source.slice(start,end).trim() + ')', {
+        tc, getGainValue: db => 10**(db/20), configureIsolatedLimiter: () => {}, log: () => {}
+    });
+    wire();
+    assert.equal(gainNode.safeAtConnect, true);
+    assert.equal(tc.vars.isolatedOutputUsesLimiter, false);
+    assert.equal(gainNode.edges[0], destination);
+    assert.ok(gainNode.gain.value < 1);
+
+    tc.vars.isolatedOutputUsesLimiter = true;
+    gainNode.gain.value = 8;
+    gainNode.gain.cancelScheduledValues = () => { throw Error('AudioParam closed'); };
+    gainNode.edges = [limiterNode];
+    wire();
+    assert.equal(tc.vars.isolatedOutputUsesLimiter, true);
+    assert.equal(gainNode.edges[0], limiterNode);
+});
+
 test('normalizer popup preserves restrictions and pending checkbox state', () => {
     const source = readFileSync(join(root, 'popup.js'), 'utf8');
     const start = source.indexOf('function applyNormalizerState(state = {}) {');

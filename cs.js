@@ -942,6 +942,25 @@ function routeIsolatedOutput() {
         (tc.vars.normalizerEnabled || (!tc.vars.muted && tc.vars.dB > 0));
     if (tc.vars.isolatedOutputUsesLimiter === useLimiter) return;
 
+    if (!useLimiter) {
+        // Disabling Normalize or positive boost can remove the compressor.
+        // Clamp the active (possibly boosted) AudioParam BEFORE connecting
+        // directly to the destination; the later 15ms UI ramp is too late.
+        try {
+            const param = gainNode.gain;
+            const now = audioCtx.currentTime;
+            const safeGain = tc.vars.isBlocked ? 1 :
+                (tc.vars.muted ? 0 : Math.max(0, Math.min(1, getGainValue(tc.vars.dB))));
+            param.cancelScheduledValues(now);
+            param.setValueAtTime(safeGain, now);
+        } catch (e) {
+            if (tc.settings.debugMode) log(`isolated direct route safety clamp failed: ${e && e.message}`, 3);
+            // Keep existing limited audio connected rather than allowing an
+            // uncontrolled gain burst through an unprotected direct path.
+            return;
+        }
+    }
+
     // Disconnect only outgoing edges: media element source -> gain remains
     // intact, even while a player is actively playing.
     for (const node of [gainNode, limiterNode, analyserNode]) {
