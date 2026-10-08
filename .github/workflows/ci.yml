@@ -102,6 +102,11 @@ jobs:
           VC_EXTENSION_DIR: dist/smoke/chrome
         run: node scripts/chromium-extension-smoke.mjs
 
+      - name: Exercise installed Chromium extension functionality
+        env:
+          VC_EXTENSION_DIR: dist/smoke/chrome
+        run: node scripts/chromium-functional-smoke.mjs
+
       - name: Temporarily install extracted Firefox extension
         env:
           VC_EXTENSION_DIR: dist/smoke/firefox
