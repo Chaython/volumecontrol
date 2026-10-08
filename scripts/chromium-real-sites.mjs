@@ -84,7 +84,8 @@ const mediaSnapshot = '(()=>{const a=[...document.querySelectorAll("video,audio"
     'const m=a.find(x=>x.readyState>=2)||a[0];return {' +
     'url:location.href,title:document.title,ready:document.readyState,mediaCount:a.length,' +
     'playing:m?!m.paused&&!m.ended:false,t:m?m.currentTime:null,' +
-    'readyState:m?m.readyState:null,errorCode:m?.error?.code||null,' +
+    'readyState:m?m.readyState:null,errorCode:m?.error?.code||null,'+
+    'visibility:document.visibilityState,' +
     'source:m?.currentSrc?.slice(0,100)||"",injected:(' + injectionExpression + ')}})()';
 try {
     console.log('Real media browser: ' + binary);
@@ -124,7 +125,8 @@ try {
         results.push(entry);
         let targetId;
         try {
-            ({ targetId } = await cdp.send('Target.createTarget', { url: site.url, background: true }));
+            ({ targetId } = await cdp.send('Target.createTarget', { url: site.url, background: false }));
+            await cdp.send('Target.activateTarget', { targetId });
             const session = await cdp.attach(targetId);
             const page = await waitFor(async () => {
                 const data = await cdp.evaluate(session, mediaSnapshot);
@@ -248,7 +250,8 @@ try {
     const localPage = 'http://127.0.0.1:' + mediaServer.address().port + '/test.html';
     const downloaded = samples.filter(s => s.bytes);
     if (downloaded.length) {
-        const { targetId: fixtureId } = await cdp.send('Target.createTarget', { url: localPage, background: true });
+        const { targetId: fixtureId } = await cdp.send('Target.createTarget', { url: localPage, background: false });
+        await cdp.send('Target.activateTarget', { targetId: fixtureId });
         const fixtureSession = await cdp.attach(fixtureId);
         try {
             await waitFor(async () => await cdp.evaluate(fixtureSession,
@@ -264,7 +267,7 @@ try {
                 const started = await cdp.evaluate(fixtureSession,
                     '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');' +
                     'm.muted=false;m.preload="auto";const p=m.play();p?.catch?.(()=>{});' +
-                    'return {readyState:m.readyState,src:m.currentSrc}})()');
+                    'return {readyState:m.readyState,src:m.currentSrc,visibility:document.visibilityState}})()');
                 try {
                     const before = await waitFor(async () => {
                         const x = await cdp.evaluate(fixtureSession,
@@ -340,7 +343,7 @@ try {
                 const after = await baselineCDP.evaluate(bsession,
                     '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');' +
                     'return {t:m.currentTime,ready:m.readyState,network:m.networkState,' +
-                    'paused:m.paused,error:m.error?.code,src:m.currentSrc}})()');
+                    'paused:m.paused,error:m.error?.code,src:m.currentSrc,visibility:document.visibilityState}})()');
                 const progressed = after.t > before.t + 0.2;
                 console.log('WITHOUT_EXTENSION_BASELINE=' + JSON.stringify({ kind, before, after, progressed }));
                 results.push({ site: 'Without extension ' + kind, status: progressed ? 'passed' : 'inconclusive',
