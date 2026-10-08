@@ -178,6 +178,8 @@ try {
             await send({ command: 'setMute', muted: false });
             await send({ command: 'setNormalizer', enabled: true });
             entry.normalizerOn = (await state())?.normalizerEnabled === true;
+            // Allow the 100ms sampler to produce an actual output peak.
+            await sleep(450);
             const m = (await send({ command: 'getMeterState' }))?.response;
             entry.meter = { enabled: m?.normalizerEnabled, available: m?.normalizerAvailable,
                 peakDb: m?.peakDb, gainDb: m?.gainDb };
@@ -355,6 +357,39 @@ try {
             }
         }
     }
+
+    // Cross-check YouTube itself without any extension. Otherwise a login,
+    // region or anti-automation gate could be misdiagnosed as an audio bug.
+    if (baselineCDP) {
+        const youtubeUrl = 'https://www.youtube.com/watch?v=aqz-KE-bpKQ';
+        let target;
+        try {
+            ({ targetId: target } = await baselineCDP.send('Target.createTarget',
+                { url: youtubeUrl, background: false }));
+            await baselineCDP.send('Target.activateTarget', { targetId: target });
+            const session = await baselineCDP.attach(target);
+            const before = await waitFor(async () => {
+                const data = await baselineCDP.evaluate(session, mediaSnapshot);
+                return data?.ready === 'complete' && data.url.startsWith('https://') ? data : null;
+            }, 24000);
+            await baselineCDP.evaluate(session,
+                '(()=>{const m=document.querySelector("video");if(!m)return false;' +
+                'm.play()?.catch?.(()=>{});return true})()');
+            await sleep(6500);
+            const after = await baselineCDP.evaluate(session, mediaSnapshot);
+            const progressed = Number.isFinite(before.t) && Number.isFinite(after?.t) &&
+                after.t > before.t + 0.25;
+            console.log('WITHOUT_EXTENSION_YOUTUBE=' + JSON.stringify({ before, after, progressed }));
+            results.push({ site: 'YouTube without extension', baseline: true,
+                status: progressed ? 'passed' : 'inconclusive',
+                playback: { before, after, progressed } });
+        } catch (e) {
+            console.log('WITHOUT_EXTENSION_YOUTUBE_ERROR=' + e.message);
+        } finally {
+            if (target) try { await baselineCDP.send('Target.closeTarget', { targetId: target }); } catch (_) {}
+        }
+    }
+
     console.log('REAL_MEDIA_HTTP_REQUESTS=' + JSON.stringify(mediaRequests));
 
     const played = results.filter(r => r.playback?.playing || r.playback?.progressed).length;
