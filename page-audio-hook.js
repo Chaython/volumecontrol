@@ -631,9 +631,18 @@
 
     // Compute the current routing mode string from state. Used by wireGraph and
     // wireMediaRoute to skip redundant disconnect/reconnect cycles.
+    function safetyLimiterRequired() {
+        // Keep clipping protection for manual positive boosts. At unity or
+        // attenuation with Normalize off, bypass the compressor entirely:
+        // even a nominal -1 dBFS compressor introduces processing/latency.
+        return state.extensionActive && state.enabled &&
+            (state.normalizerEnabled || (!state.muted && state.dB > 0));
+    }
+
     function currentRoutingMode() {
-        const wantMono = state.extensionActive && state.enabled && state.mono;
-        return (state.extensionActive && state.enabled) ? (wantMono ? "mono" : "stereo") : "bypass";
+        if (!state.extensionActive || !state.enabled) return "bypass";
+        return (state.mono ? "mono" : "stereo") +
+            (safetyLimiterRequired() ? "-limited" : "-direct");
     }
 
     // Connect a mono down-mix chain: gain → splitter → L/R gains → merger → destination.
@@ -666,14 +675,18 @@
         safeDisconnect(graph.analyser);
 
         try {
-            configureLimiter(graph);
+            const useLimiter = safetyLimiterRequired();
+            const output = useLimiter ? graph.limiter : graph.context.destination;
             if (state.extensionActive && state.enabled && state.mono) {
-                connectMonoChain(graph.gain, graph.splitter, graph.leftGain, graph.rightGain, graph.merger, graph.limiter);
+                connectMonoChain(graph.gain, graph.splitter, graph.leftGain, graph.rightGain, graph.merger, output);
             } else {
-                connectNative(graph.gain, graph.limiter);
+                connectNative(graph.gain, output);
             }
-            connectNative(graph.limiter, graph.analyser);
-            connectNative(graph.analyser, graph.context.destination);
+            if (useLimiter) {
+                configureLimiter(graph);
+                connectNative(graph.limiter, graph.analyser);
+                connectNative(graph.analyser, graph.context.destination);
+            }
         } catch (e) {
             log(`graph wire failed: ${e && e.message}`);
         }
@@ -1543,14 +1556,18 @@
         disconnectMediaRouteOutput(route);
 
         try {
-            configureLimiter(route);
+            const useLimiter = safetyLimiterRequired();
+            const output = useLimiter ? route.limiter : route.context.destination;
             if (state.extensionActive && state.enabled && state.mono) {
-                connectMonoChain(route.gain, route.splitter, route.leftGain, route.rightGain, route.merger, route.limiter);
+                connectMonoChain(route.gain, route.splitter, route.leftGain, route.rightGain, route.merger, output);
             } else {
-                connectNative(route.gain, route.limiter);
+                connectNative(route.gain, output);
             }
-            connectNative(route.limiter, route.analyser);
-            connectNative(route.analyser, route.context.destination);
+            if (useLimiter) {
+                configureLimiter(route);
+                connectNative(route.limiter, route.analyser);
+                connectNative(route.analyser, route.context.destination);
+            }
             route.outputConnected = true;
         } catch (e) {
             log(`media graph wire failed: ${e && e.message}`);

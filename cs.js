@@ -62,6 +62,7 @@ const tc = {
     normalizerEnabled: false,
     normalizerPeakDb: -Infinity,
     normalizerGainDb: 0,
+    isolatedOutputUsesLimiter: null,
     audioCtx: undefined,
     gainNode: undefined,
     limiterNode: undefined,
@@ -932,6 +933,33 @@ function sendPageAudioHeartbeat() {
     }
 }
 
+function routeIsolatedOutput() {
+    const { audioCtx, gainNode, limiterNode, analyserNode } = tc.vars;
+    if (!audioCtx || !gainNode || !limiterNode || !analyserNode) return;
+    const useLimiter = !tc.vars.isBlocked &&
+        (tc.vars.normalizerEnabled || (!tc.vars.muted && tc.vars.dB > 0));
+    if (tc.vars.isolatedOutputUsesLimiter === useLimiter) return;
+
+    // Disconnect only outgoing edges: media element source -> gain remains
+    // intact, even while a player is actively playing.
+    for (const node of [gainNode, limiterNode, analyserNode]) {
+        try { node.disconnect(); } catch (e) {}
+    }
+    try {
+        if (useLimiter) {
+            configureIsolatedLimiter();
+            gainNode.connect(limiterNode);
+            limiterNode.connect(analyserNode);
+            analyserNode.connect(audioCtx.destination);
+        } else {
+            gainNode.connect(audioCtx.destination);
+        }
+        tc.vars.isolatedOutputUsesLimiter = useLimiter;
+    } catch (e) {
+        if (tc.settings.debugMode) log(`isolated output route failed: ${e && e.message}`, 3);
+    }
+}
+
 function applyState() {
     enforceBoostLimit();
     syncPageAudioHook();
@@ -945,6 +973,7 @@ function applyState() {
     const targetGain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB) * autoGain) : 1.0;
 
     if (gainNode && audioCtx) {
+        routeIsolatedOutput();
         const now = audioCtx.currentTime;
 
         if (audioCtx.state === 'running') {
@@ -1108,10 +1137,9 @@ function createGainNode() {
         tc.vars.analyserNode = tc.vars.audioCtx.createAnalyser();
         tc.vars.analyserNode.fftSize = 1024;
         tc.vars.analyserNode.smoothingTimeConstant = 0.35;
-        configureIsolatedLimiter();
-        tc.vars.gainNode.connect(tc.vars.limiterNode);
-        tc.vars.limiterNode.connect(tc.vars.analyserNode);
-        tc.vars.analyserNode.connect(tc.vars.audioCtx.destination);
+        tc.vars.isolatedOutputUsesLimiter = null;
+        // applyState() wires the correct output path; do not pre-connect a
+        // compressor when normalization and positive boost are both off.
         ensureIsolatedNormalizerTimer();
     }
     applyState();

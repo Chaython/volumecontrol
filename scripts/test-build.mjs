@@ -728,6 +728,71 @@ test('normalizer preference saves even without an active audio route or tab rece
     assert.equal(refreshed, 1);
 });
 
+test('normalization off bypasses compressor but positive boosts retain limiting', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = page.indexOf('    function safetyLimiterRequired() {');
+    const end = page.indexOf('    // Connect a mono down-mix chain:', start);
+    assert.ok(start >= 0 && end > start);
+    const state = { extensionActive: true, enabled: true, normalizerEnabled: false, muted: false, dB: 0, mono: false };
+    const routing = runInNewContext(page.slice(start, end) +
+        '\n({ safetyLimiterRequired, currentRoutingMode })', { state });
+    assert.equal(routing.safetyLimiterRequired(), false);
+    assert.equal(routing.currentRoutingMode(), 'stereo-direct');
+
+    state.dB = 6;
+    assert.equal(routing.safetyLimiterRequired(), true);
+    assert.equal(routing.currentRoutingMode(), 'stereo-limited');
+    state.dB = 0;
+    state.normalizerEnabled = true;
+    assert.equal(routing.currentRoutingMode(), 'stereo-limited');
+    state.normalizerEnabled = false;
+    state.mono = true;
+    assert.equal(routing.currentRoutingMode(), 'mono-direct');
+    state.enabled = false;
+    assert.equal(routing.safetyLimiterRequired(), false);
+    assert.equal(routing.currentRoutingMode(), 'bypass');
+    assert.match(page, /const output = useLimiter \? graph\.limiter : graph\.context\.destination/);
+    assert.match(page, /const output = useLimiter \? route\.limiter : route\.context\.destination/);
+
+    const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
+    const fStart = isolated.indexOf('function routeIsolatedOutput() {');
+    const fEnd = isolated.indexOf('function applyState() {', fStart);
+    assert.ok(fStart >= 0 && fEnd > fStart);
+    const node = () => ({
+        edges: [],
+        connect(destination) { this.edges.push(destination); },
+        disconnect() { this.edges = []; }
+    });
+    const gainNode = node(), limiterNode = node(), analyserNode = node(), destination = {};
+    const tc = {
+        vars: { audioCtx: { destination }, gainNode, limiterNode, analyserNode,
+            normalizerEnabled: false, muted: false, dB: 0, isBlocked: false, isolatedOutputUsesLimiter: null },
+        settings: { debugMode: false }
+    };
+    const wire = runInNewContext('(' + isolated.slice(fStart, fEnd).trim() + ')', {
+        tc, configureIsolatedLimiter: () => {}, log: () => {}
+    });
+    wire();
+    assert.equal(gainNode.edges[0], destination);
+    assert.equal(limiterNode.edges.length, 0);
+
+    tc.vars.normalizerEnabled = true;
+    wire();
+    assert.equal(gainNode.edges[0], limiterNode);
+    assert.equal(limiterNode.edges[0], analyserNode);
+    assert.equal(analyserNode.edges[0], destination);
+
+    tc.vars.normalizerEnabled = false;
+    tc.vars.dB = 3;
+    wire();
+    assert.equal(gainNode.edges[0], limiterNode);
+
+    tc.vars.dB = 0;
+    wire();
+    assert.equal(gainNode.edges[0], destination);
+    assert.equal(limiterNode.edges.length, 0);
+});
+
 test('normalizer resets accumulated automatic gain on toggles and media changes', () => {
     const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
     const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
