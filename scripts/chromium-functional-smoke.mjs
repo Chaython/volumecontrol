@@ -193,7 +193,99 @@ try {
     check('Desktop popup width 420px', Math.abs(view.width-420)<1,view);
     check('Popup normalizer controls folded by default', view.folded === true);
     check('Popup volume range -32 to +32 dB', view.min === '-32' && view.max === '32');
-    console.log('CHROMIUM FUNCTIONAL PASS (' + results.length + ' checks): ' + JSON.stringify(results));
+
+    const selectedTab = await waitFor(async () => await cdp.eval(popupSession,
+        '(typeof cached !== "undefined" && cached.activeTab && cached.activeTab.id) || null'));
+    check('Popup binds the actual web tab', selectedTab === tabId, { selectedTab, tabId });
+
+    await cdp.eval(popupSession,
+        '(()=>{const e=document.getElementById("volume-slider");e.value="7";' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => (await state())?.volume === 7);
+    check('Popup slider updates active-tab gain', true);
+    await cdp.eval(popupSession,
+        '(()=>{const e=document.getElementById("volume-text");e.value="-15";' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => (await state())?.volume === -15);
+    check('Popup typed volume commits to active tab', true);
+    await cdp.eval(popupSession,
+        'document.getElementById("mute-btn").click();true');
+    await waitFor(async () => (await state())?.muted === true);
+    check('Popup mute button works', true);
+    await cdp.eval(popupSession, 'document.getElementById("mute-btn").click();true');
+    await waitFor(async () => (await state())?.muted === false);
+    check('Popup unmutes', true);
+    await cdp.eval(popupSession,
+        '(()=>{const e=document.getElementById("mono-checkbox");e.checked=true;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => (await state())?.mono === true);
+    check('Popup mono switch works', true);
+    await cdp.eval(popupSession,
+        '(()=>{const e=document.getElementById("mono-checkbox");e.checked=false;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => (await state())?.mono === false);
+    check('Popup mono off works', true);
+
+    await cdp.eval(popupSession,
+        '(()=>{const e=document.getElementById("normalizer-checkbox");e.checked=true;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => (await state())?.normalizerEnabled === true);
+    check('Popup Normalize switch enables processing', true);
+    const savedNorm = await waitFor(async () => {
+        const obj = await cdp.eval(settingsSession, 'vcTest.get("siteNormalizerSettings")');
+        const values = Object.values(obj?.siteNormalizerSettings || {});
+        return values.some(x => x?.enabled === true) ? obj : null;
+    });
+    check('Normalize setting persists separately per site', Boolean(savedNorm.siteNormalizerSettings));
+    check('Popup meter details expand on enable', await cdp.eval(popupSession,
+        '!document.getElementById("normalizer-details").hidden'));
+    await cdp.eval(popupSession,
+        '(()=>{const e=document.getElementById("normalizer-checkbox");e.checked=false;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => (await state())?.normalizerEnabled === false);
+    check('Popup Normalize off and folded', await cdp.eval(popupSession,
+        'document.getElementById("normalizer-details").hidden'));
+
+    await cdp.eval(popupSession,
+        '(()=>{const e=document.getElementById("remember-checkbox");e.checked=true;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    const remembered = await waitFor(async () => {
+        const obj = await cdp.eval(settingsSession,'vcTest.get("siteSettings")');
+        return Object.keys(obj?.siteSettings || {}).length ? obj.siteSettings : null;
+    });
+    check('Popup Remember persists volume/mono/mute independently', Object.keys(remembered).length > 0);
+    await cdp.eval(popupSession,
+        '(()=>{const e=document.getElementById("remember-checkbox");e.checked=false;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => {
+        const obj = await cdp.eval(settingsSession, 'vcTest.get("siteSettings")');
+        return !Object.keys(obj?.siteSettings || {}).length;
+    });
+    check('Popup Remember can be disabled and removes its profile', true);
+
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("normalizerTargetDb");e.value="-19";' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => {
+        const data = await cdp.eval(settingsSession,'vcTest.get("normalizerConfig")');
+        return data?.normalizerConfig?.targetDb === -19;
+    });
+    check('Options loudness target persists', true);
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("normalizerTargetDb");e.value="-16";' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("newFqdn");e.value="browser-smoke.invalid";' +
+        'document.getElementById("addFqdn").click();return true})()');
+    await waitFor(async () => {
+        const data = await cdp.eval(settingsSession,'vcTest.get("fqdns")');
+        return Array.isArray(data?.fqdns) && data.fqdns.includes('browser-smoke.invalid');
+    });
+    check('Options blocklist add persists to storage', true);
+    check('Options blocklist renders added entry', await cdp.eval(settingsSession,
+        'document.getElementById("fqdnList").textContent.includes("browser-smoke.invalid")'));
+        console.log('CHROMIUM FUNCTIONAL PASS (' + results.length + ' checks): ' + JSON.stringify(results));
 } catch (e) {
     console.error('CHROMIUM FUNCTIONAL FAILURE: ' + (e?.stack || e));
     if (stderr) console.error('Chromium stderr: ' + stderr.slice(-3000));
