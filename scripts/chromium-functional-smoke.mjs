@@ -285,7 +285,101 @@ try {
     check('Options blocklist add persists to storage', true);
     check('Options blocklist renders added entry', await cdp.eval(settingsSession,
         'document.getElementById("fqdnList").textContent.includes("browser-smoke.invalid")'));
-        console.log('CHROMIUM FUNCTIONAL PASS (' + results.length + ' checks): ' + JSON.stringify(results));
+    
+    // Multiple tabs with Remember disabled must retain independent state.
+    const { targetId: secondTarget } = await cdp.send('Target.createTarget', {
+        url: origin + '?second=1', background: true
+    });
+    const secondSession = await cdp.attach(secondTarget);
+    await waitFor(async () => await cdp.eval(secondSession,
+        'document.body.classList.contains("vc-init") && AudioNode.prototype.connect.name === "patchedConnect"'));
+    const secondId = await waitFor(async () => await cdp.eval(settingsSession,
+        '(async()=>{const tabs=await vcTest.tabs();const t=tabs.find(x=>x.url&&x.url.includes("?second=1"));return t&&t.id;})()'));
+    const secondState = await cdp.eval(settingsSession,
+        'vcTest.send(' + secondId + ',{"command":"getAudioControlState"})');
+    check('Fresh second tab starts at 0 dB without Remember', secondState?.response?.volume === 0, secondState);
+    check('First tab retains independent volume', (await state())?.volume === -15);
+
+    // Exercise access lists (including deletion and whitelist mode) in the
+    // real Options page instead of just checking that UI elements exist.
+    await cdp.eval(settingsSession, 'document.querySelector("#fqdnList .remove-btn").click();true');
+    await waitFor(async () => {
+        const data = await cdp.eval(settingsSession, 'vcTest.get("fqdns")');
+        return !data?.fqdns?.includes('browser-smoke.invalid');
+    });
+    check('Options blocklist removes entry', true);
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("whitelistMode");e.checked=true;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => {
+        const data = await cdp.eval(settingsSession, 'vcTest.get("whitelistMode")');
+        return data.whitelistMode === true;
+    });
+    check('Options whitelist mode enables', await cdp.eval(settingsSession,
+        'document.getElementById("listTitle").textContent === "Allowed Sites"'));
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("whitelistMode");e.checked=false;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => {
+        const data = await cdp.eval(settingsSession, 'vcTest.get("whitelistMode")');
+        return data.whitelistMode === false;
+    });
+    check('Options whitelist mode disables and restores blocklist UI', await cdp.eval(settingsSession,
+        'document.getElementById("listTitle").textContent === "Blocked Sites"'));
+
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("newRememberedSite");e.value="browser-smoke.invalid";' +
+        'document.getElementById("addRemembered").click();return true})()');
+    await waitFor(async () => {
+        const data = await cdp.eval(settingsSession, 'vcTest.get("siteSettings")');
+        return Boolean(data?.siteSettings?.["browser-smoke.invalid"]);
+    });
+    check('Options remembered profile creates successfully', true);
+    await waitFor(async () => await cdp.eval(settingsSession,
+        'Boolean(document.querySelector("#memoryList .remove-btn"))'));
+    await cdp.eval(settingsSession, 'document.querySelector("#memoryList .remove-btn").click();true');
+    await waitFor(async () => {
+        const data = await cdp.eval(settingsSession, 'vcTest.get("siteSettings")');
+        return !data?.siteSettings?.["browser-smoke.invalid"];
+    });
+    check('Options remembered profile removes successfully', true);
+
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("newDebugSite");e.value="browser-smoke.invalid";' +
+        'document.getElementById("addDebugSite").click();return true})()');
+    await waitFor(async () => {
+        const data = await cdp.eval(settingsSession,'vcTest.get("siteDebugSettings")');
+        return !!data?.siteDebugSettings?.["browser-smoke.invalid"];
+    });
+    check('Options per-site debug override can be created', true);
+    await waitFor(async () => await cdp.eval(settingsSession,
+        'Boolean(document.querySelector("#debugList .remove-btn"))'));
+    await cdp.eval(settingsSession, 'document.querySelector("#debugList .remove-btn").click();true');
+    await waitFor(async () => {
+        const data = await cdp.eval(settingsSession,'vcTest.get("siteDebugSettings")');
+        return !data?.siteDebugSettings?.["browser-smoke.invalid"];
+    });
+    check('Options per-site debug override can be removed', true);
+
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("debugMode");e.checked=true;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => (await cdp.eval(settingsSession,'vcTest.get("debugMode")')).debugMode === true);
+    check('Global debug mode saves', true);
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("debugMode");e.checked=false;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("debugRouteMode");e.value="native";' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => (await cdp.eval(settingsSession,'vcTest.get("debugRouteMode")')).debugRouteMode === 'native');
+    check('HTML-media native route override saves', true);
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("debugRouteMode");e.value="auto";' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => (await cdp.eval(settingsSession,'vcTest.get("debugRouteMode")')).debugRouteMode === 'auto');
+    check('HTML-media auto routing restores', true);
+    console.log('CHROMIUM FUNCTIONAL PASS (' + results.length + ' checks): ' + JSON.stringify(results));
 } catch (e) {
     console.error('CHROMIUM FUNCTIONAL FAILURE: ' + (e?.stack || e));
     if (stderr) console.error('Chromium stderr: ' + stderr.slice(-3000));
