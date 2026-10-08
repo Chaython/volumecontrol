@@ -827,6 +827,7 @@ test('isolated audio restores a gain-limited direct path after limiter route fai
     const tc = {
         vars: { audioCtx: { destination }, gainNode, limiterNode, analyserNode,
             isBlocked: false, normalizerEnabled: true, muted: false, dB: 20,
+            normalizerGainDb: 9, normalizerPeakDb: -5,
             isolatedOutputUsesLimiter: null },
         settings: { debugMode: false }
     };
@@ -835,6 +836,8 @@ test('isolated audio restores a gain-limited direct path after limiter route fai
     });
     wire();
     assert.equal(tc.vars.isolatedOutputUsesLimiter, false);
+    assert.equal(tc.vars.normalizerGainDb, 0, 'discard accumulated AGC on limiter failure');
+    assert.equal(tc.vars.normalizerPeakDb, -Infinity);
     assert.equal(gainNode.edges.length, 1);
     assert.equal(gainNode.edges[0], destination);
     assert.equal(limiterNode.edges.length, 0, 'partial edges must be removed');
@@ -854,6 +857,7 @@ test('isolated audio restores a gain-limited direct path after limiter route fai
     assert.match(source, /const unprotected = wantsLimiter && tc\.vars\.isolatedOutputUsesLimiter !== true/);
     assert.match(source, /manualGain \* \(unprotected \? 1 : autoGain\)/);
     assert.match(source, /const protectedOutput = tc\.vars\.isolatedOutputUsesLimiter === true/);
+    assert.match(source, /tc\.vars\.normalizerEnabled && !tc\.vars\.muted && !tc\.vars\.isBlocked &&\s*tc\.vars\.isolatedOutputUsesLimiter === true/);
     assert.match(source, /: Math\.min\(1, manualGain\)/);
 });
 

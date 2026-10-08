@@ -961,6 +961,8 @@ function routeIsolatedOutput() {
         // A partial rebuild must not leave captured media permanently silent.
         // Discard partial edges and attempt a direct, gain-limited fallback.
         tc.vars.isolatedOutputUsesLimiter = null;
+        tc.vars.normalizerGainDb = 0;
+        tc.vars.normalizerPeakDb = -Infinity;
         for (const node of [gainNode, limiterNode, analyserNode]) {
             try { node.disconnect(); } catch (_) {}
         }
@@ -1166,7 +1168,8 @@ function sampleIsolatedNormalizer() {
     const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
     let gainDb = Number(tc.vars.normalizerGainDb) || 0;
     const previousGainDb = gainDb;
-    if (tc.vars.normalizerEnabled && !tc.vars.muted && !tc.vars.isBlocked) {
+    if (tc.vars.normalizerEnabled && !tc.vars.muted && !tc.vars.isBlocked &&
+        tc.vars.isolatedOutputUsesLimiter === true) {
         gainDb = computeSafeNormalizerGainDb(gainDb, sourceRmsDb, sourcePeakDb, config);
     } else {
         gainDb = 0;
