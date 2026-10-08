@@ -417,6 +417,15 @@ test('MAIN-world graph failures restore clamped direct output, then retry limiti
     assert.equal(graph.limiter.edges[0], graph.analyser);
     assert.equal(graph.analyser.edges[0], destination);
     assert.ok(gainParam.value > 1, 'positive gain resumes only after protection is restored');
+
+    // A failed AudioParam clamp must NOT expose the boosted direct route.
+    graph.currentMode = null;
+    gainParam.value = 9;
+    gainParam.cancelScheduledValues = () => { throw new Error('AudioParam closed'); };
+    failLimiter = true;
+    fns.wireGraph(graph);
+    assert.equal(graph.limiterFallbackActive, true);
+    assert.equal(graph.gain.edges.length, 0, 'failed safety clamp must stay disconnected');
 });
 
 test('MAIN-world media element route failures cannot bypass limiter with boosted gain', () => {
@@ -458,6 +467,7 @@ test('MAIN-world media element route failures cannot bypass limiter with boosted
         clampUnprotectedOutput: r => {
             r.limiterFallbackActive = true; r.normalizerGainDb = 0; r.meterPeakDb = -Infinity;
             r.gain.gain.setValueAtTime(1);
+            return true;
         }
     });
     wire(route);

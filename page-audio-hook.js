@@ -625,8 +625,12 @@
             const safeGain = Math.max(0, Math.min(1, effectiveGain()));
             param.cancelScheduledValues(now);
             param.setValueAtTime(safeGain, now);
+            return true;
         } catch (e) {
             log(`safe output gain clamp failed: ${e && e.message}`);
+            // Do not connect an unprotected output if its AudioParam may
+            // still hold +20 dB (or a scheduled ramp back to that gain).
+            return false;
         }
     }
 
@@ -724,11 +728,12 @@
             safeDisconnect(graph.merger);
             safeDisconnect(graph.limiter);
             safeDisconnect(graph.analyser);
-            clampUnprotectedOutput(graph);
-            try {
-                connectNative(graph.gain, graph.context.destination);
-            } catch (fallbackError) {
-                log(`graph fallback failed: ${fallbackError && fallbackError.message}`);
+            if (clampUnprotectedOutput(graph)) {
+                try {
+                    connectNative(graph.gain, graph.context.destination);
+                } catch (fallbackError) {
+                    log(`graph fallback failed: ${fallbackError && fallbackError.message}`);
+                }
             }
             log(`graph wire failed: ${e && e.message}`);
         }
@@ -1633,12 +1638,13 @@
         } catch (e) {
             route.currentMode = null;
             disconnectMediaRouteOutput(route);
-            clampUnprotectedOutput(route);
-            try {
-                connectNative(route.gain, route.context.destination);
-                route.outputConnected = true;
-            } catch (fallbackError) {
-                log(`media route fallback failed: ${fallbackError && fallbackError.message}`);
+            if (clampUnprotectedOutput(route)) {
+                try {
+                    connectNative(route.gain, route.context.destination);
+                    route.outputConnected = true;
+                } catch (fallbackError) {
+                    log(`media route fallback failed: ${fallbackError && fallbackError.message}`);
+                }
             }
             log(`media graph wire failed: ${e && e.message}`);
         }
