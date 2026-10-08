@@ -1,9 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 
 const root = resolve(import.meta.dirname, '..');
 const extensionRoot = process.env.VC_EXTENSION_DIR ? resolve(process.env.VC_EXTENSION_DIR) : root;
@@ -51,6 +50,11 @@ try {
             res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
             res.end('ok');
             resolveResult({ pass, detail });
+            return;
+        }
+        if (url.pathname === '/') {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+            res.end(html);
             return;
         }
         res.writeHead(404);
@@ -134,15 +138,15 @@ window.__vcNativeVolume = Object.getOwnPropertyDescriptor(HTMLMediaElement.proto
 })();
 </script>`;
 
-    const page = join(work, 'smoke.html');
-    writeFileSync(page, html, 'utf8');
-
+    // Firefox treats file:// pages differently from regular sites (notably
+    // postMessage sender identity). Exercise the bridge on a real HTTP origin,
+    // just like the installed-extension smoke and ordinary web pages.
     let stderr = '';
     child = spawn(browser, [
         '-headless',
         '-no-remote',
         '-profile', profile,
-        pathToFileURL(page).href
+        `http://127.0.0.1:${port}/`
     ], {
         windowsHide: true,
         stdio: ['ignore', 'ignore', 'pipe']
