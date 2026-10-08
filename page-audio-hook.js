@@ -612,9 +612,28 @@
         }
     }
 
+    function clampUnprotectedOutput(processor) {
+        // The native MediaElementSource has already been captured and cannot
+        // be restored by reconnecting the HTML element. If a limited route
+        // fails, connect directly but never allow stale boost to reach it.
+        processor.limiterFallbackActive = true;
+        processor.normalizerGainDb = 0;
+        processor.meterPeakDb = -Infinity;
+        try {
+            const param = processor.gain.gain;
+            const now = processor.context.currentTime;
+            const safeGain = Math.max(0, Math.min(1, effectiveGain()));
+            param.cancelScheduledValues(now);
+            param.setValueAtTime(safeGain, now);
+        } catch (e) {
+            log(`safe output gain clamp failed: ${e && e.message}`);
+        }
+    }
+
     function setGainValue(graph) {
         const autoGain = state.normalizerEnabled ? dbToGain(graph.normalizerGainDb || 0) : 1;
-        const targetGain = effectiveGain() * autoGain;
+        const targetGain = graph.limiterFallbackActive
+            ? Math.min(1, effectiveGain()) : effectiveGain() * autoGain;
         try {
             const now = graph.context.currentTime;
             if (graph.context.state === "running") {
@@ -662,14 +681,15 @@
     }
 
     function wireGraph(graph) {
-        setGainValue(graph);
-        // Configuration changes must take effect even when the topology is
-        // unchanged (e.g. positive manual boost, Normalize off).
+        // Configure first, but do not raise the gain until the destination is
+        // routed through the limiter. Reversed ordering can briefly expose
+        // an amplified, unprotected direct path on unmute/enable.
         configureLimiter(graph);
-
-        // Skip the disconnect/reconnect cycle if the routing mode hasn't changed.
         const wantMode = currentRoutingMode();
-        if (graph.currentMode === wantMode) return;
+        if (graph.currentMode === wantMode && !graph.limiterFallbackActive) {
+            setGainValue(graph);
+            return;
+        }
 
         safeDisconnect(graph.gain);
         safeDisconnect(graph.splitter);
@@ -694,10 +714,25 @@
             }
             // A failed graph rebuild must be retryable on the next state sync.
             graph.currentMode = wantMode;
+            graph.limiterFallbackActive = false;
         } catch (e) {
             graph.currentMode = null;
+            safeDisconnect(graph.gain);
+            safeDisconnect(graph.splitter);
+            safeDisconnect(graph.leftGain);
+            safeDisconnect(graph.rightGain);
+            safeDisconnect(graph.merger);
+            safeDisconnect(graph.limiter);
+            safeDisconnect(graph.analyser);
+            clampUnprotectedOutput(graph);
+            try {
+                connectNative(graph.gain, graph.context.destination);
+            } catch (fallbackError) {
+                log(`graph fallback failed: ${fallbackError && fallbackError.message}`);
+            }
             log(`graph wire failed: ${e && e.message}`);
         }
+        setGainValue(graph);
     }
 
     function ensureGraph(context) {
@@ -728,6 +763,7 @@
             const graph = {
                 context, gain, inputAnalyser, splitter, leftGain, rightGain, merger, limiter, analyser,
                 currentMode: null,
+                limiterFallbackActive: false,
                 normalizerGainDb: 0,
                 meterPeakDb: -Infinity,
                 meterBuffer: new Float32Array(analyser.fftSize),
@@ -1543,11 +1579,10 @@
         }
     }
 
-    function wireMediaRoute(route) {
-        // A ceiling change is independent of routing/mono/boost mode.
-        configureLimiter(route);
+    function setMediaGainValue(route) {
         const autoGain = state.normalizerEnabled ? dbToGain(route.normalizerGainDb || 0) : 1;
-        const targetGain = effectiveGain() * autoGain;
+        const targetGain = route.limiterFallbackActive
+            ? Math.min(1, effectiveGain()) : effectiveGain() * autoGain;
 
         try {
             const now = route.context.currentTime;
@@ -1562,14 +1597,20 @@
         } catch (e) {
             log(`media gain update failed: ${e && e.message}`);
         }
+    }
 
+    function wireMediaRoute(route) {
+        // A ceiling change is independent of routing/mono/boost mode.
+        configureLimiter(route);
         // Skip the disconnect/reconnect cycle if the routing mode hasn't changed
         // AND the output is still connected. On resume from pause, the output
         // was disconnected by disconnectMediaRouteOutput but currentMode was
         // not cleared, so we must fall through and reconnect.
         const wantMode = currentRoutingMode();
-        if (route.currentMode === wantMode && route.outputConnected) return;
-        route.currentMode = wantMode;
+        if (route.currentMode === wantMode && route.outputConnected && !route.limiterFallbackActive) {
+            setMediaGainValue(route);
+            return;
+        }
 
         disconnectMediaRouteOutput(route);
 
@@ -1587,9 +1628,21 @@
                 connectNative(route.analyser, route.context.destination);
             }
             route.outputConnected = true;
+            route.currentMode = wantMode;
+            route.limiterFallbackActive = false;
         } catch (e) {
+            route.currentMode = null;
+            disconnectMediaRouteOutput(route);
+            clampUnprotectedOutput(route);
+            try {
+                connectNative(route.gain, route.context.destination);
+                route.outputConnected = true;
+            } catch (fallbackError) {
+                log(`media route fallback failed: ${fallbackError && fallbackError.message}`);
+            }
             log(`media graph wire failed: ${e && e.message}`);
         }
+        setMediaGainValue(route);
     }
 
     function ensureMediaRoute(element) {
@@ -1663,7 +1716,8 @@
                 muteNative: Boolean(routeSource.muteNative),
                 stream: routeSource.stream || null,
                 outputConnected: false,
-                currentMode: null
+                currentMode: null,
+                limiterFallbackActive: false
             };
             mediaRoutes.set(element, route);
             // The caller restores base/native volume before exposing the route,
@@ -2671,7 +2725,8 @@
         const config = normalizeNormalizerConfig(state.normalizerConfig);
         let gainDb = Number(processor.normalizerGainDb) || 0;
         const previousGainDb = gainDb;
-        if (state.normalizerEnabled && state.extensionActive && state.enabled && !state.muted) {
+        if (state.normalizerEnabled && state.extensionActive && state.enabled && !state.muted &&
+            !processor.limiterFallbackActive) {
             gainDb = computeSafeNormalizerGainDb(gainDb, sourceRmsDb, sourcePeakDb, config);
         } else {
             gainDb = 0;
@@ -2683,7 +2738,9 @@
 
         try {
             const now = processor.context.currentTime;
-            const target = effectiveGain() * (state.normalizerEnabled ? dbToGain(gainDb) : 1);
+            const target = processor.limiterFallbackActive
+                ? Math.min(1, effectiveGain())
+                : effectiveGain() * (state.normalizerEnabled ? dbToGain(gainDb) : 1);
             processor.gain.gain.cancelScheduledValues(now);
             processor.gain.gain.setTargetAtTime(target, now, gainDb < previousGainDb ? 0.008 : 0.035);
         } catch (e) {}

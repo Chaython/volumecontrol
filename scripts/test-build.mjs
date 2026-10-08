@@ -363,6 +363,122 @@ test('automatic normalization gains are bounded by source peaks and silence gate
     }
 });
 
+
+test('MAIN-world graph failures restore clamped direct output, then retry limiting', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function clampUnprotectedOutput(processor) {');
+    const end = source.indexOf('    function ensureGraph(context) {', start);
+    assert.ok(start >= 0 && end > start);
+    let failLimiter = true;
+    const names = ['gain', 'splitter', 'leftGain', 'rightGain', 'merger', 'limiter', 'analyser'];
+    const graph = {};
+    for (const name of names) graph[name] = { name, edges: [] };
+    const destination = { name: 'destination' };
+    const gainParam = {
+        value: 10, history: [], cancelScheduledValues() {},
+        setValueAtTime(value) { this.value = value; this.history.push(['set', value]); },
+        linearRampToValueAtTime(value) { this.value = value; this.history.push(['ramp', value]); }
+    };
+    graph.gain.gain = gainParam;
+    graph.context = { state: 'running', currentTime: 2, destination };
+    graph.currentMode = null;
+    graph.normalizerGainDb = 12;
+    graph.limiterFallbackActive = false;
+    let safeOnDirectConnection = false;
+    const connectNative = (from, to) => {
+        if (from === graph.limiter && to === graph.analyser && failLimiter) {
+            throw new Error('limiter output rejected');
+        }
+        if (from === graph.gain && to === destination) {
+            safeOnDirectConnection = gainParam.value <= 1;
+        }
+        from.edges.push(to);
+    };
+    const state = { extensionActive: true, enabled: true, muted: false, mono: false,
+        dB: 20, normalizerEnabled: true };
+    const fns = runInNewContext('(() => {\n' + source.slice(start, end) + '\nreturn { wireGraph };})()', {
+        state, effectiveGain: () => 10, dbToGain: db => 10 ** (db / 20),
+        safeDisconnect: node => { node.edges = []; }, connectNative,
+        configureLimiter: () => {}, log: () => {}
+    });
+    fns.wireGraph(graph);
+    assert.equal(safeOnDirectConnection, true, 'direct fallback must clamp before it becomes audible');
+    assert.equal(graph.limiterFallbackActive, true);
+    assert.equal(graph.currentMode, null, 'a transient graph error stays retryable');
+    assert.equal(graph.normalizerGainDb, 0, 'discard stale boost on route failure');
+    assert.equal(graph.gain.edges[0], destination);
+    assert.equal(gainParam.value, 1);
+
+    failLimiter = false;
+    fns.wireGraph(graph);
+    assert.equal(graph.limiterFallbackActive, false);
+    assert.equal(graph.gain.edges.length, 1);
+    assert.equal(graph.gain.edges[0], graph.limiter);
+    assert.equal(graph.limiter.edges[0], graph.analyser);
+    assert.equal(graph.analyser.edges[0], destination);
+    assert.ok(gainParam.value > 1, 'positive gain resumes only after protection is restored');
+});
+
+test('MAIN-world media element route failures cannot bypass limiter with boosted gain', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function setMediaGainValue(route) {');
+    const end = source.indexOf('    function ensureMediaRoute(element) {', start);
+    assert.ok(start >= 0 && end > start);
+    const route = {};
+    for (const name of ['gain', 'splitter', 'leftGain', 'rightGain', 'merger', 'limiter', 'analyser']) {
+        route[name] = { name, edges: [] };
+    }
+    const destination = {};
+    route.context = { state: 'running', currentTime: 2, destination };
+    route.currentMode = null;
+    route.limiterFallbackActive = false;
+    route.outputConnected = false;
+    route.normalizerGainDb = 8;
+    const gain = { value: 12, cancelScheduledValues() {},
+        setValueAtTime(v) { this.value = v; },
+        linearRampToValueAtTime(v) { this.value = v; }
+    };
+    route.gain.gain = gain;
+    let fail = true;
+    let lastSafeDirect = null;
+    const connectNative = (from, to) => {
+        if (from === route.limiter && to === route.analyser && fail) throw new Error('failure');
+        if (from === route.gain && to === destination) lastSafeDirect = gain.value <= 1;
+        from.edges.push(to);
+    };
+    const wire = runInNewContext('(() => {\n' + source.slice(start, end) + '\nreturn wireMediaRoute;})()', {
+        state: { extensionActive: true, enabled: true, mono: false, normalizerEnabled: true, muted: false, dB: 20 },
+        effectiveGain: () => 10, dbToGain: d => 10 ** (d / 20), connectNative,
+        configureLimiter: () => {}, log: () => {}, safetyLimiterRequired: () => true,
+        currentRoutingMode: () => 'stereo-limited',
+        disconnectMediaRouteOutput: r => {
+            for (const name of ['gain', 'splitter', 'leftGain', 'rightGain', 'merger', 'limiter', 'analyser']) r[name].edges = [];
+            r.outputConnected = false;
+        },
+        clampUnprotectedOutput: r => {
+            r.limiterFallbackActive = true; r.normalizerGainDb = 0; r.meterPeakDb = -Infinity;
+            r.gain.gain.setValueAtTime(1);
+        }
+    });
+    wire(route);
+    assert.equal(lastSafeDirect, true);
+    assert.equal(route.limiterFallbackActive, true);
+    assert.equal(route.currentMode, null);
+    assert.equal(route.gain.edges[0], destination);
+    assert.equal(gain.value, 1);
+    fail = false;
+    wire(route);
+    assert.equal(route.limiterFallbackActive, false);
+    assert.equal(route.currentMode, 'stereo-limited');
+    assert.equal(route.gain.edges.length, 1);
+    assert.equal(route.gain.edges[0], route.limiter);
+    assert.equal(route.limiter.edges[0], route.analyser);
+    assert.equal(route.analyser.edges[0], destination);
+    assert.ok(gain.value > 1);
+    assert.match(source, /!processor\.limiterFallbackActive/);
+    assert.match(source, /processor\.limiterFallbackActive\s*\?\s*Math\.min\(1, effectiveGain\(\)\)/);
+});
+
 test('normalizer bridge, limiter, persistence, and meter stay wired', () => {
     const sharedSource = readFileSync(join(root, 'shared.js'), 'utf8');
     const contentSource = readFileSync(join(root, 'cs.js'), 'utf8');
@@ -948,8 +1064,9 @@ test('graph reconnect failure remains retryable after the first failed connect',
     const end = source.indexOf('    function ensureGraph(context) {', start);
     assert.ok(start >= 0 && end > start);
     const body = source.slice(start, end);
-    assert.match(body, /graph\.currentMode = wantMode;\s*\} catch/);
+    assert.match(body, /graph\.currentMode = wantMode;\s*graph\.limiterFallbackActive = false;\s*\} catch/);
     assert.match(body, /catch \(e\) \{\s*graph\.currentMode = null;/);
+    assert.match(body, /clampUnprotectedOutput\(graph\)/);
     assert.doesNotMatch(body, /if \(graph\.currentMode === wantMode\) return;\s*graph\.currentMode = wantMode/);
 });
 
@@ -992,8 +1109,9 @@ test('cleared or absent normalizer config numbers restore defaults, not louder t
 test('limiter ceiling updates without reconnecting an unchanged audio route', () => {
     const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
-    assert.match(page, /function wireGraph\(graph\) \{\s*setGainValue\(graph\);\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*configureLimiter\(graph\);/);
-    assert.match(page, /function wireMediaRoute\(route\) \{[\s\S]*?configureLimiter\(route\);[\s\S]*?if \(route\.currentMode === wantMode && route\.outputConnected\) return;/);
+    assert.match(page, /function wireGraph\(graph\) \{[\s\S]*?configureLimiter\(graph\);/);
+    assert.match(page, /graph\.currentMode === wantMode[\s\S]*?setGainValue\(graph\)/);
+    assert.match(page, /function wireMediaRoute\(route\) \{[\s\S]*?configureLimiter\(route\);[\s\S]*?route\.currentMode === wantMode && route\.outputConnected/);
     assert.match(isolated, /if \(tc\.vars\.isolatedOutputUsesLimiter\) configureIsolatedLimiter\(\);\s*routeIsolatedOutput\(\);/);
 });
 
