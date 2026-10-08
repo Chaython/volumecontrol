@@ -358,7 +358,7 @@ test('automatic normalization gains are bounded by source peaks and silence gate
         let highGain = 0;
         for (let n = 0; n < 100; n++) highGain = update(highGain, -50, -45, highCfg);
         assert.ok(highGain <= 24, 'even user-selected high boost remains bounded');
-        assert.match(src, /inputAnalyser(?:Node)?\.fftSize = 4096/);
+        assert.match(src, /inputAnalyser(?:Node)?\.fftSize = 8192/);
         assert.match(src, /0\.008 : 0\.035/);
     }
 });
@@ -1379,6 +1379,79 @@ test('normalization off bypasses compressor but positive boosts retain limiting'
     assert.equal(limiterNode.edges.length, 0);
 });
 
+
+test('Howler cleanup never double-restores native audio and rolls back reconnect failures', () => {
+    const src = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = src.indexOf('    function unrouteHowlerGlobal() {');
+    const end = src.indexOf('    function routeKnownAudioLibraries() {', start);
+    assert.ok(start >= 0 && end > start);
+
+    const exercise = ({ nativeRestored = false, failNative = false, failDisconnect = false } = {}) => {
+        const masterGain = {};
+        const destination = {};
+        const graph = { inputAnalyser: {} };
+        const context = { destination };
+        const route = { graph, context };
+        const routes = new Map([[masterGain, route]]);
+        const entry = { routed: !nativeRestored };
+        const entries = new Set([entry]);
+        const calls = [];
+        const test = runInNewContext('(' + src.slice(start, end).trim() + ')', {
+            window: { Howler: { ctx: context, masterGain } },
+            pageAudioNeedsRoute: () => false,
+            howlerRoutes: routes,
+            findDestinationConnection: () => entry,
+            destinationConnections: entries,
+            disconnectNative: (_node, target) => {
+                calls.push(['disconnect', target]);
+                if (failDisconnect) throw new Error('disconnect rejected');
+            },
+            connectNative: (_node, target) => {
+                calls.push(['connect', target]);
+                if (failNative && target === destination) throw new Error('native reconnect rejected');
+            },
+            log: () => {}
+        });
+        test();
+        return { routes, entries, calls, entry, masterGain, graph, destination };
+    };
+
+    const already = exercise({ nativeRestored: true });
+    assert.equal(already.routes.size, 0);
+    assert.equal(already.entries.size, 0);
+    assert.equal(already.calls.length, 0, 'a previously restored path must not be connected twice');
+
+    const success = exercise();
+    assert.equal(success.routes.size, 0);
+    assert.equal(success.entries.size, 0);
+    assert.equal(success.calls.filter(x => x[0] === 'connect' && x[1] === success.destination).length, 1);
+    assert.deepEqual(success.calls.map(x => x[0]), ['disconnect', 'connect']);
+
+    const failedNative = exercise({ failNative: true });
+    assert.equal(failedNative.routes.size, 1, 'keep routing state for a later retry');
+    assert.equal(failedNative.entries.size, 1);
+    assert.equal(failedNative.entry.routed, true);
+    assert.equal(failedNative.calls[2][1], failedNative.graph.inputAnalyser,
+        'failed native reconnect must restore the graph path');
+
+    const failedDisconnect = exercise({ failDisconnect: true });
+    assert.equal(failedDisconnect.routes.size, 1);
+    assert.equal(failedDisconnect.calls.length, 1,
+        'do not connect a new destination after the original graph disconnect failed');
+});
+
+test('normalizer source peak detector windows overlap 100ms updates in both worlds', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
+    const docs = readFileSync(join(root, 'README.md'), 'utf8');
+    const inputFft = 8192;
+    const frameDurationMs = inputFft / 48000 * 1000;
+    assert.ok(frameDurationMs > 100,
+        'sample-peak buffer must span longer than successive 100ms AGC updates');
+    assert.equal((page.match(/inputAnalyser\.fftSize = 8192/g) || []).length, 2);
+    assert.match(isolated, /tc\.vars\.inputAnalyserNode\.fftSize = 8192/);
+    assert.match(docs, /8,192 samples/);
+});
 test('normalizer resets accumulated automatic gain on toggles and media changes', () => {
     const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
     const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');

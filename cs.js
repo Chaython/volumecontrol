@@ -1242,9 +1242,9 @@ function createGainNode() {
         tc.vars.gainNode = tc.vars.audioCtx.createGain();
         tc.vars.gainNode.channelInterpretation = "speakers";
         tc.vars.inputAnalyserNode = tc.vars.audioCtx.createAnalyser();
-        // Cover most of each 100ms controller interval, rather than a
-        // single ~21ms frame that can miss loud attacks.
-        tc.vars.inputAnalyserNode.fftSize = 4096;
+        // 8192 input samples span ~171ms at 48kHz, overlapping successive
+        // 100ms checks to avoid peak detection gaps between timer ticks.
+        tc.vars.inputAnalyserNode.fftSize = 8192;
         tc.vars.inputAnalyserNode.smoothingTimeConstant = 0.35;
         tc.vars.inputAnalyserNode.connect(tc.vars.gainNode);
         tc.vars.limiterNode = tc.vars.audioCtx.createDynamicsCompressor();

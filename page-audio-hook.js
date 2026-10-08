@@ -781,9 +781,9 @@
             rightGain.gain.value = 0.5;
             analyser.fftSize = 1024;
             analyser.smoothingTimeConstant = 0.35;
-            // Roughly 85–93ms of source audio at common 48/44.1 kHz rates;
-            // reduce missed transients between 100ms AGC updates.
-            inputAnalyser.fftSize = 4096;
+            // 8192 frames span ~171ms at 48kHz, overlapping adjacent
+            // 100ms AGC samples rather than leaving ~15ms peak blind spots.
+            inputAnalyser.fftSize = 8192;
             inputAnalyser.smoothingTimeConstant = 0.35;
 
             const graph = {
@@ -1575,23 +1575,45 @@
         const route = howlerRoutes.get(masterGain);
         if (!route) return;
 
+        const entry = findDestinationConnection(masterGain, howler.ctx.destination, undefined, undefined);
+        // unrouteDestinationConnections runs before this function and already
+        // restored masterGain -> destination when its tracked entry is no
+        // longer marked routed. Do not connect that native path a second time.
+        if (entry && !entry.routed) {
+            howlerRoutes.delete(masterGain);
+            destinationConnections.delete(entry);
+            return;
+        }
+
         const graph = route.graph;
-        if (graph) {
-            try {
-                disconnectNative(masterGain, graph.inputAnalyser);
-            } catch (e) {
-                log(`Howler unroute disconnect failed: ${e && e.message}`);
-            }
+        if (!graph) {
+            log("Howler master unroute deferred: missing routed graph");
+            return;
+        }
+
+        try {
+            disconnectNative(masterGain, graph.inputAnalyser);
+        } catch (e) {
+            log(`Howler unroute disconnect failed: ${e && e.message}`);
+            return;
         }
 
         try {
             connectNative(masterGain, howler.ctx.destination);
             howlerRoutes.delete(masterGain);
-            const entry = findDestinationConnection(masterGain, howler.ctx.destination, undefined, undefined);
             if (entry) destinationConnections.delete(entry);
             log("Howler master gain unrouted (restored native path)");
         } catch (e) {
             log(`Howler unroute reconnect failed: ${e && e.message}`);
+            // Preserve the original audio route when reconnecting native fails.
+            // Otherwise the Howler master stays detached and the page goes
+            // silent until an unrelated playback event repairs the graph.
+            try {
+                connectNative(masterGain, graph.inputAnalyser);
+                if (entry) entry.routed = true;
+            } catch (rollbackError) {
+                log(`Howler unroute rollback failed: ${rollbackError && rollbackError.message}`);
+            }
         }
     }
 
@@ -1715,9 +1737,9 @@
             rightGain.gain.value = 0.5;
             analyser.fftSize = 1024;
             analyser.smoothingTimeConstant = 0.35;
-            // Roughly 85–93ms of source audio at common 48/44.1 kHz rates;
-            // reduce missed transients between 100ms AGC updates.
-            inputAnalyser.fftSize = 4096;
+            // 8192 frames span ~171ms at 48kHz, overlapping adjacent
+            // 100ms AGC samples rather than leaving ~15ms peak blind spots.
+            inputAnalyser.fftSize = 8192;
             inputAnalyser.smoothingTimeConstant = 0.35;
             // Set the gain value BEFORE connecting the source so there is no
             // brief moment of full-volume (gain=1.0) audio at route creation.

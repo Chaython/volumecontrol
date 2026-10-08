@@ -31,7 +31,7 @@ For supported WebAudio routes the MAIN-world page/MediaElement graph and ISOLATE
 
 ```text
 Audio source
-   |-- input analyser (source RMS and sample peaks, 4096 samples)
+   |-- input analyser (source RMS and sample peaks, 8192 samples)
    v
 Extension gain (manual slider × automatic gain, independent controls)
    v
@@ -43,7 +43,7 @@ Output analyser (post-compressor sampled peak) → speakers
 ```
 
 - **Input analysis / automatic gain:** measures RMS *before* the extension's gain. The controller targets **−16 dBFS RMS** by default and does not adjust against the slider-adjusted output. Reducing the slider by −20 dB therefore retains approximately −20 dB of *relative* attenuation at the same source loudness, except when compression/limiting makes the output response nonlinear.
-- **Safety guards:** source RMS at or below **−55 dBFS** is treated as near-silence; automatic gain is reset to unity so background noise does not attract a large boost. Invalid or missing detector readings also fail to unity. When above the gate, automatic gain is bounded by the **Maximum auto boost** (+12 dB default, configurable up to +24 dB), and by measured source sample-peak headroom (approximately **2 dB below the configured compressor threshold**, *before* the manual slider's gain). A detected loudness jump reduces auto gain quickly; increasing gain follows the configured response time (600 ms default). Input analyser windows contain 4,096 samples and are checked about every 100 ms.
+- **Safety guards:** source RMS at or below **−55 dBFS** is treated as near-silence; automatic gain is reset to unity so background noise does not attract a large boost. Invalid or missing detector readings also fail to unity. When above the gate, automatic gain is bounded by the **Maximum auto boost** (+12 dB default, configurable up to +24 dB), and by measured source sample-peak headroom (approximately **2 dB below the configured compressor threshold**, *before* the manual slider's gain). A detected loudness jump reduces auto gain quickly; increasing gain follows the configured response time (600 ms default). Input analyser windows contain 8,192 samples (roughly 171 ms at 48 kHz) and are checked about every 100 ms, reducing gaps in transient detection.
 - **Manual volume:** the −32…+32 dB slider applies a separate multiplier *after the source analysis*. Normalization does not increase gain just because you lower the slider. **Positive manual boost is not part of the source-only peak headroom budget** and can trigger substantial compressor reduction; +20 dB does not necessarily mean +20 dB more perceived loudness.
 - **Compressor and peaks:** the WebAudio `DynamicsCompressorNode` processes audio when Normalize is on or manual boost is positive. With Normalize off and no positive boost, the output bypasses it where possible. The default **Limiter ceiling** field sets a **−1 dBFS compressor threshold**, **not** a guaranteed hard ceiling: this is **not** a look-ahead brick-wall true-peak limiter. Sudden attacks, inter-sample peaks, compressor latency, and large manual boosts can still clip or sound distorted.
 - **Output meter and lifecycle:** the live meter displays sampled post-processor **sample peaks** in dBFS, **not** true peaks, LUFS or integrated perceived loudness. The Gain number describes *automatic* gain, not the manual slider value. Normalize enable/disable and reused-media source boundaries clear prior automatic gain; the 100 ms sampling timers stop when Normalize is off.
