@@ -708,6 +708,19 @@ test('unsaved tab controls survive SPA and playlist URL changes without storage 
     assert.match(source, /With Remember off, preserve unsaved volume/);
 });
 
+test('opening Remembered popup never replays potentially stale storage into a live tab', () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = source.indexOf('        const audioState = await refreshAudioControlState(tab);');
+    const end = source.indexOf('    } catch (e) {\n        handleError(e);', start);
+    assert.ok(start >= 0 && end > start);
+    const initialization = source.slice(start, end);
+    assert.match(initialization, /if \(saved\) \{/);
+    assert.match(initialization, /if \(!audioState\) \{/);
+    assert.doesNotMatch(initialization, /await setVolume\(saved\.volume/);
+    assert.doesNotMatch(initialization, /command: "setMono"/);
+    assert.doesNotMatch(initialization, /command: "setMute"/);
+});
+
 test('popup ignores stale async volume responses', () => {
     const source = readFileSync(join(root, 'popup.js'), 'utf8');
     assert.match(source, /let volumeRequestGeneration = 0/);

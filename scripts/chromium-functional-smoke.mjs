@@ -381,6 +381,44 @@ try {
         'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
     await waitFor(async () => (await cdp.eval(settingsSession,'vcTest.get("debugRouteMode")')).debugRouteMode === 'auto');
     check('HTML-media auto routing restores', true);
+    // Opening a popup must NEVER push an old Remember snapshot back into
+    // the tab. Other controls (hotkeys, cross-frame changes) can have updated
+    // live state since storage was last written.
+    const savedForPopup = await cdp.eval(settingsSession,
+        'new Promise((ok,fail)=>chrome.runtime.sendMessage({command:"mutateSiteSettings",' +
+        'mutation:{type:"mergeForUrl",url:' + JSON.stringify(origin) +
+        ',patch:{volume:5,mono:true,muted:true}}},' +
+        'x=>chrome.runtime.lastError?fail(Error(chrome.runtime.lastError.message)):ok(x)))');
+    check('Remember snapshot created for popup reopen test', savedForPopup?.ok === true, savedForPopup);
+    await waitFor(async () => {
+        const st = await state();
+        return st?.volume === 5 && st?.mono === true && st?.muted === true;
+    });
+    await send({ command: 'setVolume', dB: -11 });
+    await send({ command: 'setMono', mono: false });
+    await send({ command: 'setMute', muted: false });
+    await cdp.send('Target.activateTarget', { targetId: targets.tab.targetId });
+    const freshState = await state();
+    check('Live settings diverge safely from older Remember snapshot',
+        freshState?.volume === -11 && freshState?.mono === false && freshState?.muted === false, freshState);
+    const { targetId: reopenId } = await cdp.send('Target.createTarget', {
+        url: 'chrome-extension://' + id + '/popup.html', background: true
+    });
+    const reopenSession = await cdp.attach(reopenId);
+    await waitFor(async () => await cdp.eval(reopenSession,
+        'typeof cached !== "undefined" && cached.activeTab?.id === ' + tabId +
+        ' && document.getElementById("remember-checkbox")?.checked'));
+    await sleep(450);
+    const afterReopen = await state();
+    check('Reopening popup preserves newer in-tab volume, mono and mute',
+        afterReopen?.volume === -11 && afterReopen?.mono === false &&
+        afterReopen?.muted === false, afterReopen);
+    const persisted = await cdp.eval(settingsSession,'vcTest.get("siteSettings")');
+    check('Reopening popup does not silently overwrite Remembered storage',
+        Object.values(persisted.siteSettings || {}).some(x => x.volume === 5 && x.mono === true && x.muted === true),
+        persisted);
+    await cdp.send('Target.closeTarget', { targetId: reopenId });
+
     console.log('CHROMIUM FUNCTIONAL PASS (' + results.length + ' checks): ' + JSON.stringify(results));
 } catch (e) {
     console.error('CHROMIUM FUNCTIONAL FAILURE: ' + (e?.stack || e));

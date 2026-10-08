@@ -910,11 +910,16 @@ async function initializeControls(tab) {
         const saved = settingsKey ? data.siteSettings[settingsKey] : null;
         if (saved) {
             if (rememberCheckbox) rememberCheckbox.checked = true;
-            if (saved.mono !== undefined && monoCheckbox) monoCheckbox.checked = saved.mono;
-            if (saved.muted !== undefined) applyMuteButtonState(saved.muted);
-            if (saved.volume !== undefined) await setVolume(saved.volume, tab, { showFeedback: false });
-            tabsSendMessage(tab.id, { command: "setMono", mono: Boolean(saved.mono) }).catch(handleError);
-            tabsSendMessage(tab.id, { command: "setMute", muted: Boolean(saved.muted) }).catch(handleError);
+            // The content script already applies Remember on page initialization
+            // and on storage changes. Replaying storage here overwrites newer
+            // in-tab state (and may send a brief loud gain change) just because
+            // the popup was opened. Only use storage for DISPLAY if this tab
+            // has no reachable content-script state.
+            if (!audioState) {
+                if (saved.volume !== undefined) setDisplayedVolume(saved.volume);
+                if (saved.mono !== undefined && monoCheckbox) monoCheckbox.checked = Boolean(saved.mono);
+                if (saved.muted !== undefined) applyMuteButtonState(saved.muted);
+            }
         } else if (!audioState) {
             tabsSendMessage(tab.id, { command: "getVolume" }, TOP_FRAME_OPTIONS).then((response) => {
                 if (response && response.response !== undefined) setVolume(response.response, null);
