@@ -390,6 +390,102 @@ try {
         }
     }
 
+
+    // Genuine YouTube playlist test, alongside the single-video control.
+    // This playlist contains public Blender videos, including Big Buck Bunny.
+    // Verify actual playlist UI/navigation independently of video decoding:
+    // YouTube's headless anti-automation behavior may prevent playable data.
+    const playlistUrl = 'https://www.youtube.com/watch?v=YE7VzlLtp-4&list=PLav47HAVZMjnTFVZL-aImCQIC0uLZtNCz&index=14';
+    async function probeYouTubePlaylist(browserCdp, label, extensionEnabled) {
+        const result = { site: 'YouTube Blender open-movie playlist', label,
+            url: playlistUrl, withExtension: extensionEnabled, status: 'inconclusive' };
+        results.push(result);
+        let targetId;
+        try {
+            ({ targetId } = await browserCdp.send('Target.createTarget', {
+                url: playlistUrl, background: false
+            }));
+            await browserCdp.send('Target.activateTarget', { targetId });
+            const session = await browserCdp.attach(targetId);
+            await waitFor(async () => await browserCdp.evaluate(session,
+                'document.readyState === "complete" && location.host.endsWith("youtube.com")'), 24000);
+            await sleep(5000);
+            const read = '(()=>({' +
+                'url:location.href,title:document.title,visibility:document.visibilityState,' +
+                'playlistId:new URL(location.href).searchParams.get("list"),' +
+                'playlistPanel:!!document.querySelector("ytd-playlist-panel-renderer"),' +
+                'playlistEntries:document.querySelectorAll("ytd-playlist-panel-video-renderer").length,' +
+                'selectedVideo:document.querySelector("ytd-playlist-panel-video-renderer[selected]")?.getAttribute("video-id")||null,' +
+                'nextButton:!!document.querySelector(".ytp-next-button"),' +
+                'videoReady:document.querySelector("video")?.readyState||0,' +
+                'videoTime:document.querySelector("video")?.currentTime||0})())';
+            result.before = await browserCdp.evaluate(session, read);
+            let tabId, send;
+            if (extensionEnabled) {
+                tabId = await waitFor(async () => {
+                    const tabs = await cdp.evaluate(optionsSession, 'probe.tabs()');
+                    return tabs?.find(t => t.url?.startsWith('https://www.youtube.com/watch?v=YE7VzlLtp-4&list='))?.id || null;
+                }, 11000);
+                send = command => cdp.evaluate(optionsSession,
+                    'probe.send(' + tabId + ',' + JSON.stringify(command) + ')');
+                const initial = (await send({ command: 'getAudioControlState' }))?.response;
+                result.extensionInjected = await browserCdp.evaluate(session, injectionExpression);
+                result.previousVolume = initial?.volume;
+                await send({ command: 'setVolume', dB: -13 });
+                result.sliderSet = (await send({ command: 'getAudioControlState' }))?.response?.volume === -13;
+                await send({ command: 'setNormalizer', enabled: true });
+                result.normalizerSet = (await send({ command: 'getAudioControlState' }))?.response?.normalizerEnabled === true;
+            }
+            // Prefer the native Next command. It exercises YouTube's player
+            // playlist transition rather than opening an unrelated video URL.
+            result.nextAction = await browserCdp.evaluate(session,
+                '(()=>{const button=document.querySelector(".ytp-next-button");' +
+                'if(button&&!button.disabled){button.click();return "player-next-button";}' +
+                'const item=document.querySelector("ytd-playlist-panel-video-renderer:not([selected]) a#thumbnail");' +
+                'if(item){item.click();return "playlist-item";}return "not-available"})()');
+            try {
+                await waitFor(async () => {
+                    const data = await browserCdp.evaluate(session, read);
+                    return data?.url !== result.before.url ? data : null;
+                }, 10000);
+            } catch (_) {}
+            result.after = await browserCdp.evaluate(session, read);
+            result.navigationChanged = result.after.url !== result.before.url;
+            await sleep(1500);
+            if (extensionEnabled) {
+                try {
+                    const after = (await send({ command: 'getAudioControlState' }))?.response;
+                    result.volumeAfterNext = after?.volume;
+                    result.volumeKept = after?.volume === -13;
+                    result.normalizerAfterNext = after?.normalizerEnabled;
+                    result.meter = (await send({ command: 'getMeterState' }))?.response;
+                    await send({ command: 'setNormalizer', enabled: false });
+                    await send({ command: 'setVolume', dB: 0 });
+                } catch (e) {
+                    result.settingsAfterNextError = e.message;
+                }
+            }
+            result.status = result.navigationChanged ? 'playlist-navigation-only' : 'inconclusive';
+            result.playbackVerified = result.before.videoReady >= 2 &&
+                result.after.videoReady >= 2 && result.after.videoTime > result.before.videoTime + 0.2;
+            if (result.playbackVerified) {
+                result.status = 'passed';
+                if (extensionEnabled && result.navigationChanged && result.volumeKept === false) {
+                    result.status = 'failed';
+                    result.reason = 'Volume reset during a verified YouTube playlist transition';
+                }
+            }
+            console.log('YOUTUBE_PLAYLIST_RESULT=' + JSON.stringify(result));
+        } catch (error) {
+            result.reason = String(error?.message || error);
+            console.log('YOUTUBE_PLAYLIST_RESULT=' + JSON.stringify(result));
+        } finally {
+            if (targetId) try { await browserCdp.send('Target.closeTarget', { targetId }); } catch (_) {}
+        }
+    }
+    await probeYouTubePlaylist(cdp, 'extension', true);
+    if (baselineCDP) await probeYouTubePlaylist(baselineCDP, 'no-extension', false);
+
     console.log('REAL_MEDIA_HTTP_REQUESTS=' + JSON.stringify(mediaRequests));
 
     const played = results.filter(r => r.playback?.playing || r.playback?.progressed).length;
