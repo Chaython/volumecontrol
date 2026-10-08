@@ -681,6 +681,55 @@ test('Firefox audio hook smoke uses an HTTP origin for bridge messages', () => {
 });
 
 
+test('normalizer preference saves even without an active audio route or tab receiver', async () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = source.indexOf('async function toggleNormalizer(tab) {');
+    const end = source.indexOf('async function toggleMute(tab, muted) {', start);
+    assert.ok(start >= 0 && end > start, 'popup normalizer toggle must be present');
+    const method = source.slice(start, end).trim();
+
+    const checkbox = { checked: true, disabled: false };
+    const saved = [];
+    const errors = [];
+    let refreshed = 0;
+    const sandbox = {
+        cached: { normalizerCheckbox: checkbox, normalizerAvailable: false },
+        normalizerRequestGeneration: 0,
+        document: { querySelector: () => checkbox },
+        applyNormalizerState: ({ normalizerEnabled }) => { checkbox.checked = Boolean(normalizerEnabled); },
+        normalizeSiteSettingsEntryInput: () => 'example.com/video',
+        mutateSiteNormalizerSettings: async (mutation) => { saved.push(mutation); return { ok: true }; },
+        tabsSendMessage: async () => { throw new Error('No receiving content script'); },
+        TOP_FRAME_OPTIONS: { frameId: 0 },
+        handleError: (error) => { errors.push(error); },
+        refreshAudioControlState: async () => { refreshed++; }
+    };
+    const toggle = runInNewContext('(' + method + ')', sandbox);
+    await toggle({ id: 1, url: 'https://example.com/video' });
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].enabled, true);
+    assert.equal(checkbox.checked, true);
+    assert.equal(errors.length, 0);
+    assert.equal(refreshed, 1);
+
+    sandbox.mutateSiteNormalizerSettings = async () => ({ ok: false, reason: 'storage-error' });
+    checkbox.checked = false;
+    await toggle({ id: 1, url: 'https://example.com/video' });
+    assert.equal(checkbox.checked, true, 'failed storage write must restore previous visual switch state');
+    assert.equal(errors.length, 1);
+    assert.equal(refreshed, 1);
+});
+
+test('normalizer resets accumulated automatic gain on toggles and media changes', () => {
+    const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(isolated, /case "setNormalizer":[\s\S]*?tc\.vars\.normalizerGainDb = 0/);
+    assert.match(isolated, /resolvedNormalizerEnabled[\s\S]*?tc\.vars\.normalizerGainDb = 0/);
+    assert.match(page, /wasNormalizing !== nowNormalizing/);
+    assert.match(page, /route\.normalizerGainDb = 0/);
+    assert.match(page, /const sourceBoundary = \(\) => \{[\s\S]*?route\.normalizerGainDb = 0/);
+});
+
 test('normalizer defaults off and per-site preferences override the default', () => {
     const content = readFileSync(join(root, 'cs.js'), 'utf8');
     const options = readFileSync(join(root, 'options.js'), 'utf8');

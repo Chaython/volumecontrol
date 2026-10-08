@@ -139,6 +139,12 @@ if (browserAPI) {
                 sendResponse({});
                 break;
             case "setNormalizer":
+                if (tc.vars.normalizerEnabled !== Boolean(msg.enabled)) {
+                    // A previous song may have accumulated +12 dB auto gain.
+                    // Never replay it immediately when normalization resumes.
+                    tc.vars.normalizerGainDb = 0;
+                    tc.vars.normalizerPeakDb = -Infinity;
+                }
                 tc.vars.normalizerEnabled = Boolean(msg.enabled);
                 lastSyncedPageAudioState = null;
                 applyState();
@@ -1676,9 +1682,14 @@ async function start() {
         tc.vars.hasRememberedSettings = Boolean(siteSettingsKey);
         tc.settings.normalizerConfig = normalizeNormalizerConfig(data.normalizerConfig);
         const normalizerSettingsKey = getSiteSettingsKey(data.siteNormalizerSettings || {}, controlUrl);
-        tc.vars.normalizerEnabled = normalizerSettingsKey
+        const resolvedNormalizerEnabled = normalizerSettingsKey
             ? Boolean(data.siteNormalizerSettings[normalizerSettingsKey]?.enabled)
             : Boolean(data.normalizerDefaultEnabled);
+        if (tc.vars.normalizerEnabled !== resolvedNormalizerEnabled) {
+            tc.vars.normalizerGainDb = 0;
+            tc.vars.normalizerPeakDb = -Infinity;
+        }
+        tc.vars.normalizerEnabled = resolvedNormalizerEnabled;
 
         // Debug: show state used to decide blocking
         if (tc.settings.debugMode) {

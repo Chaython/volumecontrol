@@ -1870,6 +1870,11 @@
                 resetEmePending(element);
                 const route = mediaRoutes.get(element);
                 if (route) {
+                    // A reused HTMLMediaElement keeps its WebAudio route across
+                    // playlist transitions. Do not carry automatic boost from
+                    // a quiet track into the next (potentially loud) track.
+                    route.normalizerGainDb = 0;
+                    route.meterPeakDb = -Infinity;
                     setNativeVolume(element, route.muteNative ? 0 : getMediaState(element).baseVolume);
                     wireMediaRoute(route);
                 } else {
@@ -2419,6 +2424,7 @@
         }
 
         lastHeartbeat = Date.now();
+        const wasNormalizing = state.extensionActive && state.enabled && state.normalizerEnabled;
         state.extensionActive = true;
         state.enabled = data.enabled !== false;
         state.dB = normalizeDb(data.dB);
@@ -2426,6 +2432,25 @@
         state.muted = Boolean(data.muted);
         state.normalizerEnabled = Boolean(data.normalizerEnabled);
         state.normalizerConfig = normalizeNormalizerConfig(data.normalizerConfig);
+        const nowNormalizing = state.enabled && state.normalizerEnabled;
+        if (wasNormalizing !== nowNormalizing) {
+            // Re-enable at unity gain rather than replaying stale auto gain.
+            // Do this before reconnecting graphs/MediaElementSource nodes.
+            eachTrackedContext((context) => {
+                const graph = graphs.get(context);
+                if (graph) {
+                    graph.normalizerGainDb = 0;
+                    graph.meterPeakDb = -Infinity;
+                }
+            });
+            for (const element of mediaElements) {
+                const route = mediaRoutes.get(element);
+                if (route) {
+                    route.normalizerGainDb = 0;
+                    route.meterPeakDb = -Infinity;
+                }
+            }
+        }
         state.debugMode = Boolean(data.debugMode);
         state.forceDrmCapture = Boolean(data.forceDrmCapture);
         state.forceCorsCapture = Boolean(data.forceCorsCapture);

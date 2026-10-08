@@ -27,6 +27,7 @@ const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain
 const WHEEL_STEP_DB = 1;  // volume change per wheel notch (matches hotkey step)
 let siteSettingsSaveChain = Promise.resolve();
 let volumeRequestGeneration = 0;
+let normalizerRequestGeneration = 0;
 
 function mutateSiteSettings(mutation) {
   return runtimeSendMessage({ command: "mutateSiteSettings", mutation });
@@ -657,27 +658,39 @@ async function toggleMono(tab) {
 
 async function toggleNormalizer(tab) {
   const checkbox = cached.normalizerCheckbox || document.querySelector("#normalizer-checkbox");
-  if (!tab || !checkbox || checkbox.disabled || !cached.normalizerAvailable) return;
+  // Availability describes the *current audio route*, not whether a site
+  // preference can be saved. Let users switch normalization off or pre-enable
+  // it even when the current player is restricted or still loading.
+  if (!tab || !checkbox || checkbox.disabled) return;
 
   const enabled = Boolean(checkbox.checked);
+  const requestGeneration = ++normalizerRequestGeneration;
   applyNormalizerState({ normalizerEnabled: enabled });
   try {
-    await tabsSendMessage(tab.id, { command: "setNormalizer", enabled });
     const defaultKey = normalizeSiteSettingsEntryInput(tab.url);
-    if (defaultKey) {
-      const result = await mutateSiteNormalizerSettings({
-        type: "setForUrl",
-        url: tab.url,
-        defaultKey,
-        enabled
-      });
-      if (!result?.ok) throw new Error(result?.reason || "Could not save normalization setting");
-    }
+    if (!defaultKey) throw new Error("Cannot save a normalization preference for this URL");
+    // Save before messaging the tab: a still-loading or restricted page may
+    // not have a content-script receiver, but its saved preference is valid.
+    const result = await mutateSiteNormalizerSettings({
+      type: "setForUrl",
+      url: tab.url,
+      defaultKey,
+      enabled
+    });
+    if (!result?.ok) throw new Error(result?.reason || "Could not save normalization setting");
+    // Persistence broadcasts storage.onChanged to every frame. The targeted
+    // message merely accelerates the active top frame and is best-effort.
+    await tabsSendMessage(tab.id, { command: "setNormalizer", enabled }, TOP_FRAME_OPTIONS).catch(() => {});
   } catch (error) {
-    applyNormalizerState({ normalizerEnabled: !enabled });
-    handleError(error);
+    if (requestGeneration === normalizerRequestGeneration) {
+      applyNormalizerState({ normalizerEnabled: !enabled });
+      handleError(error);
+    }
+    return;
   }
-  await refreshAudioControlState(tab);
+  if (requestGeneration === normalizerRequestGeneration) {
+    await refreshAudioControlState(tab);
+  }
 }
 
 async function toggleMute(tab, muted) {
