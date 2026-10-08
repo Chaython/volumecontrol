@@ -127,7 +127,8 @@ for (const browser of ['chrome', 'firefox']) {
         assert.match(popupCss, /--vc-range-steps/);
         assert.match(optionsCss, /\.site-debug-group/);
         // Firefox Android's responsive layouts survive packaged minification.
-        assert.match(popupCss, /max-width:\s*480px/);
+        assert.match(popupCss, /@media\s*\(hover:\s*none\)\s*and\s*\(pointer:\s*coarse\)/);
+        assert.doesNotMatch(popupCss, /@media\s*\(max-width:\s*480px\)\s*,/);
         assert.match(popupCss, /touch-action:\s*pan-y/);
         assert.match(optionsCss, /max-width:\s*600px/);
         assert.match(optionsCss, /min-width:\s*0/);
@@ -866,6 +867,15 @@ test('normalizer defaults off and per-site preferences override the default', ()
     assert.match(content, /:\s*Boolean\(data\.normalizerDefaultEnabled\)/);
     assert.match(content, /changes\.normalizerDefaultEnabled/);
     assert.match(options, /storageSet\(\{ normalizerDefaultEnabled: enabled \}\)/);
+});
+
+test('desktop 420px action popup does not inherit Android-only fluid width', () => {
+    const popupCss = readFileSync(join(root, 'popup.css'), 'utf8');
+    assert.match(popupCss, /^html, body \{\s*width:\s*420px;/m);
+    const android = popupCss.match(/@media\s*\(hover:\s*none\)\s*and\s*\(pointer:\s*coarse\)\s*\{([\s\S]*?)\n\}/);
+    assert.ok(android, 'Android touch rules must be behind a touch-specific media query');
+    assert.match(android[1], /html, body\s*\{\s*width:\s*100%/);
+    assert.doesNotMatch(popupCss, /@media\s*\(max-width:\s*480px\)/);
 });
 
 test('normalizer off state folds popup meter and Options settings', () => {

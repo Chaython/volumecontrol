@@ -468,8 +468,10 @@ input:checked + .slider:before { transform: translateX(16px); }
     opacity: 0.6;
 }
 
-/* Firefox for Android renders action popups as narrow overlays. Keep all controls reachable without horizontal scrolling. */
-@media (max-width: 480px), (pointer: coarse) {
+/* Action popups are typically ~420px wide on DESKTOP too. A width-only
+   breakpoint incorrectly activates the Android rules there and collapses the
+   fixed desktop popup. Restrict responsive controls to touch-first devices. */
+@media (hover: none) and (pointer: coarse) {
   html, body { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
   #popup-content, #error-content { width: 100%; box-sizing: border-box; }
   .top-controls { padding: 8px 12px 0; margin-bottom: 12px; }
