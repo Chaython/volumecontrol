@@ -821,11 +821,16 @@ test('isolated audio restores a gain-limited direct path after limiter route fai
         disconnect() { this.edges = []; }
     });
     const gainNode = makeNode('gain');
+    gainNode.gain = {
+        value: 10,
+        cancelScheduledValues() {},
+        setValueAtTime(value) { this.value = value; }
+    };
     const limiterNode = makeNode('limiter');
     const analyserNode = makeNode('analyser');
     const destination = {};
     const tc = {
-        vars: { audioCtx: { destination }, gainNode, limiterNode, analyserNode,
+        vars: { audioCtx: { destination, currentTime: 3 }, gainNode, limiterNode, analyserNode,
             isBlocked: false, normalizerEnabled: true, muted: false, dB: 20,
             normalizerGainDb: 9, normalizerPeakDb: -5,
             isolatedOutputUsesLimiter: null },
@@ -838,6 +843,7 @@ test('isolated audio restores a gain-limited direct path after limiter route fai
     assert.equal(tc.vars.isolatedOutputUsesLimiter, false);
     assert.equal(tc.vars.normalizerGainDb, 0, 'discard accumulated AGC on limiter failure');
     assert.equal(tc.vars.normalizerPeakDb, -Infinity);
+    assert.equal(gainNode.gain.value, 1, 'gain must be clamped before unprotected output reconnects');
     assert.equal(gainNode.edges.length, 1);
     assert.equal(gainNode.edges[0], destination);
     assert.equal(limiterNode.edges.length, 0, 'partial edges must be removed');

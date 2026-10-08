@@ -967,6 +967,15 @@ function routeIsolatedOutput() {
             try { node.disconnect(); } catch (_) {}
         }
         try {
+            // Clamp the existing AudioParam BEFORE reconnecting directly.
+            // A 15ms ramp in applyState() is too late: a previously boosted
+            // gain could otherwise play briefly without limiter protection.
+            const gainParam = gainNode.gain;
+            const now = audioCtx.currentTime;
+            gainParam.cancelScheduledValues(now);
+            gainParam.setValueAtTime(
+                Math.max(0, Math.min(1, gainParam.value)), now
+            );
             gainNode.connect(audioCtx.destination);
             tc.vars.isolatedOutputUsesLimiter = false;
         } catch (fallbackError) {
