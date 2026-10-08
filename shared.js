@@ -37,6 +37,9 @@
     });
 
     function normalizeNormalizerConfig(value = {}) {
+        // Corrupt/legacy storage can contain null instead of an object.
+        // A TypeError here would block all audio controls during start().
+        if (!value || typeof value !== "object") value = {};
         const numberOr = (candidate, fallback) => {
             // Number('') and Number(null) equal zero. For normalizer inputs,
             // that silently turns a cleared Target field into -6 dBFS (the

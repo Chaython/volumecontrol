@@ -745,6 +745,25 @@ test('normalizer Options does not save a field twice on blur', () => {
     assert.doesNotMatch(source, /input\.addEventListener\('blur', saveNormalizerConfig\)/);
 });
 
+test('invalid stored normalizer configuration cannot disable audio controls', () => {
+    const shared = readFileSync(join(root, 'shared.js'), 'utf8');
+    const context = { globalThis: {} };
+    runInNewContext(shared, context);
+    const normalize = context.globalThis.VolumeControlShared.normalizeNormalizerConfig;
+    assert.equal(normalize(null).targetDb, -16);
+    assert.equal(normalize(false).ceilingDb, -1);
+    assert.equal(normalize('invalid').responseMs, 600);
+
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = page.indexOf('    function normalizeNormalizerConfig(value = {}) {');
+    const end = page.indexOf('    function configureLimiter(processor) {', start);
+    assert.ok(start >= 0 && end > start);
+    const normalizePage = runInNewContext(page.slice(start, end) + '\nnormalizeNormalizerConfig', {});
+    assert.equal(normalizePage(null).targetDb, -16);
+    assert.equal(normalizePage({ targetDb: '', ceilingDb: null }).ceilingDb, -1);
+    assert.equal(normalizePage({ targetDb: '' }).targetDb, -16);
+});
+
 test('cleared or absent normalizer config numbers restore defaults, not louder targets', () => {
     const shared = readFileSync(join(root, 'shared.js'), 'utf8');
     const context = { globalThis: {} };

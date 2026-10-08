@@ -110,7 +110,9 @@
     }
 
     function normalizeNormalizerConfig(value = {}) {
+        if (!value || typeof value !== "object") value = {};
         const finiteOr = (candidate, fallback) => {
+            if (candidate == null || (typeof candidate === "string" && !candidate.trim())) return fallback;
             const n = Number(candidate);
             return Number.isFinite(n) ? n : fallback;
         };
