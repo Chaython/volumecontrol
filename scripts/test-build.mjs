@@ -881,6 +881,18 @@ test('normalizer off state folds popup meter and Options settings', () => {
     assert.match(popup, /!cached\.normalizerCheckbox\?\.checked/);
 });
 
+test('disabled normalization does not keep 100ms timers alive in every tab', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(page, /function syncNormalizerMeterTimer\(\)/);
+    assert.match(page, /if \(normalizerMeterTimerId !== null\) clearInterval\(normalizerMeterTimerId\)/);
+    assert.match(page, /normalizerMeterTimerId = setInterval\(updateNormalizerAndMeter, 100\)/);
+    assert.doesNotMatch(page, /maintenanceTimerIds = \[\s*setInterval\(updateNormalizerAndMeter, 100\)/);
+    assert.match(isolated, /const shouldRun = !tc\.vars\.isBlocked && tc\.vars\.normalizerEnabled/);
+    assert.match(isolated, /if \(tc\.vars\.normalizerTimer !== null\) clearInterval\(tc\.vars\.normalizerTimer\)/);
+    assert.match(isolated, /if \(gainNode && audioCtx\) \{\s*ensureIsolatedNormalizerTimer\(\);/);
+});
+
 test('normalizer sampling returns early when switched off', () => {
     const hook = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const content = readFileSync(join(root, 'cs.js'), 'utf8');

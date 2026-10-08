@@ -973,6 +973,7 @@ function applyState() {
     const targetGain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB) * autoGain) : 1.0;
 
     if (gainNode && audioCtx) {
+        ensureIsolatedNormalizerTimer();
         // The limiter may remain routed during manual boost while Normalize
         // is off. Changes from Options must still update its parameters.
         if (tc.vars.isolatedOutputUsesLimiter) configureIsolatedLimiter();
@@ -1126,8 +1127,18 @@ function sampleIsolatedNormalizer() {
 }
 
 function ensureIsolatedNormalizerTimer() {
-    if (tc.vars.normalizerTimer !== null) return;
-    tc.vars.normalizerTimer = setInterval(sampleIsolatedNormalizer, 100);
+    // Even an empty 100ms interval keeps waking background tabs. Only sample
+    // when an actual isolated route needs automatic gain control.
+    const shouldRun = !tc.vars.isBlocked && tc.vars.normalizerEnabled &&
+        Boolean(tc.vars.gainNode && tc.vars.audioCtx);
+    if (!shouldRun) {
+        if (tc.vars.normalizerTimer !== null) clearInterval(tc.vars.normalizerTimer);
+        tc.vars.normalizerTimer = null;
+        return;
+    }
+    if (tc.vars.normalizerTimer === null) {
+        tc.vars.normalizerTimer = setInterval(sampleIsolatedNormalizer, 100);
+    }
 }
 
 function createGainNode() {

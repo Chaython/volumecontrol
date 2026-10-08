@@ -37,6 +37,7 @@
     let hooksInstalled = false;
     let mediaObserver = null;
     let maintenanceTimerIds = [];
+    let normalizerMeterTimerId = null;
     let howlerPollId = null;
     let gestureListenersInstalled = false;
     let authorizationResolved = false;
@@ -2667,7 +2668,22 @@
         });
     }
 
+    function syncNormalizerMeterTimer() {
+        const shouldRun = state.extensionActive && state.enabled && state.normalizerEnabled;
+        if (!shouldRun) {
+            if (normalizerMeterTimerId !== null) clearInterval(normalizerMeterTimerId);
+            normalizerMeterTimerId = null;
+            return;
+        }
+        if (normalizerMeterTimerId === null) {
+            normalizerMeterTimerId = setInterval(updateNormalizerAndMeter, 100);
+        }
+    }
+
     function startMaintenanceTimers() {
+        // Called on every state sync; update the meter separately even when
+        // the lower-frequency maintenance timers are already installed.
+        syncNormalizerMeterTimer();
         if (!state.extensionActive || !state.enabled || maintenanceTimerIds.length) return;
 
         let howlerPollCount = 0;
@@ -2684,7 +2700,6 @@
         }, 1000);
 
         maintenanceTimerIds = [
-            setInterval(updateNormalizerAndMeter, 100),
             setInterval(sweepDeadDestinationConnections, 30000),
             setInterval(runRestrictionAudit, 1000),
             setInterval(sweepDetachedMediaElements, 30000),
@@ -2697,6 +2712,8 @@
     }
 
     function stopMaintenanceTimers() {
+        if (normalizerMeterTimerId !== null) clearInterval(normalizerMeterTimerId);
+        normalizerMeterTimerId = null;
         for (const id of maintenanceTimerIds) clearInterval(id);
         maintenanceTimerIds = [];
         if (howlerPollId !== null) {
