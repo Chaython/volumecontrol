@@ -660,11 +660,13 @@
 
     function wireGraph(graph) {
         setGainValue(graph);
+        // Configuration changes must take effect even when the topology is
+        // unchanged (e.g. positive manual boost, Normalize off).
+        configureLimiter(graph);
 
         // Skip the disconnect/reconnect cycle if the routing mode hasn't changed.
         const wantMode = currentRoutingMode();
         if (graph.currentMode === wantMode) return;
-        graph.currentMode = wantMode;
 
         safeDisconnect(graph.gain);
         safeDisconnect(graph.splitter);
@@ -687,7 +689,10 @@
                 connectNative(graph.limiter, graph.analyser);
                 connectNative(graph.analyser, graph.context.destination);
             }
+            // A failed graph rebuild must be retryable on the next state sync.
+            graph.currentMode = wantMode;
         } catch (e) {
+            graph.currentMode = null;
             log(`graph wire failed: ${e && e.message}`);
         }
     }
@@ -1528,6 +1533,8 @@
     }
 
     function wireMediaRoute(route) {
+        // A ceiling change is independent of routing/mono/boost mode.
+        configureLimiter(route);
         const autoGain = state.normalizerEnabled ? dbToGain(route.normalizerGainDb || 0) : 1;
         const targetGain = effectiveGain() * autoGain;
 

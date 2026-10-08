@@ -728,6 +728,42 @@ test('normalizer preference saves even without an active audio route or tab rece
     assert.equal(refreshed, 1);
 });
 
+test('graph reconnect failure remains retryable after the first failed connect', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function wireGraph(graph) {');
+    const end = source.indexOf('    function ensureGraph(context) {', start);
+    assert.ok(start >= 0 && end > start);
+    const body = source.slice(start, end);
+    assert.match(body, /graph\.currentMode = wantMode;\s*\} catch/);
+    assert.match(body, /catch \(e\) \{\s*graph\.currentMode = null;/);
+    assert.doesNotMatch(body, /if \(graph\.currentMode === wantMode\) return;\s*graph\.currentMode = wantMode/);
+});
+
+test('normalizer Options does not save a field twice on blur', () => {
+    const source = readFileSync(join(root, 'options.js'), 'utf8');
+    assert.match(source, /input\.addEventListener\('change', saveNormalizerConfig\)/);
+    assert.doesNotMatch(source, /input\.addEventListener\('blur', saveNormalizerConfig\)/);
+});
+
+test('cleared or absent normalizer config numbers restore defaults, not louder targets', () => {
+    const shared = readFileSync(join(root, 'shared.js'), 'utf8');
+    const context = { globalThis: {} };
+    runInNewContext(shared, context);
+    const { normalizeNormalizerConfig, DEFAULT_NORMALIZER_CONFIG } = context.globalThis.VolumeControlShared;
+    assert.equal(normalizeNormalizerConfig({ targetDb: '', ceilingDb: '', responseMs: '', maxBoostDb: '' }).targetDb, DEFAULT_NORMALIZER_CONFIG.targetDb);
+    assert.equal(normalizeNormalizerConfig({ targetDb: null, ceilingDb: null }).ceilingDb, DEFAULT_NORMALIZER_CONFIG.ceilingDb);
+    assert.equal(normalizeNormalizerConfig({ targetDb: '   ' }).targetDb, DEFAULT_NORMALIZER_CONFIG.targetDb);
+    assert.equal(normalizeNormalizerConfig({ targetDb: '-20' }).targetDb, -20);
+});
+
+test('limiter ceiling updates without reconnecting an unchanged audio route', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(page, /function wireGraph\(graph\) \{\s*setGainValue\(graph\);\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*configureLimiter\(graph\);/);
+    assert.match(page, /function wireMediaRoute\(route\) \{[\s\S]*?configureLimiter\(route\);[\s\S]*?if \(route\.currentMode === wantMode && route\.outputConnected\) return;/);
+    assert.match(isolated, /if \(tc\.vars\.isolatedOutputUsesLimiter\) configureIsolatedLimiter\(\);\s*routeIsolatedOutput\(\);/);
+});
+
 test('normalization off bypasses compressor but positive boosts retain limiting', () => {
     const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const start = page.indexOf('    function safetyLimiterRequired() {');

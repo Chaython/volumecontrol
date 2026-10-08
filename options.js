@@ -700,8 +700,10 @@ async function initOptions() {
         const data = await storageGet({ normalizerConfig: DEFAULT_NORMALIZER_CONFIG });
         applyNormalizerConfigToInputs(data.normalizerConfig);
         for (const input of normalizerInputs.filter(Boolean)) {
+            // Number inputs emit "change" when their edited value is committed
+            // (including on blur). Listening for both events sent duplicate
+            // storage writes and reinitialized every active tab twice.
             input.addEventListener('change', saveNormalizerConfig);
-            input.addEventListener('blur', saveNormalizerConfig);
         }
     }
 

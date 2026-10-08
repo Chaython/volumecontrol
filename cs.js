@@ -973,6 +973,9 @@ function applyState() {
     const targetGain = isEnabled ? (tc.vars.muted ? 0 : getGainValue(tc.vars.dB) * autoGain) : 1.0;
 
     if (gainNode && audioCtx) {
+        // The limiter may remain routed during manual boost while Normalize
+        // is off. Changes from Options must still update its parameters.
+        if (tc.vars.isolatedOutputUsesLimiter) configureIsolatedLimiter();
         routeIsolatedOutput();
         const now = audioCtx.currentTime;
 

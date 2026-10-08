@@ -38,6 +38,10 @@
 
     function normalizeNormalizerConfig(value = {}) {
         const numberOr = (candidate, fallback) => {
+            // Number('') and Number(null) equal zero. For normalizer inputs,
+            // that silently turns a cleared Target field into -6 dBFS (the
+            // loudest allowed target) instead of restoring the safe default.
+            if (candidate == null || (typeof candidate === "string" && !candidate.trim())) return fallback;
             const n = Number(candidate);
             return Number.isFinite(n) ? n : fallback;
         };
