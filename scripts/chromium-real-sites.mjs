@@ -335,17 +335,42 @@ try {
                     entry.first = await step('one');
                     entry.second = await step('two');
                     const after = (await send({ command: 'getAudioControlState' }))?.response;
-                    entry.volumeKept = after?.volume === -13;
+                    // Remember=off intentionally resets manual controls on
+                    // new source boundaries. Verify that policy, then verify
+                    // the opposite when a saved profile is present.
+                    entry.volumeAfterUnremembered = after?.volume;
+                    entry.unrememberedReset = after?.volume === 0;
                     entry.normalizerKept = after?.normalizerEnabled === true;
                     entry.meter = (await send({ command: 'getMeterState' }))?.response;
+                    const saved = await cdp.evaluate(optionsSession,
+                        'new Promise((ok,fail)=>chrome.runtime.sendMessage(' +
+                        '{command:"mutateSiteSettings",mutation:{type:"mergeForUrl",url:' +
+                        JSON.stringify(localPage) + ',patch:{volume:-13,mono:false,muted:false}}},' +
+                        'x=>chrome.runtime.lastError?fail(Error(chrome.runtime.lastError.message)):ok(x)))');
+                    if (!saved?.ok) throw Error('Could not create Remember profile: ' + JSON.stringify(saved));
+                    await waitFor(async () => {
+                        const st = (await send({ command: 'getAudioControlState' }))?.response;
+                        return st?.volume === -13;
+                    }, 10000);
+                    entry.rememberedFirst = await step('remembered-one');
+                    entry.rememberedSecond = await step('remembered-two');
+                    const rememberedAfter = (await send({ command: 'getAudioControlState' }))?.response;
+                    entry.rememberedVolumeKept = rememberedAfter?.volume === -13;
                     entry.status = entry.first.progressed && entry.second.progressed &&
-                        entry.volumeKept && entry.normalizerKept ? 'passed' : 'failed';
+                        entry.unrememberedReset && entry.normalizerKept &&
+                        entry.rememberedFirst.progressed && entry.rememberedSecond.progressed &&
+                        entry.rememberedVolumeKept ? 'passed' : 'failed';
                 } catch (e) {
                     entry.status = 'failed'; entry.reason = e.message;
                 } finally {
                     try {
                         await send({ command: 'setNormalizer', enabled: false });
                         await send({ command: 'setVolume', dB: 0 });
+                        await cdp.evaluate(optionsSession,
+                            'new Promise((ok,fail)=>chrome.runtime.sendMessage(' +
+                            '{command:"mutateSiteSettings",mutation:{type:"removeForUrl",url:' +
+                            JSON.stringify(localPage) + '}},' +
+                            'x=>chrome.runtime.lastError?fail(Error(chrome.runtime.lastError.message)):ok(x)))');
                         await cdp.evaluate(fixtureSession,
                             'document.getElementById("video").pause();true');
                     } catch (_) {}
@@ -480,10 +505,29 @@ try {
                 const initial = (await send({ command: 'getAudioControlState' }))?.response;
                 result.extensionInjected = await browserCdp.evaluate(session, injectionExpression);
                 result.previousVolume = initial?.volume;
-                await send({ command: 'setVolume', dB: -13 });
-                result.sliderSet = (await send({ command: 'getAudioControlState' }))?.response?.volume === -13;
-                await send({ command: 'setNormalizer', enabled: true });
-                result.normalizerSet = (await send({ command: 'getAudioControlState' }))?.response?.normalizerEnabled === true;
+                // Save both preferences through the same background
+                // mutations that the real popup uses. Direct setVolume and
+                // setNormalizer commands alone are deliberately ephemeral.
+                const save = async (command, mutation) => cdp.evaluate(optionsSession,
+                    'new Promise((ok,fail)=>chrome.runtime.sendMessage(' +
+                    JSON.stringify({ command, mutation }) + ',' +
+                    'x=>chrome.runtime.lastError?fail(Error(chrome.runtime.lastError.message)):ok(x)))');
+                const remembered = await save('mutateSiteSettings', {
+                    type: 'mergeForUrl', url: playlistUrl, defaultKey: 'youtube.com/watch',
+                    patch: { volume: -13, mono: false, muted: false }
+                });
+                const normalized = await save('mutateSiteNormalizerSettings', {
+                    type: 'setForUrl', url: playlistUrl,
+                    defaultKey: 'youtube.com/watch', enabled: true
+                });
+                result.savedProfile = remembered?.ok && normalized?.ok;
+                if (!result.savedProfile) throw Error('Cannot save YouTube playlist profiles');
+                await waitFor(async () => {
+                    const st = (await send({ command: 'getAudioControlState' }))?.response;
+                    return st?.volume === -13 && st?.normalizerEnabled === true;
+                }, 12000);
+                result.sliderSet = true;
+                result.normalizerSet = true;
             }
             // Prefer the native Next command. It exercises YouTube's player
             // playlist transition rather than opening an unrelated video URL.
@@ -507,6 +551,8 @@ try {
                     result.volumeAfterNext = after?.volume;
                     result.volumeKept = after?.volume === -13;
                     result.normalizerAfterNext = after?.normalizerEnabled;
+                    result.savedSettingsKept = result.volumeKept &&
+                        result.normalizerAfterNext === true;
                     result.meter = (await send({ command: 'getMeterState' }))?.response;
                     await send({ command: 'setNormalizer', enabled: false });
                     await send({ command: 'setVolume', dB: 0 });
@@ -515,6 +561,11 @@ try {
                 }
             }
             result.status = result.navigationChanged ? 'playlist-navigation-only' : 'inconclusive';
+            if (extensionEnabled && result.navigationChanged &&
+                result.savedProfile && result.savedSettingsKept === false) {
+                result.status = 'failed';
+                result.reason = 'Remembered playlist volume or normalization was lost';
+            }
             result.playbackVerified = result.before.videoReady >= 2 &&
                 result.after.videoReady >= 2 && result.after.videoTime > result.before.videoTime + 0.2;
             if (result.playbackVerified) {
