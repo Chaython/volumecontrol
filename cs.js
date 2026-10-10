@@ -1234,27 +1234,50 @@ function ensureIsolatedNormalizerTimer() {
 }
 
 function createGainNode() {
-    if (!tc.vars.audioCtx) return;
+    const ctx = tc.vars.audioCtx;
+    if (!ctx || ctx.state === 'closed') return false;
 
     if (!tc.vars.gainNode) {
-        tc.vars.gainNode = tc.vars.audioCtx.createGain();
-        tc.vars.gainNode.channelInterpretation = "speakers";
-        tc.vars.inputAnalyserNode = tc.vars.audioCtx.createAnalyser();
-        // 8192 input samples span ~171ms at 48kHz, overlapping successive
-        // 100ms checks to avoid peak detection gaps between timer ticks.
-        tc.vars.inputAnalyserNode.fftSize = 8192;
-        tc.vars.inputAnalyserNode.smoothingTimeConstant = 0.35;
-        tc.vars.inputAnalyserNode.connect(tc.vars.gainNode);
-        tc.vars.limiterNode = tc.vars.audioCtx.createDynamicsCompressor();
-        tc.vars.analyserNode = tc.vars.audioCtx.createAnalyser();
-        tc.vars.analyserNode.fftSize = 1024;
-        tc.vars.analyserNode.smoothingTimeConstant = 0.35;
+        // Construct the whole processing chain locally. Publishing gainNode
+        // before all the other nodes exist can leave a permanently incomplete
+        // graph if createAnalyser(), createDynamicsCompressor(), or connect()
+        // throws. A later call used to see gainNode != null and skip rebuilding.
+        let gain = null;
+        let input = null;
+        let limiter = null;
+        let analyser = null;
+        try {
+            gain = ctx.createGain();
+            gain.channelInterpretation = "speakers";
+            input = ctx.createAnalyser();
+            // 8192 input samples span ~171ms at 48kHz, overlapping the
+            // successive 100ms samples to reduce peak-detection gaps.
+            input.fftSize = 8192;
+            input.smoothingTimeConstant = 0.35;
+            limiter = ctx.createDynamicsCompressor();
+            analyser = ctx.createAnalyser();
+            analyser.fftSize = 1024;
+            analyser.smoothingTimeConstant = 0.35;
+            input.connect(gain);
+        } catch (e) {
+            // No media element has been captured yet. Release partial graph
+            // nodes and permit a future play/state event to retry safely.
+            for (const node of [input, gain, limiter, analyser]) {
+                if (node) { try { node.disconnect(); } catch (_) {} }
+            }
+            if (tc.settings.debugMode) log(`isolated graph setup failed: ${e && e.message}`, 2);
+            return false;
+        }
+        tc.vars.gainNode = gain;
+        tc.vars.inputAnalyserNode = input;
+        tc.vars.limiterNode = limiter;
+        tc.vars.analyserNode = analyser;
         tc.vars.isolatedOutputUsesLimiter = null;
-        // applyState() wires the correct output path; do not pre-connect a
-        // compressor when normalization and positive boost are both off.
+        // applyState() wires the output only once a complete graph exists.
         ensureIsolatedNormalizerTimer();
     }
     applyState();
+    return true;
 }
 
 function isMediaPlaying(element) {
@@ -1625,7 +1648,12 @@ function connectOutput(element) {
         };
     }
 
-    if (!tc.vars.gainNode) createGainNode();
+    if (!tc.vars.gainNode && !createGainNode()) {
+        // Do not call createMediaElementSource() with an incomplete graph:
+        // native output would be detached with no usable path to speakers.
+        applyFallbackVolume(element, "route-failed");
+        return;
+    }
 
     // Ensure the tracking set exists
     if (!tc.vars.mediaElements) tc.vars.mediaElements = new Set();
