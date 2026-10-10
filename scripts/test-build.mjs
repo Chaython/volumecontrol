@@ -904,7 +904,7 @@ test('manual query profiles preserve query keys while popup defaults remain path
     assert.match(background, /includeQuery: true/);
     assert.match(options, /normalizeSiteSettingsEntryInput\(newRememberedInput\.value, \{ includeQuery: true \}\)/);
     assert.match(options, /normalizeSiteSettingsEntryInput\(newDebugSiteInput\.value, \{ includeQuery: true \}\)/);
-    assert.match(popup, /const defaultSettingsKey = normalizeSiteSettingsEntryInput\(tab\.url\)/);
+    assert.match(popup, /const defaultSettingsKey = normalizeSiteSettingsEntryInput\(url\)/);
 });
 
 test('empty explicit whitelist stays empty after mode toggles', () => {
@@ -1247,6 +1247,7 @@ test('normalizer preference saves even without an active audio route or tab rece
         normalizerRequestGeneration: 0,
         document: { querySelector: () => checkbox },
         applyNormalizerState: ({ normalizerEnabled }) => { checkbox.checked = Boolean(normalizerEnabled); },
+        currentTabUrl: async tab => tab.url,
         normalizeSiteSettingsEntryInput: () => 'example.com/video',
         mutateSiteNormalizerSettings: async (mutation) => { saved.push(mutation); return { ok: true }; },
         tabsSendMessage: async () => { throw new Error('No receiving content script'); },
