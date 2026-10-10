@@ -1801,9 +1801,18 @@
         if (mediaRoutes.has(element)) {
             const existing = mediaRoutes.get(element);
             if (existing && existing.context && existing.context.state === "closed") {
-                log(`media route context is closed -- element audio is dead until page reload: ${getMediaSourceUrl(element) || element.tagName}`);
+                if (existing.sourceKind === "mediaStream") {
+                    // createMediaStreamSource(stream) is repeatable on another
+                    // AudioContext, unlike createMediaElementSource(element).
+                    // Only this kind can be discarded and safely rebuilt.
+                    resetDirectMediaStreamRoute(element);
+                } else {
+                    log(`media route context is closed -- element audio is dead until page reload: ${getMediaSourceUrl(element) || element.tagName}`);
+                    return existing;
+                }
+            } else {
+                return existing;
             }
-            return existing;
         }
 
         // Cross-origin media without CORS cannot enter WebAudio at all.
@@ -1930,6 +1939,14 @@
 
         const entry = getMediaState(element);
         const gain = effectiveGain();
+        // Unlike MediaElementSource, a direct stream source can safely be
+        // constructed on a new context if the old one was closed. Clear the
+        // stale route before selecting the existingRoute fast-path below.
+        const previousRoute = mediaRoutes.get(element);
+        if (previousRoute && previousRoute.sourceKind === "mediaStream" &&
+            previousRoute.context && previousRoute.context.state === "closed") {
+            resetDirectMediaStreamRoute(element);
+        }
         const existingRoute = mediaRoutes.get(element);
         const playing = isMediaPlaying(element);
         const audible = isAudibleMediaElement(element);
