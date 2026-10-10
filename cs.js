@@ -57,6 +57,9 @@ const tc = {
   },
   vars: {
     dB: 0,
+    // Preserve the requested gain separately when this source is temporarily
+    // limited to native audio (DRM/CORS/route failure).
+    requestedDb: 0,
     mono: false,
     muted: false,
     normalizerEnabled: false,
@@ -123,7 +126,8 @@ if (browserAPI) {
                 sendResponse({ status: "active" });
                 break;
             case "setVolume":
-                tc.vars.dB = normalizeDbForCurrentMedia(msg.dB);
+                tc.vars.requestedDb = normalizeDb(msg.dB);
+                tc.vars.dB = normalizeDbForCurrentMedia(tc.vars.requestedDb);
                 applyState();
                 sendResponse({ response: getAudioControlState() });
                 break;
@@ -739,7 +743,10 @@ function getNormalizerAvailability(limit = getBoostLimitInfo()) {
 }
 
 function getAudioControlState() {
-    enforceBoostLimit({ sync: true });
+    // A previously restricted track may become WebAudio-routable again.
+    // Apply the restored requested gain to both the page hook and isolated
+    // graph before reporting it to the popup.
+    if (enforceBoostLimit()) applyState();
     const limit = getBoostLimitInfo();
     const monoAvailability = getMonoAvailability(limit);
     const normalizerAvailability = getNormalizerAvailability(limit);
@@ -762,7 +769,9 @@ function getAudioControlState() {
 }
 
 function enforceBoostLimit(options = {}) {
-    const clamped = normalizeDbForCurrentMedia(tc.vars.dB);
+    const requested = Number.isFinite(tc.vars.requestedDb)
+        ? tc.vars.requestedDb : tc.vars.dB;
+    const clamped = normalizeDbForCurrentMedia(requested);
     if (clamped === tc.vars.dB) return false;
 
     tc.vars.dB = clamped;
@@ -1966,7 +1975,10 @@ async function start() {
 
         if (siteSettingsKey) {
             const s = data.siteSettings[siteSettingsKey];
-            if (s.volume !== undefined) tc.vars.dB = normalizeDb(s.volume);
+            if (s.volume !== undefined) {
+                tc.vars.requestedDb = normalizeDb(s.volume);
+                tc.vars.dB = tc.vars.requestedDb;
+            }
             if (s.mono !== undefined) tc.vars.mono = s.mono;
             if (s.muted !== undefined) tc.vars.muted = Boolean(s.muted);
         }
