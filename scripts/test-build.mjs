@@ -2583,6 +2583,15 @@ test('remembered-site volume editor preserves cleared values and commits change/
     assert.equal(volumeField.value, '+12 dB');
     assert.equal(updates.length, 0);
 
+    // A half-written number must not become the fallback after it is erased.
+    volumeField.value = '19';
+    listeners.input();
+    volumeField.value = '';
+    listeners.input();
+    commit();
+    assert.equal(volumeField.value, '+12 dB');
+    assert.equal(updates.length, 0);
+
     volumeField.value = '5';
     listeners.input();
     commit();
