@@ -1780,6 +1780,7 @@ test('failed first MediaElementSource connection keeps its source and restores a
         mediaNeedsAudioRoute: () => true,
         isAudibleMediaElement: () => true,
         isLikelyDrmMedia: () => false,
+        isLikelyCrossOriginMedia: () => false,
         mediaRoutes,
         getMediaContext: () => context,
         markNode: node => { nodes.push(node); return node; },
@@ -1997,4 +1998,24 @@ test('rapid Remember on-off preserves the most recent choice despite slow saving
     const off = toggle({ id: 4 });
     await Promise.all([on, off]);
     assert.deepEqual(mutations, ['enable', 'removeForUrl']);
+});
+
+
+test('cross-origin media rejection does not allocate an unnecessary AudioContext', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const begin = page.indexOf('    function ensureMediaRoute(element) {');
+    const end = page.indexOf('    // Rate-limited fallback write shared', begin);
+    assert.ok(begin > 0 && end > begin);
+    let allocations = 0;
+    const ensure = runInNewContext('(' + page.slice(begin, end).trim() + ')', {
+        mediaNeedsAudioRoute: () => true,
+        isAudibleMediaElement: () => true,
+        isLikelyDrmMedia: () => false,
+        isLikelyCrossOriginMedia: () => true,
+        mediaRoutes: new Map(),
+        getMediaContext: () => { allocations++; return {}; },
+        log: () => {}
+    });
+    assert.equal(ensure({ tagName: 'AUDIO', src: 'https://other.example/audio.mp3' }), null);
+    assert.equal(allocations, 0, 'unsupported media must not start a WebAudio context');
 });
