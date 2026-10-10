@@ -2223,3 +2223,65 @@ test('queued hotkeys without an event tab keep their original tab through a tab 
     assert.deepEqual(seen.filter(x => x[0] !== 'third').map(x => x[1]), [1, 1]);
     assert.equal(seen.find(x => x[0] === 'third')[1], 2);
 });
+
+
+test('isolated gain chain construction is transactional and retries after an allocator failure', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = source.indexOf('function createGainNode() {');
+    const end = source.indexOf('function isMediaPlaying(element) {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    const nodes = [];
+    let failCompressor = true;
+    const create = kind => {
+        const node = {
+            kind,
+            disconnectCount: 0,
+            disconnect() { this.disconnectCount++; },
+            connect() {}
+        };
+        nodes.push(node);
+        return node;
+    };
+    let applyCalls = 0;
+    let meterCalls = 0;
+    const sandbox = {
+        tc: {
+            vars: {
+                audioCtx: {
+                    state: 'running',
+                    createGain: () => create('gain'),
+                    createAnalyser: () => create('analyser'),
+                    createDynamicsCompressor: () => {
+                        if (failCompressor) throw Error('injected compressor allocation failure');
+                        return create('limiter');
+                    }
+                }
+            },
+            settings: { debugMode: false }
+        },
+        applyState: () => { applyCalls++; },
+        ensureIsolatedNormalizerTimer: () => { meterCalls++; },
+        log: () => {}
+    };
+    const createGainNode = runInNewContext('(' + source.slice(begin, end).trim() + ')', sandbox);
+    assert.equal(createGainNode(), false);
+    assert.equal(sandbox.tc.vars.gainNode, undefined,
+        'failed intermediate allocation must not publish an incomplete gain graph');
+    assert.equal(applyCalls, 0);
+    assert.equal(nodes[0].disconnectCount, 1);
+    assert.equal(nodes[1].disconnectCount, 1);
+
+    failCompressor = false;
+    assert.equal(createGainNode(), true);
+    assert.ok(sandbox.tc.vars.gainNode);
+    assert.ok(sandbox.tc.vars.inputAnalyserNode);
+    assert.ok(sandbox.tc.vars.limiterNode);
+    assert.ok(sandbox.tc.vars.analyserNode);
+    assert.equal(applyCalls, 1);
+    assert.equal(meterCalls, 1);
+    assert.equal(createGainNode(), true);
+    assert.equal(applyCalls, 2);
+    assert.equal(meterCalls, 1, 'successful creation is not repeated');
+
+    assert.match(source, /if \(!tc\.vars\.gainNode && !createGainNode\(\)\) \{\s*[\s\S]*?applyFallbackVolume\(element, "route-failed"\);\s*return;/);
+});
