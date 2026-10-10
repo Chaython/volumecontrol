@@ -35,6 +35,8 @@ let muteRequestGeneration = 0;
 let muteDeliveryChain = Promise.resolve();
 let monoRequestGeneration = 0;
 let monoDeliveryChain = Promise.resolve();
+let rememberRequestGeneration = 0;
+let rememberDeliveryChain = Promise.resolve();
 
 function mutateSiteSettings(mutation) {
   return runtimeSendMessage({ command: "mutateSiteSettings", mutation });
@@ -794,20 +796,38 @@ async function toggleMute(tab, muted) {
 }
 
 async function toggleRemember(tab) {
-    try {
-        const rememberCheckbox = document.getElementById("remember-checkbox");
-        const url = await currentTabUrl(tab);
-        const defaultSettingsKey = normalizeSiteSettingsEntryInput(url);
-        if (!defaultSettingsKey) return;
+    if (!tab) return;
+    const checkbox = document.getElementById("remember-checkbox");
+    if (!checkbox) return;
+    const rememberEnabled = Boolean(checkbox.checked);
+    const requestGeneration = ++rememberRequestGeneration;
 
-        if (rememberCheckbox && rememberCheckbox.checked) {
-            await saveSiteSettings(tab);
-        } else {
-            await mutateSiteSettings({ type: "removeForUrl", url });
+    // An older in-flight save must not recreate a profile AFTER a later
+    // Remember-off request removes it. The last clicked state wins.
+    const deliver = async () => {
+        if (requestGeneration !== rememberRequestGeneration) return;
+        try {
+            const url = await currentTabUrl(tab);
+            if (requestGeneration !== rememberRequestGeneration) return;
+            const defaultSettingsKey = normalizeSiteSettingsEntryInput(url);
+            if (!defaultSettingsKey) return;
+
+            // A volume/mute/mono save may already be resolving tabs.get().
+            // Let it finish before removing the remembered profile.
+            await siteSettingsSaveChain;
+            if (requestGeneration !== rememberRequestGeneration) return;
+            if (rememberEnabled) {
+                await saveSiteSettings(tab);
+            } else {
+                await mutateSiteSettings({ type: "removeForUrl", url });
+            }
+        } catch (e) {
+            if (requestGeneration === rememberRequestGeneration) handleError(e);
         }
-    } catch (e) {
-        handleError(e);
-    }
+    };
+    const next = rememberDeliveryChain.then(deliver, deliver);
+    rememberDeliveryChain = next.catch(() => {});
+    return next;
 }
 
 function showError(error) {
