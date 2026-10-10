@@ -2171,3 +2171,24 @@ test('popup startup ignores stale Remember mono and mute snapshots', () => {
     assert.match(init, /monoGeneration === monoRequestGeneration && !cached\.monoPending/);
     assert.match(init, /muteGeneration === muteRequestGeneration && !cached\.mutePending/);
 });
+
+
+test('closed AudioContext invalidates even previously connected isolated captured sources', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = content.indexOf('function reconnectIsolatedCapturedSource(element) {');
+    const end = content.indexOf('function scheduleIsolatedCapturedSourceRetry(element) {', start);
+    assert.ok(start >= 0 && end > start);
+    const element = { dataset: {} };
+    const captured = { connected: true, source: {} };
+    let invalidations = 0;
+    const reconnect = runInNewContext('(' + content.slice(start, end).trim() + ')', {
+        tc: { vars: {
+            capturedMediaSources: new WeakMap([[element, captured]]),
+            audioCtx: { state: 'closed' }
+        } },
+        invalidateBoostLimitCache: () => { invalidations++; }
+    });
+    assert.equal(reconnect(element), false);
+    assert.equal(element.dataset.vcFallbackReason, 'route-failed');
+    assert.equal(invalidations, 1);
+});
