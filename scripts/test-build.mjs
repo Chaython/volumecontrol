@@ -2107,7 +2107,7 @@ test('isolated captured source retries a bounded number of times without a new p
     const begin = content.indexOf('function scheduleIsolatedCapturedSourceRetry(element) {');
     const end = content.indexOf('function connectOutput(element) {', begin);
     assert.ok(begin > 0 && end > begin);
-    const element = { dataset: {} };
+    const element = { dataset: {}, paused: false, ended: false };
     const captured = { connected: false, retryCount: 0, retryTimer: null };
     const tasks = [];
     let success = false;
@@ -2125,7 +2125,8 @@ test('isolated captured source retries a bounded number of times without a new p
             return true;
         },
         resumeAudioContext: () => { resumed++; },
-        applyState: () => { applied++; }
+        applyState: () => { applied++; },
+        isMediaPlaying: element => !element.paused && !element.ended
     };
     const schedule = runInNewContext('(' + content.slice(begin, end).trim() + ')', ctx);
     schedule(element);
@@ -2381,4 +2382,31 @@ test('page-world route recovery does not wake AudioContext for paused media', ()
     timers.shift()();
     assert.equal(route.outputConnected, true);
     assert.equal(resumes, 0, 'paused media must not reactivate its audio device');
+});
+
+
+test('isolated captured-source retry does not resume the audio device when playback paused', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = content.indexOf('function scheduleIsolatedCapturedSourceRetry(element) {');
+    const end = content.indexOf('function connectOutput(element) {', begin);
+    assert.ok(begin > 0 && end > begin);
+    const element = { paused: true, ended: false };
+    const captured = { connected: false, retryCount: 0, retryTimer: null };
+    let task;
+    let resumes = 0;
+    let updates = 0;
+    const schedule = runInNewContext('(' + content.slice(begin, end).trim() + ')', {
+        tc: { vars: { capturedMediaSources: new WeakMap([[element, captured]]),
+            audioCtx: { state: 'suspended' } } },
+        setTimeout: callback => { task = callback; return 1; },
+        reconnectIsolatedCapturedSource: () => { captured.connected = true; return true; },
+        isMediaPlaying: current => !current.paused && !current.ended,
+        resumeAudioContext: () => { resumes++; },
+        applyState: () => { updates++; }
+    });
+    schedule(element);
+    task();
+    assert.equal(captured.connected, true);
+    assert.equal(resumes, 0, 'a paused element must not wake Bluetooth or OS output');
+    assert.equal(updates, 1);
 });
