@@ -313,12 +313,20 @@ function mutateAccessLists(mutation = {}) {
     return accessListMutationChain;
 }
 
-function enqueueCommand(command, commandTab) {
-    const key = commandTab && Number.isInteger(commandTab.id) ? commandTab.id : "active";
+async function enqueueCommand(command, commandTab) {
+    // Some browsers omit the Tab argument from commands.onCommand. Resolve
+    // the active tab NOW, before joining an existing hotkey queue: looking it
+    // up only after earlier commands settle can affect a different tab if
+    // the user switches tabs during key-repeat.
+    const originTab = commandTab && Number.isInteger(commandTab.id)
+        ? commandTab : await getActiveTab(null);
+    if (!originTab || !Number.isInteger(originTab.id)) return;
+
+    const key = originTab.id;
     const previous = commandChains.get(key) || Promise.resolve();
     const next = previous.then(
-        () => handleCommand(command, commandTab),
-        () => handleCommand(command, commandTab)
+        () => handleCommand(command, originTab),
+        () => handleCommand(command, originTab)
     ).finally(() => {
         if (commandChains.get(key) === next) commandChains.delete(key);
     });
