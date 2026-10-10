@@ -2458,3 +2458,44 @@ test('hotkey retries and remembered writes do not cross SPA/tab navigation', asy
     assert.equal(saved[0].key, domainState.settingsKey);
     assert.equal(saved[0].patch.volume, 8);
 });
+
+
+test('rejected srcObject replacement preserves the existing MediaStream audio route', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const match = source.match(/set: (function patchedSrcObjectSetter\(value\) \{[\s\S]*?\n                \})\n            \}\);/);
+    assert.ok(match, 'MAIN-world patched srcObject setter must be present');
+    const oldStream = { id: 'old' };
+    const nextStream = { id: 'next' };
+    const element = { stream: oldStream };
+    let routesReset = 0;
+    let listenersUpdated = 0;
+    let elementsRegistered = 0;
+    const nativeSrcObjectDescriptor = {
+        set(value) {
+            if (value === 'not a MediaStream') throw new TypeError('Invalid srcObject');
+            this.stream = value;
+        }
+    };
+    const setter = runInNewContext('(' + match[1] + ')', {
+        nativeSrcObjectDescriptor,
+        readMediaSrcObject: current => current.stream,
+        resetDirectMediaStreamRoute: () => { routesReset++; },
+        bindMediaStreamLifecycle: () => { listenersUpdated++; },
+        registerMediaElement: () => { elementsRegistered++; },
+        isMediaStreamLike: value => typeof value === 'object' && value !== null,
+        log: () => {}
+    });
+    assert.throws(() => setter.call(element, 'not a MediaStream'), /Invalid srcObject/);
+    assert.equal(element.stream, oldStream);
+    assert.equal(routesReset, 0, 'failed setter must preserve the already audible route');
+    assert.equal(listenersUpdated, 0);
+
+    setter.call(element, oldStream);
+    assert.equal(routesReset, 0, 'reassigning the same stream must not interrupt playback');
+
+    setter.call(element, nextStream);
+    assert.equal(element.stream, nextStream);
+    assert.equal(routesReset, 1, 'successful source switch invalidates old capture once');
+    assert.equal(listenersUpdated, 2);
+    assert.equal(elementsRegistered, 2);
+});
