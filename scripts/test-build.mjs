@@ -1820,3 +1820,78 @@ test('failed first MediaElementSource connection keeps its source and restores a
     assert.ok(connections.some(([from, to]) => from === sourceNode && to === route.gain));
     assert.ok(connections.some(([from, to]) => from === route.gain && to === destination));
 });
+
+
+test('rapid mute toggles keep final state and suppress older async UI replies', async () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = popup.indexOf('async function toggleMute(tab, muted) {');
+    const end = popup.indexOf('async function toggleRemember(tab) {', start);
+    assert.ok(start >= 0 && end > start);
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const states = [];
+    const deliveries = [];
+    const saved = [];
+    let activeMute = false;
+    const context = {
+        muteRequestGeneration: 0,
+        muteDeliveryChain: Promise.resolve(),
+        applyMuteButtonState: muted => states.push(Boolean(muted)),
+        tabsSendMessage: async (_tabId, message) => {
+            if (message.command === 'setMute') {
+                if (message.muted) await delay(30);
+                activeMute = message.muted;
+                deliveries.push(activeMute);
+            }
+            return { response: { muted: activeMute, volume: -12 } };
+        },
+        TOP_FRAME_OPTIONS: { frameId: 0 },
+        handleError: e => { throw e; },
+        applyAudioControlState: () => {},
+        cached: { slider: { value: -12 } },
+        runtimeSendMessage: () => Promise.resolve(),
+        saveSiteSettings: async () => { saved.push(activeMute); }
+    };
+    const fn = runInNewContext('(' + popup.slice(start, end).trim() + ')', context);
+    const first = fn({ id: 3 }, true);
+    await delay(3);
+    const second = fn({ id: 3 }, false);
+    await Promise.all([first, second]);
+    assert.equal(activeMute, false);
+    assert.equal(states.at(-1), false);
+    assert.deepEqual(deliveries, [true, false]);
+    assert.deepEqual(saved, [false]);
+});
+
+test('rapid mono toggles deliver in order and do not save stale state', async () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = popup.indexOf('async function toggleMono(tab) {');
+    const end = popup.indexOf('async function toggleNormalizer(tab) {', start);
+    assert.ok(start >= 0 && end > start);
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const checkbox = { checked: true, disabled: false };
+    const delivered = [];
+    let currentMono = false;
+    const saved = [];
+    const context = {
+        monoRequestGeneration: 0,
+        monoDeliveryChain: Promise.resolve(),
+        cached: { monoCheckbox: checkbox, monoAvailable: true },
+        document: { querySelector: () => checkbox },
+        tabsSendMessage: async (_tabId, message) => {
+            if (message.mono) await delay(30);
+            currentMono = message.mono;
+            delivered.push(currentMono);
+        },
+        handleError: e => { throw e; },
+        saveSiteSettings: async () => { saved.push(currentMono); }
+    };
+    const fn = runInNewContext('(' + popup.slice(start, end).trim() + ')', context);
+    const first = fn({ id: 3 });
+    await delay(3);
+    checkbox.checked = false;
+    const second = fn({ id: 3 });
+    await Promise.all([first, second]);
+    assert.equal(currentMono, false);
+    assert.deepEqual(delivered, [true, false]);
+    assert.deepEqual(saved, [false]);
+});
