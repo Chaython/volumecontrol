@@ -2658,3 +2658,49 @@ test('closed direct MediaStream routes rebuild on a fresh AudioContext without r
     const apply = page.slice(applyBegin, applyEnd);
     assert.match(apply, /previousRoute.sourceKind === "mediaStream"[\s\S]*?resetDirectMediaStreamRoute\(element\);[\s\S]*?const existingRoute = mediaRoutes.get\(element\)/);
 });
+
+
+test('detached paused captured media wakes without a strong tracking-set reference', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function cleanupTrackedMediaElement(element) {');
+    const end = source.indexOf('    // Returns true if an element that was removed', start);
+    assert.ok(start >= 0 && end > start);
+    const callbacks = {};
+    let registered = 0;
+    let disconnected = 0;
+    const element = {
+        isConnected: false, paused: true,
+        addEventListener: (name, fn) => { callbacks[name] = fn; },
+        removeEventListener: (name, fn) => {
+            if (callbacks[name] === fn) delete callbacks[name];
+        }
+    };
+    const entry = { listenersInstalled: true, fallbackCorrectionTimer: null };
+    const route = { outputConnected: true };
+    const tracking = new Set([element]);
+    const context = {
+        mediaState: new WeakMap([[element, entry]]),
+        mediaRoutes: new WeakMap([[element, route]]),
+        mediaElements: tracking,
+        detachMediaElementListeners: () => { entry.listenersInstalled = false; },
+        cancelMediaRouteRecovery: () => {},
+        disconnectMediaRouteOutput: r => { disconnected++; r.outputConnected = false; },
+        registerMediaElement: () => { registered++; },
+        clearTimeout: () => {}
+    };
+    const cleanup = runInNewContext('(' + source.slice(start, end).trim() + ')', context);
+    cleanup(element);
+    assert.equal(tracking.has(element), false, 'idle detached elements must not stay strongly tracked');
+    assert.equal(typeof callbacks.play, 'function', 'captured elements retain a one-shot play wake');
+    assert.equal(disconnected, 1);
+    cleanup(element);
+    assert.equal(typeof callbacks.play, 'function');
+    callbacks.play();
+    assert.equal(registered, 1);
+    assert.equal(entry.detachedPlayWake, null);
+    assert.equal(callbacks.play, undefined);
+    const registerStart = source.indexOf('    function registerMediaElement(element, options = {}) {');
+    const registerEnd = source.indexOf('    function scanMediaElements(root) {', registerStart);
+    assert.match(source.slice(registerStart, registerEnd),
+        /if \(entry\.detachedPlayWake\) \{[\s\S]*?removeEventListener\("play", entry\.detachedPlayWake\)/);
+});
