@@ -1507,6 +1507,24 @@ function reconnectIsolatedCapturedSource(element) {
     return true;
 }
 
+function scheduleIsolatedCapturedSourceRetry(element) {
+    const captured = tc.vars.capturedMediaSources && tc.vars.capturedMediaSources.get(element);
+    if (!captured || captured.connected || captured.retryTimer || captured.retryCount >= 6) return;
+    captured.retryTimer = setTimeout(() => {
+        captured.retryTimer = null;
+        if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed' || captured.connected) return;
+        captured.retryCount = (captured.retryCount || 0) + 1;
+        if (reconnectIsolatedCapturedSource(element)) {
+            // A player may already be playing; no new 'play' event is
+            // guaranteed after our first failed AudioNode.connect().
+            if (tc.vars.audioCtx.state === 'suspended') resumeAudioContext();
+            applyState();
+        } else {
+            scheduleIsolatedCapturedSourceRetry(element);
+        }
+    }, 250);
+}
+
 function connectOutput(element) {
     if (isPageAudioManaged(element)) {
         if (element.dataset.vcFallback === "true") clearFallbackVolume(element);
@@ -1527,7 +1545,7 @@ function connectOutput(element) {
         }
         if (tc.vars.mediaElements) tc.vars.mediaElements.add(element);
         // Retry the original node, never create a second MediaElementSource.
-        reconnectIsolatedCapturedSource(element);
+        if (!reconnectIsolatedCapturedSource(element)) scheduleIsolatedCapturedSourceRetry(element);
         if (isMediaPlaying(element) && tc.vars.audioCtx.state === 'suspended') {
             resumeAudioContext();
         }
@@ -1658,6 +1676,7 @@ function connectOutput(element) {
             element.dataset.vcHooked = "true";
             tc.vars.mediaElements.add(element);
             const sourceConnected = reconnectIsolatedCapturedSource(element);
+            if (!sourceConnected) scheduleIsolatedCapturedSourceRetry(element);
 
             // Wake up the AudioContext when media starts playing
             element.addEventListener('play', () => {
