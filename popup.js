@@ -903,9 +903,11 @@ async function initializeControls(tab) {
       // (e.g. "-15") before we commit, avoiding partial-number jumps.
       volumeText.addEventListener("input", () => {
             cancelPendingVolumeCommit();
+            // Even an invalid/empty edit cancels an earlier valid pending
+            // text value; otherwise clearing "-12" still commits -12 later.
+            cancelPendingTextCommit();
             const parsed = parseDbText(volumeText.value);
             if (parsed === null) return;
-            if (textCommitTimer) clearTimeout(textCommitTimer);
             textCommitTimer = setTimeout(() => {
                 textCommitTimer = null;
                 setVolume(parsed, tab);
