@@ -406,8 +406,21 @@ async function getContentState(tab) {
     };
 }
 
-async function saveRememberedSettings(domainState, updates) {
-    if (!domainState || !domainState.settingsKey) return;
+async function isOriginalTabPage(tab) {
+    if (!tab || !Number.isInteger(tab.id) || !tab.url) return false;
+    try {
+        const current = await tabsGet(tab.id);
+        // A queued command can span an SPA/playlist transition. A now-closed
+        // or navigated tab must not receive a retry or a remembered-setting
+        // update intended for the previous page profile.
+        return Boolean(current && current.url === tab.url);
+    } catch (e) {
+        return false;
+    }
+}
+
+async function saveRememberedSettings(tab, domainState, updates) {
+    if (!domainState || !domainState.settingsKey || !(await isOriginalTabPage(tab))) return;
     const patch = {};
     if (updates.volume !== undefined) patch.volume = normalizeDb(updates.volume);
     if (updates.mono !== undefined) patch.mono = Boolean(updates.mono);
@@ -434,6 +447,7 @@ async function sendHotkeyCommandAndConfirm(tab, message) {
     if (!tab || !Number.isInteger(tab.id)) return null;
 
     for (let attempt = 0; attempt < 2; attempt++) {
+        if (!(await isOriginalTabPage(tab))) return null;
         let delivered = false;
         try {
             // Broadcast the absolute requested state so embedded players receive
@@ -450,7 +464,10 @@ async function sendHotkeyCommandAndConfirm(tab, message) {
                 { command: "getAudioControlState" },
                 TOP_FRAME_OPTIONS
             ).catch(() => null);
-            if (response && response.response) return response.response;
+            if (response && response.response) {
+                if (!(await isOriginalTabPage(tab))) return null;
+                return response.response;
+            }
         }
 
         if (attempt === 0) await delay(HOTKEY_DELIVERY_RETRY_MS);
@@ -472,7 +489,7 @@ async function setVolume(tab, domainState, dB) {
         : requestedVolume;
     const muted = state.muted !== undefined ? Boolean(state.muted) : false;
     await showNativeVolumeFeedback(tab.id, appliedVolume, muted);
-    await saveRememberedSettings(domainState, { volume: appliedVolume });
+    await saveRememberedSettings(tab, domainState, { volume: appliedVolume });
     return true;
 }
 
@@ -483,7 +500,7 @@ async function setMono(tab, domainState, mono) {
         mono: enabled
     });
     if (!state) return false;
-    await saveRememberedSettings(domainState, {
+    await saveRememberedSettings(tab, domainState, {
         mono: state.mono !== undefined ? Boolean(state.mono) : enabled
     });
     return true;
@@ -500,7 +517,7 @@ async function setMute(tab, domainState, muted) {
     const appliedMuted = state.muted !== undefined ? Boolean(state.muted) : enabled;
     const dB = state.volume !== undefined ? normalizeDb(state.volume) : 0;
     await showNativeVolumeFeedback(tab.id, dB, appliedMuted);
-    await saveRememberedSettings(domainState, { muted: appliedMuted });
+    await saveRememberedSettings(tab, domainState, { muted: appliedMuted });
     return true;
 }
 
