@@ -252,7 +252,7 @@ test('normalizer input detection is upstream of the manual slider in all audio p
     const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const content = readFileSync(join(root, 'cs.js'), 'utf8');
     assert.match(page, /connectNative\(inputAnalyser, gain\)/);
-    assert.match(page, /connectNative\(source, inputAnalyser\)/);
+    assert.match(page, /connectNative\(route\.source, inputAnalyser\)/);
     assert.match(page, /connectNative\(source, graph\.inputAnalyser/);
     assert.match(page, /connectNative\(this, graph\.inputAnalyser/);
     assert.match(page, /connectNative\(masterGain, graph\.inputAnalyser\)/);
