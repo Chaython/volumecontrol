@@ -2142,3 +2142,32 @@ test('isolated captured source retries a bounded number of times without a new p
     assert.equal(tasks.length, 0, 'recovered elements need no more retries');
     assert.match(content, /if \(!sourceConnected\) scheduleIsolatedCapturedSourceRetry\(element\)/);
 });
+
+
+test('popup startup fallback cannot overwrite live edits or create an extra volume request', () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    assert.match(source, /let volumeEditGeneration = 0/);
+    assert.match(source, /volumeGenerationAtRequest === volumeRequestGeneration &&\s*volumeEditGenerationAtRequest === volumeEditGeneration/);
+    const init = source.slice(source.indexOf('async function initializeControls(tab) {'));
+    assert.match(init, /const initialEditGeneration = volumeEditGeneration/);
+    assert.match(init, /volumeSlider\.addEventListener\("input", \(\) => \{\s*volumeEditGeneration\+\+/);
+    assert.match(init, /volumeText\.addEventListener\("input", \(\) => \{\s*volumeEditGeneration\+\+/);
+    const fallbackBegin = init.indexOf('tabsSendMessage(tab.id, { command: "getVolume" }');
+    const fallbackEnd = init.indexOf('tabsSendMessage(tab.id, { command: "getMono" }', fallbackBegin);
+    assert.ok(fallbackBegin >= 0 && fallbackEnd > fallbackBegin);
+    const fallback = init.slice(fallbackBegin, fallbackEnd);
+    assert.match(fallback, /editGeneration === volumeEditGeneration/);
+    assert.match(fallback, /volumeGeneration === volumeRequestGeneration/);
+    assert.match(fallback, /setDisplayedVolume\(response.response\)/);
+    assert.doesNotMatch(fallback, /setVolume\(response.response, null\)/);
+});
+
+test('popup startup ignores stale Remember mono and mute snapshots', () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    const init = source.slice(source.indexOf('async function initializeControls(tab) {'));
+    assert.match(init, /initialRememberGeneration === rememberRequestGeneration/);
+    assert.match(init, /initialMonoGeneration === monoRequestGeneration && !cached\.monoPending/);
+    assert.match(init, /initialMuteGeneration === muteRequestGeneration && !cached\.mutePending/);
+    assert.match(init, /monoGeneration === monoRequestGeneration && !cached\.monoPending/);
+    assert.match(init, /muteGeneration === muteRequestGeneration && !cached\.mutePending/);
+});
