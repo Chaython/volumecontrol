@@ -2466,7 +2466,7 @@ test('hotkey retries and remembered writes do not cross SPA/tab navigation', asy
 
 test('rejected srcObject replacement preserves the existing MediaStream audio route', () => {
     const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
-    const match = source.match(/set: (function patchedSrcObjectSetter\(value\) \{[\s\S]*?\n                \})\n            \}\);/);
+    const match = source.match(/set: (function patchedSrcObjectSetter\(value\) \{[\s\S]*?\r?\n                \})\r?\n            \}\);/);
     assert.ok(match, 'MAIN-world patched srcObject setter must be present');
     const oldStream = { id: 'old' };
     const nextStream = { id: 'next' };
