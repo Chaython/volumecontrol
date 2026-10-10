@@ -1735,3 +1735,88 @@ test('cross-input debounce and invalid text edits cancel obsolete volume commits
     assert.ok(section.indexOf('cancelPendingTextCommit()') < section.indexOf('if (parsed === null) return'),
         'clearing the input must cancel its old pending valid dB write');
 });
+
+
+test('failed first MediaElementSource connection keeps its source and restores a safe rescue route', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const ensureStart = page.indexOf('    function ensureMediaRoute(element) {');
+    const ensureEnd = page.indexOf('    // Rate-limited fallback write shared', ensureStart);
+    const wireStart = page.indexOf('    function wireMediaRoute(route) {');
+    const wireEnd = page.indexOf('    function ensureMediaRoute(element) {', wireStart);
+    assert.ok(ensureStart > 0 && ensureEnd > ensureStart && wireStart > 0 && wireEnd > wireStart);
+
+    const nodes = [];
+    let inputAnalyser = null;
+    const sourceNode = { tag: 'source' };
+    const destination = { tag: 'destination' };
+    const context = {
+        destination,
+        currentTime: 0,
+        state: 'running',
+        createGain: () => ({ gain: { value: 1 } }),
+        createAnalyser: () => {
+            const node = {};
+            if (!inputAnalyser) inputAnalyser = node;
+            return node;
+        },
+        createChannelSplitter: () => ({}),
+        createChannelMerger: () => ({}),
+        createDynamicsCompressor: () => ({})
+    };
+    const mediaRoutes = new Map();
+    let captures = 0;
+    let throwOnce = true;
+    const connections = [];
+    const connectNative = (from, to) => {
+        if (from === sourceNode && to === inputAnalyser && throwOnce) {
+            throwOnce = false;
+            throw new Error('injected first connect failure');
+        }
+        connections.push([from, to]);
+    };
+    let fallbackInvoked = false;
+    const ensure = runInNewContext('(' + page.slice(ensureStart, ensureEnd).trim() + ')', {
+        mediaNeedsAudioRoute: () => true,
+        isAudibleMediaElement: () => true,
+        isLikelyDrmMedia: () => false,
+        mediaRoutes,
+        getMediaContext: () => context,
+        markNode: node => { nodes.push(node); return node; },
+        createMediaRouteSource: () => {
+            captures++;
+            return { source: sourceNode, kind: 'mediaElement', muteNative: false };
+        },
+        connectNative,
+        effectiveGain: () => 5,
+        safeDisconnect: () => {},
+        wireMediaRoute: () => { fallbackInvoked = true; },
+        log: () => {},
+        getMediaSourceUrl: () => ''
+    });
+    const element = { tagName: 'AUDIO', currentSrc: 'sound.mp3' };
+    const route = ensure(element);
+    assert.ok(route);
+    assert.equal(captures, 1);
+    assert.equal(route.fallbackDirectOnly, true);
+    assert.equal(fallbackInvoked, true);
+    assert.equal(mediaRoutes.get(element), route);
+    assert.equal(ensure(element), route);
+    assert.equal(captures, 1, 'captured media element must never be captured twice');
+
+    const wire = runInNewContext('(' + page.slice(wireStart, wireEnd).trim() + ')', {
+        connectNative,
+        clampUnprotectedOutput: r => {
+            r.limiterFallbackActive = true;
+            r.gain.gain.value = 1;
+            return true;
+        },
+        resetMediaBoundaryGain: () => true,
+        log: () => {}
+    });
+    wire(route);
+    assert.equal(route.outputConnected, true);
+    assert.equal(route.sourceConnected, true);
+    assert.equal(route.gain.gain.value, 1, 'rescue output must not expose boost');
+    assert.ok(connections.some(([from, to]) => from === sourceNode && to === route.gain));
+    assert.ok(connections.some(([from, to]) => from === route.gain && to === destination));
+});
