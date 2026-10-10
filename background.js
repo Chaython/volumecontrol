@@ -327,19 +327,16 @@ function enqueueCommand(command, commandTab) {
 }
 
 async function getActiveTab(commandTab) {
-    // Keep a queued hotkey bound to the tab that originated the command. If the
-    // user changes tabs while earlier key-repeat commands are still queued,
-    // re-querying "active" at execution time would retarget those later presses.
+    // A queued hotkey belongs to the tab it originated from. If that tab
+    // closes, discard the command rather than applying it to another tab.
     if (commandTab && Number.isInteger(commandTab.id)) {
         try {
-            const tab = await tabsGet(commandTab.id);
-            if (tab) return tab;
+            return (await tabsGet(commandTab.id)) || null;
         } catch (e) {
-            // The original tab may have closed; fall through to the active tab.
+            return null;
         }
     }
 
-    if (commandTab && commandTab.url && Number.isInteger(commandTab.id)) return commandTab;
     const tabs = await tabsQuery({ active: true, currentWindow: true });
     return tabs && tabs[0] ? tabs[0] : null;
 }
