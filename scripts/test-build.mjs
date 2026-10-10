@@ -886,7 +886,8 @@ test('queued hotkeys remain bound to their originating tab', () => {
     const background = readFileSync(join(root, 'background.js'), 'utf8');
     assert.match(shared, /function tabsGet\(tabId\)/);
     assert.match(background, /await tabsGet\(commandTab\.id\)/);
-    assert.match(background, /const key = commandTab && Number\.isInteger\(commandTab\.id\)/);
+    assert.match(background, /const originTab = commandTab && Number\.isInteger\(commandTab\.id\)/);
+    assert.match(background, /const key = originTab\.id;/);
 });
 
 test('hotkeys confirm top-frame delivery before feedback or persistence', () => {
@@ -2191,4 +2192,30 @@ test('closed AudioContext invalidates even previously connected isolated capture
     assert.equal(reconnect(element), false);
     assert.equal(element.dataset.vcFallbackReason, 'route-failed');
     assert.equal(invalidations, 1);
+});
+
+
+test('queued hotkeys without an event tab keep their original tab through a tab switch', async () => {
+    const source = readFileSync(join(root, 'background.js'), 'utf8');
+    const begin = source.indexOf('async function enqueueCommand(command, commandTab) {');
+    const end = source.indexOf('async function getActiveTab(commandTab) {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    const seen = [];
+    let active = { id: 1 };
+    const ctx = {
+        commandChains: new Map(),
+        getActiveTab: async () => ({ ...active }),
+        handleCommand: async (command, tab) => {
+            seen.push([command, tab.id]);
+            if (command === 'first') await new Promise(resolve => setTimeout(resolve, 15));
+        }
+    };
+    const enqueue = runInNewContext('(' + source.slice(begin, end).trim() + ')', ctx);
+    const first = enqueue('first');
+    const second = enqueue('second');
+    active = { id: 2 };
+    const third = enqueue('third');
+    await Promise.all([first, second, third]);
+    assert.deepEqual(seen.slice(0, 2).map(x => x[1]), [1, 1]);
+    assert.equal(seen.find(x => x[0] === 'third')[1], 2);
 });
