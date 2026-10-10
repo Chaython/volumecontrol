@@ -1744,7 +1744,7 @@ test('failed first MediaElementSource connection keeps its source and restores a
     const ensureStart = page.indexOf('    function ensureMediaRoute(element) {');
     const ensureEnd = page.indexOf('    // Rate-limited fallback write shared', ensureStart);
     const wireStart = page.indexOf('    function wireMediaRoute(route) {');
-    const wireEnd = page.indexOf('    function ensureMediaRoute(element) {', wireStart);
+    const wireEnd = page.indexOf('    function scheduleMediaRouteRecovery(element, route) {', wireStart);
     assert.ok(ensureStart > 0 && ensureEnd > ensureStart && wireStart > 0 && wireEnd > wireStart);
 
     const nodes = [];
