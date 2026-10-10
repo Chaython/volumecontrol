@@ -337,6 +337,12 @@ try {
         return Boolean(data?.siteSettings?.["browser-smoke.invalid"]);
     });
     check('Options remembered profile creates successfully', true);
+    // The Options target is deliberately opened as a background tab for this
+    // smoke test. Windows Edge may heavily throttle its 50ms storage-change
+    // redraw timer, even though the storage mutation has already succeeded.
+    // Invoke the real renderer explicitly; the next assertion still proves
+    // the row and its Remove control were actually created in the DOM.
+    await cdp.eval(settingsSession, 'renderMemoryList()');
     await waitFor(async () => await cdp.eval(settingsSession,
         'Boolean(document.querySelector("#memoryList .remove-btn"))'));
     await cdp.eval(settingsSession, 'document.querySelector("#memoryList .remove-btn").click();true');
