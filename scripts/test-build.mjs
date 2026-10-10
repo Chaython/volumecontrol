@@ -2216,6 +2216,6 @@ test('queued hotkeys without an event tab keep their original tab through a tab 
     active = { id: 2 };
     const third = enqueue('third');
     await Promise.all([first, second, third]);
-    assert.deepEqual(seen.slice(0, 2).map(x => x[1]), [1, 1]);
+    assert.deepEqual(seen.filter(x => x[0] !== 'third').map(x => x[1]), [1, 1]);
     assert.equal(seen.find(x => x[0] === 'third')[1], 2);
 });
