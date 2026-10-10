@@ -2024,7 +2024,7 @@ test('cross-origin media rejection does not allocate an unnecessary AudioContext
 test('isolated captured media source recovers from analyser connect failure without unsafe gain', () => {
     const content = readFileSync(join(root, 'cs.js'), 'utf8');
     const begin = content.indexOf('function reconnectIsolatedCapturedSource(element) {');
-    const end = content.indexOf('function connectOutput(element) {', begin);
+    const end = content.indexOf('function scheduleIsolatedCapturedSourceRetry(element) {', begin);
     assert.ok(begin >= 0 && end > begin);
     const calls = [];
     const element = { dataset: { vcFallback: 'true' } };
@@ -2068,7 +2068,7 @@ test('isolated captured media source recovers from analyser connect failure with
 test('isolated captured source retries original node after both initial connect routes fail', () => {
     const content = readFileSync(join(root, 'cs.js'), 'utf8');
     const begin = content.indexOf('function reconnectIsolatedCapturedSource(element) {');
-    const end = content.indexOf('function connectOutput(element) {', begin);
+    const end = content.indexOf('function scheduleIsolatedCapturedSourceRetry(element) {', begin);
     const element = { dataset: {} };
     let attempts = 0;
     let failures = 2;
