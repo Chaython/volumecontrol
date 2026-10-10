@@ -30,6 +30,10 @@ let siteSettingsSaveChain = Promise.resolve();
 let volumeRequestGeneration = 0;
 let volumeDeliveryChain = Promise.resolve();
 let normalizerRequestGeneration = 0;
+let muteRequestGeneration = 0;
+let muteDeliveryChain = Promise.resolve();
+let monoRequestGeneration = 0;
+let monoDeliveryChain = Promise.resolve();
 
 function mutateSiteSettings(mutation) {
   return runtimeSendMessage({ command: "mutateSiteSettings", mutation });
@@ -676,10 +680,19 @@ async function setVolume(dB, tab, options = {}) {
 
 async function toggleMono(tab) {
   const monoCheckbox = cached.monoCheckbox || document.querySelector("#mono-checkbox");
-  if (tab && monoCheckbox && !monoCheckbox.disabled && cached.monoAvailable) {
-      await tabsSendMessage(tab.id, { command: "setMono", mono: monoCheckbox.checked }).catch(handleError);
+  if (!tab || !monoCheckbox || monoCheckbox.disabled || !cached.monoAvailable) return;
+  const mono = Boolean(monoCheckbox.checked);
+  const requestGeneration = ++monoRequestGeneration;
+
+  const deliver = async () => {
+      if (requestGeneration !== monoRequestGeneration) return;
+      await tabsSendMessage(tab.id, { command: "setMono", mono }).catch(handleError);
+      if (requestGeneration !== monoRequestGeneration) return;
       await saveSiteSettings(tab);
-  }
+  };
+  const next = monoDeliveryChain.then(deliver, deliver);
+  monoDeliveryChain = next.catch(() => {});
+  return next;
 }
 
 
@@ -726,24 +739,41 @@ async function toggleNormalizer(tab) {
 
 async function toggleMute(tab, muted) {
   if (!tab) return;
-  applyMuteButtonState(muted);
-  // Broadcast the mute toggle to every frame (embedded players must mute too);
-  // the racy first response is ignored.
-  await tabsSendMessage(tab.id, { command: "setMute", muted }).catch(handleError);
-  // Authoritative state (and the volume for the badge feedback) comes from the
-  // top frame only — see refreshAudioControlState.
-  const state = await refreshAudioControlState(tab);
-  const dB = state && state.volume !== undefined
-      ? Number(state.volume)
-      : (Number(cached.slider && cached.slider.value) || 0);
-  // Update the browser-action badge immediately so the icon reflects mute state.
-  runtimeSendMessage({
-      command: "showNativeVolumeFeedback",
-      tabId: tab.id,
-      dB,
-      muted
-  }).catch(() => {});
-  await saveSiteSettings(tab);
+  const requestedMute = Boolean(muted);
+  const requestGeneration = ++muteRequestGeneration;
+  applyMuteButtonState(requestedMute);
+
+  // Deliver in order: Chrome/Firefox messages can complete out of order,
+  // and a stale mute reply must never repaint the newer user selection.
+  const deliver = async () => {
+      if (requestGeneration !== muteRequestGeneration) return;
+      await tabsSendMessage(tab.id, { command: "setMute", muted: requestedMute }).catch(handleError);
+      if (requestGeneration !== muteRequestGeneration) return;
+
+      const response = await tabsSendMessage(
+          tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS
+      ).catch(handleError);
+      if (requestGeneration !== muteRequestGeneration) return;
+      const state = response && response.response ? response.response : null;
+      if (state) applyAudioControlState(state);
+      const appliedMuted = state && state.muted !== undefined
+          ? Boolean(state.muted) : requestedMute;
+      // Restore the actual state if a restricted tab rejected the toggle.
+      applyMuteButtonState(appliedMuted);
+      const dB = state && state.volume !== undefined
+          ? Number(state.volume)
+          : (Number(cached.slider && cached.slider.value) || 0);
+      runtimeSendMessage({
+          command: "showNativeVolumeFeedback",
+          tabId: tab.id,
+          dB,
+          muted: appliedMuted
+      }).catch(() => {});
+      await saveSiteSettings(tab);
+  };
+  const next = muteDeliveryChain.then(deliver, deliver);
+  muteDeliveryChain = next.catch(() => {});
+  return next;
 }
 
 async function toggleRemember(tab) {
