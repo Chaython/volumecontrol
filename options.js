@@ -118,7 +118,7 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
     const commitVol = () => {
         const raw = volInput.value.trim();
         const v = raw ? Number(raw) : NaN;
-        const numeric = Number.isFinite(v) ? normalizeDb(v) : normalizeDb(volInput.dataset.numericValue);
+        const numeric = Number.isFinite(v) ? normalizeDb(v) : lastCommittedVol;
         volInput.dataset.numericValue = String(numeric);
         volInput.value = formatDb(numeric);
         if (numeric === lastCommittedVol) return;
