@@ -2732,3 +2732,38 @@ test('queued hotkeys cannot switch to a newly navigated URL in the same tab', as
     assert.equal((await fn(null)).url, liveUrl, 'a new command without an origin may resolve the current tab');
     assert.equal(await fn({ id: 4, url: 'https://example.com/unrelated' }), null);
 });
+
+
+test('temporary route restrictions clamp effective gain without forgetting the requested boost', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = source.indexOf('function enforceBoostLimit(options = {}) {');
+    const end = source.indexOf('function applyFallbackVolume(element, reason = "") {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    let ceiling = 0;
+    let bridgeSyncs = 0;
+    const ctx = {
+        tc: { vars: { dB: 12, requestedDb: 12 } },
+        normalizeDbForCurrentMedia: requested => Math.min(requested, ceiling),
+        syncPageAudioHook: () => { bridgeSyncs++; }
+    };
+    const enforce = runInNewContext('(' + source.slice(begin, end).trim() + ')', ctx);
+    assert.equal(enforce({ sync: true }), true);
+    assert.equal(ctx.tc.vars.dB, 0, 'temporary cross-origin route cannot boost');
+    assert.equal(ctx.tc.vars.requestedDb, 12, 'requested volume must survive restriction');
+    assert.equal(bridgeSyncs, 1);
+    ceiling = 32;
+    assert.equal(enforce({ sync: true }), true);
+    assert.equal(ctx.tc.vars.dB, 12, 'requested boost restores when the route becomes safe');
+    assert.equal(enforce({ sync: true }), false);
+    assert.equal(bridgeSyncs, 2);
+
+    ctx.tc.vars.requestedDb = -9;
+    ceiling = 0;
+    assert.equal(enforce(), true);
+    assert.equal(ctx.tc.vars.dB, -9, 'attenuation still works on fallback-only audio');
+    assert.equal(ctx.tc.vars.requestedDb, -9);
+
+    assert.match(source, /tc\.vars\.requestedDb = normalizeDb\(msg\.dB\)/);
+    assert.match(source, /tc\.vars\.requestedDb = normalizeDb\(s\.volume\)/);
+    assert.match(source, /if \(enforceBoostLimit\(\)\) applyState\(\)/);
+});
