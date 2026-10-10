@@ -1939,3 +1939,62 @@ test('rapid Normalize toggles serialize storage and cannot leave stale enabled s
     assert.equal(checkbox.checked, false);
     assert.equal(sandbox.cached.normalizerPending, false);
 });
+
+
+test('Remember-off waits for an in-flight profile write so it cannot be recreated', async () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = popup.indexOf('async function toggleRemember(tab) {');
+    const end = popup.indexOf('function showError(error) {', start);
+    assert.ok(start >= 0 && end > start);
+    let resolveOldSave;
+    const oldSave = new Promise(resolve => { resolveOldSave = resolve; });
+    const checkbox = { checked: false };
+    const removed = [];
+    const context = {
+        rememberRequestGeneration: 0,
+        rememberDeliveryChain: Promise.resolve(),
+        siteSettingsSaveChain: oldSave,
+        document: { getElementById: () => checkbox },
+        currentTabUrl: async () => 'https://example.com/watch?track=two',
+        normalizeSiteSettingsEntryInput: () => 'example.com/watch',
+        saveSiteSettings: async () => {},
+        mutateSiteSettings: async mutation => { removed.push(mutation); },
+        handleError: e => { throw e; }
+    };
+    const toggle = runInNewContext('(' + popup.slice(start, end).trim() + ')', context);
+    const removing = toggle({ id: 4 });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(removed.length, 0, 'remove must wait for earlier pending save');
+    resolveOldSave();
+    await removing;
+    assert.equal(removed.length, 1);
+    assert.equal(removed[0].type, 'removeForUrl');
+    assert.equal(removed[0].url, 'https://example.com/watch?track=two');
+});
+
+test('rapid Remember on-off preserves the most recent choice despite slow saving', async () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = popup.indexOf('async function toggleRemember(tab) {');
+    const end = popup.indexOf('function showError(error) {', start);
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const checkbox = { checked: true };
+    const mutations = [];
+    const context = {
+        rememberRequestGeneration: 0,
+        rememberDeliveryChain: Promise.resolve(),
+        siteSettingsSaveChain: Promise.resolve(),
+        document: { getElementById: () => checkbox },
+        currentTabUrl: async () => 'https://example.com/watch',
+        normalizeSiteSettingsEntryInput: () => 'example.com/watch',
+        saveSiteSettings: async () => { await delay(30); mutations.push('enable'); },
+        mutateSiteSettings: async mutation => { mutations.push(mutation.type); },
+        handleError: e => { throw e; }
+    };
+    const toggle = runInNewContext('(' + popup.slice(start, end).trim() + ')', context);
+    const on = toggle({ id: 4 });
+    await delay(5);
+    checkbox.checked = false;
+    const off = toggle({ id: 4 });
+    await Promise.all([on, off]);
+    assert.deepEqual(mutations, ['enable', 'removeForUrl']);
+});
