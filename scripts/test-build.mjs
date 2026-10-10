@@ -2098,3 +2098,47 @@ test('isolated captured source retries original node after both initial connect 
     assert.match(content, /capturedMediaSources\.set\(element,\s*\{/);
     assert.match(content, /element\.dataset\.vcHooked = "true";\s*tc\.vars\.mediaElements\.add\(element\);\s*const sourceConnected = reconnectIsolatedCapturedSource\(element\)/);
 });
+
+
+test('isolated captured source retries a bounded number of times without a new play event', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = content.indexOf('function scheduleIsolatedCapturedSourceRetry(element) {');
+    const end = content.indexOf('function connectOutput(element) {', begin);
+    assert.ok(begin > 0 && end > begin);
+    const element = { dataset: {} };
+    const captured = { connected: false, retryCount: 0, retryTimer: null };
+    const tasks = [];
+    let success = false;
+    let applied = 0;
+    let resumed = 0;
+    const ctx = {
+        tc: { vars: {
+            capturedMediaSources: new WeakMap([[element, captured]]),
+            audioCtx: { state: 'suspended' }
+        } },
+        setTimeout: cb => { tasks.push(cb); return tasks.length; },
+        reconnectIsolatedCapturedSource: () => {
+            if (!success) return false;
+            captured.connected = true;
+            return true;
+        },
+        resumeAudioContext: () => { resumed++; },
+        applyState: () => { applied++; }
+    };
+    const schedule = runInNewContext('(' + content.slice(begin, end).trim() + ')', ctx);
+    schedule(element);
+    schedule(element);
+    assert.equal(tasks.length, 1, 'a repeated event must not duplicate a scheduled retry');
+    tasks.shift()();
+    assert.equal(captured.retryCount, 1);
+    assert.equal(tasks.length, 1);
+    success = true;
+    tasks.shift()();
+    assert.equal(captured.connected, true);
+    assert.equal(applied, 1);
+    assert.equal(resumed, 1);
+    assert.equal(tasks.length, 0);
+    schedule(element);
+    assert.equal(tasks.length, 0, 'recovered elements need no more retries');
+    assert.match(content, /if \(!sourceConnected\) scheduleIsolatedCapturedSourceRetry\(element\)/);
+});
