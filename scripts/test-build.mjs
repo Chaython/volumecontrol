@@ -2548,3 +2548,50 @@ test('high resolution trackpad wheel deltas accumulate without multiplying norma
     assert.equal(wheel(-120), false);
     assert.equal(calls.length, 3);
 });
+
+
+test('remembered-site volume editor preserves cleared values and commits change/blur once', () => {
+    const source = readFileSync(join(root, 'options.js'), 'utf8');
+    const begin = source.indexOf("    volInput.addEventListener('input', () => {");
+    const end = source.indexOf("    volInput.addEventListener('blur', commitVol);", begin);
+    assert.ok(begin > 0 && end > begin);
+    const listeners = {};
+    const updates = [];
+    const volumeField = {
+        value: '12',
+        dataset: { numericValue: '12' },
+        addEventListener: (name, cb) => { listeners[name] = cb; }
+    };
+    const sandbox = {
+        volInput: volumeField,
+        initialVol: 12,
+        normalizeDb: n => Math.max(-32, Math.min(32, Number(n))),
+        formatDb: n => (n >= 0 ? '+' : '') + n + ' dB',
+        monoCheckbox: { checked: false },
+        muteCheckbox: { checked: false },
+        onUpdate: (key, patch) => { updates.push({ key, patch }); },
+        domain: 'example.com/watch'
+    };
+    const commit = runInNewContext(
+        '(function() {\n' + source.slice(begin, end) + '\nreturn commitVol; })()', sandbox
+    );
+    volumeField.value = '';
+    listeners.input();
+    assert.equal(volumeField.dataset.numericValue, '12',
+        'clearing the text field must not convert empty input to 0 dB');
+    commit();
+    assert.equal(volumeField.value, '+12 dB');
+    assert.equal(updates.length, 0);
+
+    volumeField.value = '5';
+    listeners.input();
+    commit();
+    commit();
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].patch.volume, 5);
+    volumeField.value = '-';
+    listeners.input();
+    commit();
+    assert.equal(updates.length, 1, 'an incomplete negative number must preserve the last valid volume');
+    assert.equal(volumeField.value, '+5 dB');
+});
