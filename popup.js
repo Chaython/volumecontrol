@@ -74,6 +74,8 @@ const cached = {
   monoAvailable: true,
   normalizerAvailable: true,
   normalizerPending: false,
+  mutePending: false,
+  monoPending: false,
   shortcuts: {}
 };
 
@@ -526,7 +528,7 @@ function applyAudioControlState(state = {}) {
   // Keep the mute button in sync with the content script's actual state.
   // This matters when a setVolume response carries a muted flag that was
   // changed elsewhere (e.g. via the hotkey while the popup was open).
-  if (state.muted !== undefined) applyMuteButtonState(state.muted);
+  if (state.muted !== undefined && !cached.mutePending) applyMuteButtonState(state.muted);
 }
 
 async function refreshAudioControlState(tab, shouldApply = () => true) {
@@ -538,14 +540,15 @@ async function refreshAudioControlState(tab, shouldApply = () => true) {
     // (captcha, payment, ads), those frames' content scripts answer with their
     // own unrestricted state, making the DRM/boost-limit note flicker in and
     // out while the volume slider is dragged.
+    const volumeGenerationAtRequest = volumeRequestGeneration;
     const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(handleError);
     const state = response && response.response ? response.response : null;
 
     if (state && shouldApply()) {
         applyAudioControlState(state);
-        if (state.volume !== undefined) setDisplayedVolume(state.volume);
-        if (state.mono !== undefined && cached.monoCheckbox) cached.monoCheckbox.checked = Boolean(state.mono);
-        if (state.muted !== undefined) applyMuteButtonState(state.muted);
+        if (state.volume !== undefined && volumeGenerationAtRequest === volumeRequestGeneration) setDisplayedVolume(state.volume);
+        if (state.mono !== undefined && cached.monoCheckbox && !cached.monoPending) cached.monoCheckbox.checked = Boolean(state.mono);
+        if (state.muted !== undefined && !cached.mutePending) applyMuteButtonState(state.muted);
     }
 
     return state;
@@ -561,8 +564,8 @@ async function pollAudioControlState(tab) {
     // committed value lags the thumb by up to the 40ms debounce, and a poll
     // response landing mid-drag would snap the thumb back (stale-flash).
     applyAudioControlState(state);
-    if (state.mono !== undefined && cached.monoCheckbox) cached.monoCheckbox.checked = Boolean(state.mono);
-    if (state.muted !== undefined) applyMuteButtonState(state.muted);
+    if (state.mono !== undefined && cached.monoCheckbox && !cached.monoPending) cached.monoCheckbox.checked = Boolean(state.mono);
+    if (state.muted !== undefined && !cached.mutePending) applyMuteButtonState(state.muted);
     return state;
 }
 
@@ -684,12 +687,14 @@ async function toggleMono(tab) {
   if (!tab || !monoCheckbox || monoCheckbox.disabled || !cached.monoAvailable) return;
   const mono = Boolean(monoCheckbox.checked);
   const requestGeneration = ++monoRequestGeneration;
+  cached.monoPending = true;
 
   const deliver = async () => {
       if (requestGeneration !== monoRequestGeneration) return;
       await tabsSendMessage(tab.id, { command: "setMono", mono }).catch(handleError);
       if (requestGeneration !== monoRequestGeneration) return;
       await saveSiteSettings(tab);
+      if (requestGeneration === monoRequestGeneration) cached.monoPending = false;
   };
   const next = monoDeliveryChain.then(deliver, deliver);
   monoDeliveryChain = next.catch(() => {});
@@ -752,6 +757,7 @@ async function toggleMute(tab, muted) {
   const requestedMute = Boolean(muted);
   const requestGeneration = ++muteRequestGeneration;
   applyMuteButtonState(requestedMute);
+  cached.mutePending = true;
 
   // Deliver in order: Chrome/Firefox messages can complete out of order,
   // and a stale mute reply must never repaint the newer user selection.
@@ -768,7 +774,8 @@ async function toggleMute(tab, muted) {
       if (state) applyAudioControlState(state);
       const appliedMuted = state && state.muted !== undefined
           ? Boolean(state.muted) : requestedMute;
-      // Restore the actual state if a restricted tab rejected the toggle.
+      // Restore the confirmed state only if this is still the latest toggle.
+      cached.mutePending = false;
       applyMuteButtonState(appliedMuted);
       const dB = state && state.volume !== undefined
           ? Number(state.volume)
