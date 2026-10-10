@@ -1074,6 +1074,7 @@ function applyState() {
             }
 
             if (el.dataset.vcHooked === "true") {
+                if (routeNeeded && isMediaPlaying(el)) reconnectIsolatedCapturedSource(el);
                 if (routeNeeded && isMediaPlaying(el) && tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
                     resumeAudioContext();
                 }
@@ -1458,6 +1459,51 @@ function registerMediaElement(element) {
     hookIfPlaying();
 }
 
+function reconnectIsolatedCapturedSource(element) {
+    const captured = tc.vars.capturedMediaSources && tc.vars.capturedMediaSources.get(element);
+    if (!captured) return false;
+    if (captured.connected) return true;
+    if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') return false;
+
+    // createMediaElementSource() irreversibly captures the element. If its
+    // first .connect() fails, NEVER attempt another createMediaElementSource:
+    // retain this exact node and retry a connection whenever playback/state
+    // changes. Prefer the normal upstream analyser route.
+    try {
+        captured.source.connect(tc.vars.inputAnalyserNode);
+        captured.connected = true;
+        captured.bypassInputAnalyser = false;
+    } catch (initialError) {
+        // A direct input-analyser connection may fail on some media engines.
+        // Route through our existing gain/limiter instead of pretending
+        // element.volume can restore its now-detached native audio path.
+        try {
+            const param = tc.vars.gainNode.gain;
+            const now = tc.vars.audioCtx.currentTime;
+            const safeGain = tc.vars.isBlocked ? 1 :
+                (tc.vars.muted ? 0 : Math.max(0, Math.min(1, getGainValue(tc.vars.dB))));
+            param.cancelScheduledValues(now);
+            param.setValueAtTime(safeGain, now);
+            captured.source.connect(tc.vars.gainNode);
+            captured.connected = true;
+            captured.bypassInputAnalyser = true;
+            if (tc.settings.debugMode) {
+                log(`isolated source recovered through gain-node bypass: ${initialError && initialError.message}`, 3);
+            }
+        } catch (recoveryError) {
+            if (tc.settings.debugMode) {
+                log(`isolated captured source pending reconnect: ${recoveryError && recoveryError.message}`, 2);
+            }
+            element.dataset.vcFallbackReason = 'route-failed';
+            invalidateBoostLimitCache();
+            return false;
+        }
+    }
+    delete element.dataset.vcFallbackReason;
+    invalidateBoostLimitCache();
+    return true;
+}
+
 function connectOutput(element) {
     if (isPageAudioManaged(element)) {
         if (element.dataset.vcFallback === "true") clearFallbackVolume(element);
@@ -1477,6 +1523,8 @@ function connectOutput(element) {
             return;
         }
         if (tc.vars.mediaElements) tc.vars.mediaElements.add(element);
+        // Retry the original node, never create a second MediaElementSource.
+        reconnectIsolatedCapturedSource(element);
         if (isMediaPlaying(element) && tc.vars.audioCtx.state === 'suspended') {
             resumeAudioContext();
         }
@@ -1596,13 +1644,21 @@ function connectOutput(element) {
         }
 
         if (source) {
-            source.connect(tc.vars.inputAnalyserNode);
-
+            if (!tc.vars.capturedMediaSources) tc.vars.capturedMediaSources = new WeakMap();
+            tc.vars.capturedMediaSources.set(element, {
+                source,
+                connected: false,
+                bypassInputAnalyser: false
+            });
+            // Claim the element before the first fallible connection so
+            // repeated attempts cannot create another MediaElementSource.
             element.dataset.vcHooked = "true";
             tc.vars.mediaElements.add(element);
+            const sourceConnected = reconnectIsolatedCapturedSource(element);
 
             // Wake up the AudioContext when media starts playing
             element.addEventListener('play', () => {
+                if (!reconnectIsolatedCapturedSource(element)) return;
                 if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
                     resumeAudioContext();
                 }
@@ -1614,8 +1670,9 @@ function connectOutput(element) {
                 element.addEventListener(evt, checkSuspend, { passive: true });
             }
 
-            // Remove any fallback adjustments we may have made earlier
-            clearFallbackVolume(element);
+            // Only release native fallback modifications after the
+            // captured source actually has a working WebAudio connection.
+            if (sourceConnected) clearFallbackVolume(element);
 
             applyState();
             checkSuspend();
