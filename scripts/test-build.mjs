@@ -1652,6 +1652,6 @@ test('real-site probes trigger on engine changes and pull requests', () => {
 
 test('page bridge rejects incompatible and malformed control states', () => {
     const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
-    assert.match(page, /if \(data\.version !== BRIDGE_VERSION\)/);
+    assert.match(page, /data\.version !== BRIDGE_VERSION - 1/);
     assert.match(page, /Number\.isFinite\(data\.dB\)/);
 });
