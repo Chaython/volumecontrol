@@ -2019,3 +2019,82 @@ test('cross-origin media rejection does not allocate an unnecessary AudioContext
     assert.equal(ensure({ tagName: 'AUDIO', src: 'https://other.example/audio.mp3' }), null);
     assert.equal(allocations, 0, 'unsupported media must not start a WebAudio context');
 });
+
+
+test('isolated captured media source recovers from analyser connect failure without unsafe gain', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = content.indexOf('function reconnectIsolatedCapturedSource(element) {');
+    const end = content.indexOf('function connectOutput(element) {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    const calls = [];
+    const element = { dataset: { vcFallback: 'true' } };
+    const analyser = { kind: 'analyser' };
+    const gainParam = {
+        value: 11,
+        cancelScheduledValues(now) { calls.push(['cancel', now]); },
+        setValueAtTime(value, now) { this.value = value; calls.push(['clamp', value, now]); }
+    };
+    const gain = { gain: gainParam };
+    const source = {
+        connect(to) {
+            if (to === analyser) throw new Error('Injected input analyser failure');
+            calls.push(['connect', to, gainParam.value]);
+        }
+    };
+    const captured = { source, connected: false, bypassInputAnalyser: false };
+    const sandbox = {
+        tc: { vars: {
+            capturedMediaSources: new WeakMap([[element, captured]]),
+            audioCtx: { currentTime: 5, state: 'running' },
+            inputAnalyserNode: analyser,
+            gainNode: gain, dB: 24, muted: false, isBlocked: false
+        }, settings: { debugMode: false } },
+        getGainValue: db => 10 ** (db / 20),
+        invalidateBoostLimitCache: () => {},
+        clearFallbackVolume: () => { calls.push(['clearFallback']); },
+        log: () => {}
+    };
+    const reconnect = runInNewContext('(' + content.slice(begin, end).trim() + ')', sandbox);
+    assert.equal(reconnect(element), true);
+    assert.equal(captured.connected, true);
+    assert.equal(captured.bypassInputAnalyser, true);
+    assert.equal(gainParam.value, 1);
+    assert.equal(calls.filter(c => c[0] === 'connect').length, 1);
+    assert.equal(calls.find(c => c[0] === 'connect')[2], 1, 'never expose +24 dB on bypass before gain clamp');
+    assert.equal(reconnect(element), true);
+    assert.equal(calls.filter(c => c[0] === 'connect').length, 1, 'successful source must not reconnect twice');
+});
+
+test('isolated captured source retries original node after both initial connect routes fail', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = content.indexOf('function reconnectIsolatedCapturedSource(element) {');
+    const end = content.indexOf('function connectOutput(element) {', begin);
+    const element = { dataset: {} };
+    let attempts = 0;
+    let failures = 2;
+    const source = { connect: () => { attempts++; if (failures-- > 0) throw Error('temporary node failure'); } };
+    const captured = { source, connected: false };
+    const sandbox = {
+        tc: { vars: {
+            capturedMediaSources: new WeakMap([[element, captured]]),
+            audioCtx: { currentTime: 5, state: 'running' },
+            inputAnalyserNode: {},
+            gainNode: { gain: { cancelScheduledValues: () => {}, setValueAtTime: () => {} } },
+            dB: -12, muted: false, isBlocked: false
+        }, settings: { debugMode: false } },
+        getGainValue: db => 10 ** (db / 20),
+        invalidateBoostLimitCache: () => {},
+        clearFallbackVolume: () => {},
+        log: () => {}
+    };
+    const reconnect = runInNewContext('(' + content.slice(begin, end).trim() + ')', sandbox);
+    assert.equal(reconnect(element), false);
+    assert.equal(captured.connected, false);
+    assert.equal(element.dataset.vcFallbackReason, 'route-failed');
+    assert.equal(reconnect(element), true);
+    assert.equal(attempts, 3);
+    assert.equal(captured.connected, true);
+    assert.equal(element.dataset.vcFallbackReason, undefined);
+    assert.match(content, /capturedMediaSources\.set\(element,\s*\{/);
+    assert.match(content, /element\.dataset\.vcHooked = "true";\s*tc\.vars\.mediaElements\.add\(element\);\s*const sourceConnected = reconnectIsolatedCapturedSource\(element\)/);
+});
