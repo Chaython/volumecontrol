@@ -2410,10 +2410,13 @@
                     return nativeSrcObjectDescriptor.get.call(this);
                 },
                 set: function patchedSrcObjectSetter(value) {
-                    // A direct MediaStream route is tied to the old stream, so
-                    // tear only that route down before replacing srcObject.
-                    resetDirectMediaStreamRoute(this);
+                    // The native setter can throw (invalid srcObject type).
+                    // Never destroy the EXISTING audible route until the
+                    // replacement is accepted; otherwise a rejected update
+                    // leaves the old stream attached with its output severed.
+                    const previous = readMediaSrcObject(this);
                     nativeSrcObjectDescriptor.set.call(this, value);
+                    if (previous !== value) resetDirectMediaStreamRoute(this);
                     bindMediaStreamLifecycle(this, value);
                     registerMediaElement(this, { immediateFallback: true, eagerRoute: true });
                     log(`srcObject assigned (${isMediaStreamLike(value) ? "MediaStream" : typeof value})`);
