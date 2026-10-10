@@ -1793,6 +1793,7 @@ test('failed first MediaElementSource connection keeps its source and restores a
         effectiveGain: () => 5,
         safeDisconnect: () => {},
         wireMediaRoute: () => { fallbackInvoked = true; },
+        scheduleMediaRouteRecovery: () => {},
         log: () => {},
         getMediaSourceUrl: () => ''
     });
@@ -2284,4 +2285,76 @@ test('isolated gain chain construction is transactional and retries after an all
     assert.equal(meterCalls, 1, 'successful creation is not repeated');
 
     assert.match(source, /if \(!tc\.vars\.gainNode && !createGainNode\(\)\) \{\s*[\s\S]*?applyFallbackVolume\(element, "route-failed"\);\s*return;/);
+});
+
+
+test('page-world captured source retries connection failures without a new media event', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const begin = source.indexOf('    function scheduleMediaRouteRecovery(element, route) {');
+    const end = source.indexOf('    function ensureMediaRoute(element) {', begin);
+    assert.ok(begin >= 0 && end > begin);
+
+    const element = { tagName: 'AUDIO' };
+    const route = { context: { state: 'running' }, outputConnected: false };
+    const routes = new Map([[element, route]]);
+    const tasks = [];
+    let reconnectCalls = 0;
+    let resumed = 0;
+    const schedule = runInNewContext('(' + source.slice(begin, end).trim() + ')', {
+        mediaRoutes: routes,
+        setTimeout: (callback, ms) => {
+            assert.equal(ms, 250);
+            tasks.push(callback);
+            return tasks.length;
+        },
+        wireMediaRoute: current => {
+            reconnectCalls++;
+            if (reconnectCalls === 2) current.outputConnected = true;
+        },
+        resumeContext: () => { resumed++; }
+    });
+    schedule(element, route);
+    schedule(element, route);
+    assert.equal(tasks.length, 1, 'one retry timer per captured source');
+    tasks.shift()();
+    assert.equal(reconnectCalls, 1);
+    assert.equal(tasks.length, 1, 'retry after the first transient failure');
+    tasks.shift()();
+    assert.equal(reconnectCalls, 2);
+    assert.equal(route.outputConnected, true);
+    assert.equal(resumed, 1);
+    assert.equal(tasks.length, 0);
+    assert.equal(route.recoveryAttempts, 0);
+});
+
+test('page-world media route retries stop when the capture is released or retry limit is reached', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const begin = source.indexOf('    function scheduleMediaRouteRecovery(element, route) {');
+    const end = source.indexOf('    function ensureMediaRoute(element) {', begin);
+    const element = {};
+    const route = { context: { state: 'running' }, outputConnected: false };
+    const routes = new Map([[element, route]]);
+    const pending = [];
+    let attempts = 0;
+    const schedule = runInNewContext('(' + source.slice(begin, end).trim() + ')', {
+        mediaRoutes: routes,
+        setTimeout: fn => { pending.push(fn); return pending.length; },
+        wireMediaRoute: () => { attempts++; },
+        resumeContext: () => {}
+    });
+    schedule(element, route);
+    for (let i = 0; i < 6; i++) {
+        assert.equal(pending.length, 1);
+        pending.shift()();
+    }
+    assert.equal(attempts, 6);
+    assert.equal(pending.length, 0, 'bounded recovery must not run forever');
+
+    route.recoveryAttempts = 0;
+    schedule(element, route);
+    assert.equal(pending.length, 1);
+    routes.delete(element);
+    pending.shift()();
+    assert.equal(attempts, 6, 'released sources must not reconnect');
+    assert.match(source, /cancelMediaRouteRecovery\(route\);\s*disconnectMediaRouteOutput\(route\)/);
 });
