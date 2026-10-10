@@ -895,6 +895,9 @@ async function initializeControls(tab) {
     if (!tab) return;
     const initialVolumeGeneration = volumeRequestGeneration;
     const initialEditGeneration = volumeEditGeneration;
+    const initialRememberGeneration = rememberRequestGeneration;
+    const initialMonoGeneration = monoRequestGeneration;
+    const initialMuteGeneration = muteRequestGeneration;
     cached.activeTab = tab;
 
     const volumeSlider = document.querySelector("#volume-slider");
@@ -1029,7 +1032,9 @@ async function initializeControls(tab) {
         const settingsKey = getSiteSettingsKey(data.siteSettings || {}, tab.url);
         const saved = settingsKey ? data.siteSettings[settingsKey] : null;
         if (saved) {
-            if (rememberCheckbox) rememberCheckbox.checked = true;
+            if (rememberCheckbox && initialRememberGeneration === rememberRequestGeneration) {
+                rememberCheckbox.checked = true;
+            }
             // The content script already applies Remember on page initialization
             // and on storage changes. Replaying storage here overwrites newer
             // in-tab state (and may send a brief loud gain change) just because
@@ -1039,8 +1044,14 @@ async function initializeControls(tab) {
                 if (saved.volume !== undefined &&
                     initialVolumeGeneration === volumeRequestGeneration &&
                     initialEditGeneration === volumeEditGeneration) setDisplayedVolume(saved.volume);
-                if (saved.mono !== undefined && monoCheckbox) monoCheckbox.checked = Boolean(saved.mono);
-                if (saved.muted !== undefined) applyMuteButtonState(saved.muted);
+                if (saved.mono !== undefined && monoCheckbox &&
+                    initialMonoGeneration === monoRequestGeneration && !cached.monoPending) {
+                    monoCheckbox.checked = Boolean(saved.mono);
+                }
+                if (saved.muted !== undefined &&
+                    initialMuteGeneration === muteRequestGeneration && !cached.mutePending) {
+                    applyMuteButtonState(saved.muted);
+                }
             }
         } else if (!audioState) {
             const volumeGeneration = volumeRequestGeneration;
@@ -1054,13 +1065,19 @@ async function initializeControls(tab) {
                     setDisplayedVolume(response.response);
                 }
             }).catch(handleError);
+            const monoGeneration = monoRequestGeneration;
             tabsSendMessage(tab.id, { command: "getMono" }, TOP_FRAME_OPTIONS).then((response) => {
-                if (response && response.response !== undefined && monoCheckbox) {
-                    monoCheckbox.checked = response.response;
+                if (response && response.response !== undefined && monoCheckbox &&
+                    monoGeneration === monoRequestGeneration && !cached.monoPending) {
+                    monoCheckbox.checked = Boolean(response.response);
                 }
             }).catch(handleError);
+            const muteGeneration = muteRequestGeneration;
             tabsSendMessage(tab.id, { command: "getMute" }, TOP_FRAME_OPTIONS).then((response) => {
-                if (response && response.response !== undefined) applyMuteButtonState(response.response);
+                if (response && response.response !== undefined &&
+                    muteGeneration === muteRequestGeneration && !cached.mutePending) {
+                    applyMuteButtonState(response.response);
+                }
             }).catch(handleError);
         }
     } catch (e) {
