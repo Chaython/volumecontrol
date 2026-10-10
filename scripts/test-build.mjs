@@ -2636,6 +2636,7 @@ test('closed direct MediaStream routes rebuild on a fresh AudioContext without r
         },
         connectNative: () => {},
         effectiveGain: () => 2,
+        getMediaSourceUrl: () => '',
         log: () => {}
     };
     const ensure = runInNewContext('(' + setup.trim() + ')', sandbox);
