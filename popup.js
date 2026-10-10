@@ -28,6 +28,7 @@ const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain
 const WHEEL_STEP_DB = 1;  // volume change per wheel notch (matches hotkey step)
 let siteSettingsSaveChain = Promise.resolve();
 let volumeRequestGeneration = 0;
+let volumeEditGeneration = 0;
 let volumeDeliveryChain = Promise.resolve();
 let normalizerRequestGeneration = 0;
 let normalizerDeliveryChain = Promise.resolve();
@@ -543,12 +544,15 @@ async function refreshAudioControlState(tab, shouldApply = () => true) {
     // own unrestricted state, making the DRM/boost-limit note flicker in and
     // out while the volume slider is dragged.
     const volumeGenerationAtRequest = volumeRequestGeneration;
+    const volumeEditGenerationAtRequest = volumeEditGeneration;
     const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(handleError);
     const state = response && response.response ? response.response : null;
 
     if (state && shouldApply()) {
         applyAudioControlState(state);
-        if (state.volume !== undefined && volumeGenerationAtRequest === volumeRequestGeneration) setDisplayedVolume(state.volume);
+        if (state.volume !== undefined &&
+            volumeGenerationAtRequest === volumeRequestGeneration &&
+            volumeEditGenerationAtRequest === volumeEditGeneration) setDisplayedVolume(state.volume);
         if (state.mono !== undefined && cached.monoCheckbox && !cached.monoPending) cached.monoCheckbox.checked = Boolean(state.mono);
         if (state.muted !== undefined && !cached.mutePending) applyMuteButtonState(state.muted);
     }
@@ -889,6 +893,8 @@ function showError(error) {
 
 async function initializeControls(tab) {
     if (!tab) return;
+    const initialVolumeGeneration = volumeRequestGeneration;
+    const initialEditGeneration = volumeEditGeneration;
     cached.activeTab = tab;
 
     const volumeSlider = document.querySelector("#volume-slider");
@@ -949,12 +955,14 @@ async function initializeControls(tab) {
           }, 40);
       };
       volumeSlider.addEventListener("input", () => {
+          volumeEditGeneration++;
           cancelPendingTextCommit();
           const normalizedDb = setDisplayedVolume(volumeSlider.value);
           commitVolume(normalizedDb);
       });
       // Commit immediately when the user releases the slider.
       volumeSlider.addEventListener("change", () => {
+          volumeEditGeneration++;
           cancelPendingTextCommit();
           if (volumeCommitTimer) {
               clearTimeout(volumeCommitTimer);
@@ -969,6 +977,7 @@ async function initializeControls(tab) {
       // The debounce lets the user finish typing multi-digit values
       // (e.g. "-15") before we commit, avoiding partial-number jumps.
       volumeText.addEventListener("input", () => {
+            volumeEditGeneration++;
             cancelPendingVolumeCommit();
             // Even an invalid/empty edit cancels an earlier valid pending
             // text value; otherwise clearing "-12" still commits -12 later.
@@ -983,6 +992,7 @@ async function initializeControls(tab) {
       // Commit immediately on Enter so the user does not have to wait
       // for the debounce, and reformat the field on blur.
       volumeText.addEventListener("change", () => {
+           volumeEditGeneration++;
            cancelPendingVolumeCommit();
            if (textCommitTimer) { clearTimeout(textCommitTimer); textCommitTimer = null; }
            const parsed = parseDbText(volumeText.value);
@@ -1026,13 +1036,23 @@ async function initializeControls(tab) {
             // the popup was opened. Only use storage for DISPLAY if this tab
             // has no reachable content-script state.
             if (!audioState) {
-                if (saved.volume !== undefined) setDisplayedVolume(saved.volume);
+                if (saved.volume !== undefined &&
+                    initialVolumeGeneration === volumeRequestGeneration &&
+                    initialEditGeneration === volumeEditGeneration) setDisplayedVolume(saved.volume);
                 if (saved.mono !== undefined && monoCheckbox) monoCheckbox.checked = Boolean(saved.mono);
                 if (saved.muted !== undefined) applyMuteButtonState(saved.muted);
             }
         } else if (!audioState) {
+            const volumeGeneration = volumeRequestGeneration;
+            const editGeneration = volumeEditGeneration;
             tabsSendMessage(tab.id, { command: "getVolume" }, TOP_FRAME_OPTIONS).then((response) => {
-                if (response && response.response !== undefined) setVolume(response.response, null);
+                if (response && response.response !== undefined &&
+                    volumeGeneration === volumeRequestGeneration &&
+                    editGeneration === volumeEditGeneration) {
+                    // Display an initial value only; do not create a new
+                    // command generation or suppress a pending user request.
+                    setDisplayedVolume(response.response);
+                }
             }).catch(handleError);
             tabsSendMessage(tab.id, { command: "getMono" }, TOP_FRAME_OPTIONS).then((response) => {
                 if (response && response.response !== undefined && monoCheckbox) {
