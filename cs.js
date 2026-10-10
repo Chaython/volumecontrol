@@ -1499,6 +1499,9 @@ function reconnectIsolatedCapturedSource(element) {
             return false;
         }
     }
+    // A native fallback installed before capture must not keep attenuating
+    // the page-managed WebAudio source after connection recovery.
+    clearFallbackVolume(element);
     delete element.dataset.vcFallbackReason;
     invalidateBoostLimitCache();
     return true;
@@ -1688,7 +1691,8 @@ function connectOutput(element) {
                 element.style.border = "";
                 delete element.dataset.vcDebugBorder;
             }
-            log("Hook Success!", 4);
+            if (sourceConnected) log("Hook Success!", 4);
+            else log("Captured isolated source retained for retry; initial audio connection failed", 2);
         } else {
             // Fallback: if we can't create an audio node, adjust element.volume directly so user notices changes
             applyFallbackVolume(element, "route-failed");
