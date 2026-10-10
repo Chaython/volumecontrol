@@ -339,7 +339,13 @@ async function getActiveTab(commandTab) {
     // closes, discard the command rather than applying it to another tab.
     if (commandTab && Number.isInteger(commandTab.id)) {
         try {
-            return (await tabsGet(commandTab.id)) || null;
+            const current = await tabsGet(commandTab.id);
+            // Resolve the original tab's current status, but preserve the URL
+            // captured by enqueueCommand. A playlist/SPA may have navigated
+            // while a previous hotkey waited in the queue. A newer URL must
+            // not become the new target of the obsolete queued command.
+            if (!current || (commandTab.url && current.url !== commandTab.url)) return null;
+            return current;
         } catch (e) {
             return null;
         }
