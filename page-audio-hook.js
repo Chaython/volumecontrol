@@ -1702,7 +1702,9 @@
                     return;
                 }
             }
-            setMediaGainValue(route);
+            // The recovery path has no limiter: keep positive boost disabled
+            // even when subsequent state changes request a higher dB value.
+            clampUnprotectedOutput(route);
             return;
         }
         if (route.sourceGainResetPending) {
