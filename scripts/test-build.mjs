@@ -1693,3 +1693,44 @@ test('popup serializes in-flight volume commands and applies the latest request 
     assert.equal(currentVolume, -20, 'late earlier message must not override latest slider input');
     assert.deepEqual(sends, [-10, -20]);
 });
+
+
+test('Remember writes use the currently navigated tab URL instead of popup open snapshot', async () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = popup.indexOf('async function currentTabUrl(tab) {');
+    const end = popup.indexOf('function saveSiteSettings(tab)', start);
+    assert.ok(start >= 0 && end > start);
+    const changes = [];
+    const ctx = {
+        tabsGet: async id => ({ id, url: 'https://example.com/watch?track=next' }),
+        document: { getElementById: id => id === 'remember-checkbox' ? { checked: true } : null },
+        cached: {
+            slider: { value: '-13' },
+            monoCheckbox: { checked: false },
+            muteBtn: { classList: { contains: () => false } }
+        },
+        normalizeSiteSettingsEntryInput: url => new URL(url).hostname + new URL(url).pathname,
+        normalizeControlDb: value => Number(value),
+        mutateSiteSettings: async mutation => { changes.push(mutation); },
+        handleError: error => { throw error; }
+    };
+    runInNewContext(popup.slice(start, end) + '\nthis.saveCurrent = saveSiteSettingsNow;', ctx);
+    await ctx.saveCurrent({ id: 4, url: 'https://example.com/watch?track=previous' });
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].url, 'https://example.com/watch?track=next');
+    assert.equal(changes[0].patch.volume, -13);
+    assert.match(popup, /type: "setForUrl",\s*url,/);
+    assert.match(popup, /type: "removeForUrl", url \}/);
+});
+
+test('cross-input debounce and invalid text edits cancel obsolete volume commits', () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const sliderInput = popup.indexOf('volumeSlider.addEventListener("input"');
+    const textInput = popup.indexOf('volumeText.addEventListener("input"');
+    assert.ok(sliderInput >= 0 && textInput >= 0);
+    assert.match(popup.slice(sliderInput, sliderInput + 175), /cancelPendingTextCommit\(\)/);
+    const section = popup.slice(textInput, textInput + 340);
+    assert.match(section, /cancelPendingVolumeCommit\(\)/);
+    assert.ok(section.indexOf('cancelPendingTextCommit()') < section.indexOf('if (parsed === null) return'),
+        'clearing the input must cancel its old pending valid dB write');
+});
