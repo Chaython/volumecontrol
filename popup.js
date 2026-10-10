@@ -142,18 +142,34 @@ document.addEventListener('DOMContentLoaded', () => {
   // Bound to document so it works anywhere in the popup. Skip when the user is
   // editing the dB text field so wheel-scrolling inside the field doesn't fight
   // with text selection.
+  let wheelRemainder = 0;
   document.addEventListener('wheel', (e) => {
     const tab = cached.activeTab;
     if (!tab) return;
     if (document.activeElement && document.activeElement.id === 'volume-text') return;
 
-    // High-resolution trackpads fire many small wheel events; only treat
-    // notches (|deltaY| >= 15) as volume changes to avoid runaway adjustments.
-    if (Math.abs(e.deltaY) < 15) return;
+    // Large wheel notches keep the existing one-step-per-event behavior.
+    // Accumulate sub-notch trackpad deltas instead of dropping each tiny
+    // event forever. Convert line/page wheel units to approximately pixels.
+    const delta = Number(e.deltaY) *
+        (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 120 : 1);
+    if (!Number.isFinite(delta) || delta === 0) return;
+    let adjustment = delta;
+    if (Math.abs(delta) >= 15) {
+      wheelRemainder = 0;
+    } else {
+      if (wheelRemainder && Math.sign(delta) !== Math.sign(wheelRemainder)) {
+        wheelRemainder = 0;
+      }
+      wheelRemainder += delta;
+      if (Math.abs(wheelRemainder) < 15) return;
+      adjustment = wheelRemainder;
+      wheelRemainder -= Math.sign(wheelRemainder) * 15;
+    }
 
     const sliderEl = cached.slider;
     const currentDb = sliderEl ? Number(sliderEl.value) : 0;
-    const direction = e.deltaY > 0 ? -1 : 1;
+    const direction = adjustment > 0 ? -1 : 1;
     const nextDb = normalizeDb(currentDb + direction * WHEEL_STEP_DB);
     if (nextDb === currentDb) return;
 
