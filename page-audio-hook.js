@@ -2049,6 +2049,22 @@
         if (route) {
             cancelMediaRouteRecovery(route);
             disconnectMediaRouteOutput(route);
+
+            // A detached paused element may later autoplay again without
+            // being reinserted in the DOM or calling the patched play().
+            // Retain a one-shot event wake-up on the ELEMENT, not a strong
+            // global Set entry. Otherwise its captured MediaElementSource
+            // remains disconnected forever after idle cleanup.
+            if (!element.isConnected && typeof element.addEventListener === "function" &&
+                entry && !entry.detachedPlayWake) {
+                const wake = () => {
+                    entry.detachedPlayWake = null;
+                    try { element.removeEventListener("play", wake); } catch (e) {}
+                    registerMediaElement(element, { immediateFallback: true, eagerRoute: true });
+                };
+                entry.detachedPlayWake = wake;
+                element.addEventListener("play", wake, { once: true, passive: true });
+            }
         }
         mediaElements.delete(element);
     }
@@ -2097,6 +2113,12 @@
         mediaElements.add(element);
         updatePageMediaRestriction();
         const entry = getMediaState(element);
+        // DOM reinsertion or patched play() can register an element before the
+        // detached wake fires. Remove that obsolete one-shot listener.
+        if (entry.detachedPlayWake) {
+            try { element.removeEventListener("play", entry.detachedPlayWake); } catch (e) {}
+            entry.detachedPlayWake = null;
+        }
         if (!entry.listenersInstalled && typeof element.addEventListener === "function") {
             const listenerCleanup = [];
             const listen = (type, handler, options) => {
