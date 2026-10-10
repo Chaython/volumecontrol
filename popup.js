@@ -9,6 +9,7 @@ const {
   storageGet,
   storageSet,
   tabsQuery,
+  tabsGet,
   tabsSendMessage,
   TOP_FRAME_OPTIONS,
   runtimeSendMessage,
@@ -27,6 +28,7 @@ const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain
 const WHEEL_STEP_DB = 1;  // volume change per wheel notch (matches hotkey step)
 let siteSettingsSaveChain = Promise.resolve();
 let volumeRequestGeneration = 0;
+let volumeDeliveryChain = Promise.resolve();
 let normalizerRequestGeneration = 0;
 
 function mutateSiteSettings(mutation) {
@@ -568,12 +570,27 @@ async function pollMeterState(tab) {
     return state;
 }
 
+async function currentTabUrl(tab) {
+    // A long-lived popup can outlast a same-tab SPA or playlist navigation.
+    // Storage changes must apply to the URL currently open, not the snapshot
+    // passed to initializeControls when the popup first appeared.
+    if (!tab || !Number.isInteger(tab.id)) return null;
+    try {
+        const current = await tabsGet(tab.id);
+        return current && typeof current.url === "string" ? current.url : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 async function saveSiteSettingsNow(tab) {
     try {
         const rememberCheckbox = document.getElementById("remember-checkbox");
-        if (!rememberCheckbox || !rememberCheckbox.checked || !tab || !tab.url) return;
+        if (!rememberCheckbox || !rememberCheckbox.checked || !tab) return;
+        const url = await currentTabUrl(tab);
+        if (!url) return;
 
-        const defaultSettingsKey = normalizeSiteSettingsEntryInput(tab.url);
+        const defaultSettingsKey = normalizeSiteSettingsEntryInput(url);
         if (!defaultSettingsKey) return;
 
         const volumeSlider = cached.slider || document.getElementById("volume-slider");
@@ -587,7 +604,7 @@ async function saveSiteSettingsNow(tab) {
         };
         await mutateSiteSettings({
             type: "mergeForUrl",
-            url: tab.url,
+            url,
             defaultKey: defaultSettingsKey,
             patch
         });
@@ -604,28 +621,30 @@ function saveSiteSettings(tab) {
 
 async function setVolume(dB, tab, options = {}) {
   const requestGeneration = ++volumeRequestGeneration;
-  let normalizedDb = setDisplayedVolume(dB);
+  const requestedDb = setDisplayedVolume(dB);
+  if (!tab) return;
 
-  if (tab) {
-      // Broadcast the new volume to EVERY frame in the tab so media living in
-      // embedded iframes (embedded players, ads with audio) is controlled too.
-      // The broadcast response is a race (first frame to respond wins) and is
-      // deliberately ignored.
+  // Serialize deliveries, not just UI responses. Otherwise a slow first
+  // tabs.sendMessage can apply *after* a newer slider movement and leave
+  // the real media volume older than the value visible in the popup.
+  const deliver = async () => {
+      // Drop obsolete requests that have not started delivery yet.
+      if (requestGeneration !== volumeRequestGeneration) return;
+      let normalizedDb = requestedDb;
+
+      // Apply to all frames, but use only the top frame's state for verdicts.
       await tabsSendMessage(tab.id, {
           command: "setVolume",
           dB: normalizedDb
       }).catch(handleError);
 
-      // Authoritative state: query the TOP FRAME only. Its response carries
-      // the verdict-clamped volume and the real boost-limit/DRM status, so the
-      // UI cannot flip between frames' answers as the slider moves.
+      // A more recent request will be delivered after this one; do not
+      // persist or display this now-obsolete response.
+      if (requestGeneration !== volumeRequestGeneration) return;
+
       const response = await tabsSendMessage(tab.id, {
           command: "getAudioControlState"
       }, TOP_FRAME_OPTIONS).catch(handleError);
-
-      // A newer slider/text request has already been issued. The newer message
-      // is authoritative; do not let this older response snap the UI backward,
-      // overwrite its remembered value, or repaint the badge.
       if (requestGeneration !== volumeRequestGeneration) return;
 
       if (response && response.response) {
@@ -647,7 +666,12 @@ async function setVolume(dB, tab, options = {}) {
           }).catch(() => {});
       }
       await saveSiteSettings(tab);
-  }
+  };
+
+  const next = volumeDeliveryChain.then(deliver, deliver);
+  // Keep the chain usable even if a downstream API unexpectedly rejects.
+  volumeDeliveryChain = next.catch(() => {});
+  return next;
 }
 
 async function toggleMono(tab) {
@@ -671,13 +695,14 @@ async function toggleNormalizer(tab) {
   cached.normalizerPending = true;
   applyNormalizerState({ normalizerEnabled: enabled });
   try {
-    const defaultKey = normalizeSiteSettingsEntryInput(tab.url);
+    const url = await currentTabUrl(tab);
+    const defaultKey = normalizeSiteSettingsEntryInput(url);
     if (!defaultKey) throw new Error("Cannot save a normalization preference for this URL");
     // Save before messaging the tab: a still-loading or restricted page may
     // not have a content-script receiver, but its saved preference is valid.
     const result = await mutateSiteNormalizerSettings({
       type: "setForUrl",
-      url: tab.url,
+      url,
       defaultKey,
       enabled
     });
@@ -724,13 +749,14 @@ async function toggleMute(tab, muted) {
 async function toggleRemember(tab) {
     try {
         const rememberCheckbox = document.getElementById("remember-checkbox");
-        const defaultSettingsKey = normalizeSiteSettingsEntryInput(tab.url);
+        const url = await currentTabUrl(tab);
+        const defaultSettingsKey = normalizeSiteSettingsEntryInput(url);
         if (!defaultSettingsKey) return;
 
         if (rememberCheckbox && rememberCheckbox.checked) {
             await saveSiteSettings(tab);
         } else {
-            await mutateSiteSettings({ type: "removeForUrl", url: tab.url });
+            await mutateSiteSettings({ type: "removeForUrl", url });
         }
     } catch (e) {
         handleError(e);
@@ -828,12 +854,24 @@ async function initializeControls(tab) {
 
     applyAudioControlState({ maxDb: MAX_DB, boostLimited: false, limitation: "" });
 
+    // Pending edits from the other control must never arrive later and undo
+    // the user's most recent slider/text adjustment.
+    let volumeCommitTimer = null;
+    let textCommitTimer = null;
+    const cancelPendingVolumeCommit = () => {
+        if (volumeCommitTimer !== null) clearTimeout(volumeCommitTimer);
+        volumeCommitTimer = null;
+    };
+    const cancelPendingTextCommit = () => {
+        if (textCommitTimer !== null) clearTimeout(textCommitTimer);
+        textCommitTimer = null;
+    };
+
     if (volumeSlider) {
       // Debounce the storage write and background feedback so rapid slider
       // dragging doesn't flood the content script with messages and trigger
       // excessive storage.local.set calls. The UI updates immediately; only
       // the downstream side effects are debounced.
-      let volumeCommitTimer = null;
       let lastCommittedDb = null;
       const commitVolume = (dB) => {
           if (volumeCommitTimer) clearTimeout(volumeCommitTimer);
@@ -844,11 +882,13 @@ async function initializeControls(tab) {
           }, 40);
       };
       volumeSlider.addEventListener("input", () => {
+          cancelPendingTextCommit();
           const normalizedDb = setDisplayedVolume(volumeSlider.value);
           commitVolume(normalizedDb);
       });
       // Commit immediately when the user releases the slider.
       volumeSlider.addEventListener("change", () => {
+          cancelPendingTextCommit();
           if (volumeCommitTimer) {
               clearTimeout(volumeCommitTimer);
               volumeCommitTimer = null;
@@ -861,11 +901,13 @@ async function initializeControls(tab) {
       // Debounced live update as the user types -- no Enter required.
       // The debounce lets the user finish typing multi-digit values
       // (e.g. "-15") before we commit, avoiding partial-number jumps.
-      let textCommitTimer = null;
       volumeText.addEventListener("input", () => {
+            cancelPendingVolumeCommit();
+            // Even an invalid/empty edit cancels an earlier valid pending
+            // text value; otherwise clearing "-12" still commits -12 later.
+            cancelPendingTextCommit();
             const parsed = parseDbText(volumeText.value);
             if (parsed === null) return;
-            if (textCommitTimer) clearTimeout(textCommitTimer);
             textCommitTimer = setTimeout(() => {
                 textCommitTimer = null;
                 setVolume(parsed, tab);
@@ -874,6 +916,7 @@ async function initializeControls(tab) {
       // Commit immediately on Enter so the user does not have to wait
       // for the debounce, and reformat the field on blur.
       volumeText.addEventListener("change", () => {
+           cancelPendingVolumeCommit();
            if (textCommitTimer) { clearTimeout(textCommitTimer); textCommitTimer = null; }
            const parsed = parseDbText(volumeText.value);
             if (parsed !== null) setVolume(parsed, tab);

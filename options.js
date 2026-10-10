@@ -322,7 +322,7 @@ async function renderMemoryList() {
                 if (newVal.muted !== undefined) patch.muted = !!newVal.muted;
                 await mutateSiteSettings({ type: "merge", key: domain, patch });
             }, async (oldDomain, newDomain) => {
-                const nd = normalizeSiteSettingsEntryInput(newDomain);
+                const nd = normalizeSiteSettingsEntryInput(newDomain, { includeQuery: true });
                 if (!nd) {
                     alert('Site cannot be empty.');
                     return;

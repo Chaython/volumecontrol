@@ -252,7 +252,7 @@ test('normalizer input detection is upstream of the manual slider in all audio p
     const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const content = readFileSync(join(root, 'cs.js'), 'utf8');
     assert.match(page, /connectNative\(inputAnalyser, gain\)/);
-    assert.match(page, /connectNative\(source, inputAnalyser\)/);
+    assert.match(page, /connectNative\(route\.source, inputAnalyser\)/);
     assert.match(page, /connectNative\(source, graph\.inputAnalyser/);
     assert.match(page, /connectNative\(this, graph\.inputAnalyser/);
     assert.match(page, /connectNative\(masterGain, graph\.inputAnalyser\)/);
@@ -904,7 +904,7 @@ test('manual query profiles preserve query keys while popup defaults remain path
     assert.match(background, /includeQuery: true/);
     assert.match(options, /normalizeSiteSettingsEntryInput\(newRememberedInput\.value, \{ includeQuery: true \}\)/);
     assert.match(options, /normalizeSiteSettingsEntryInput\(newDebugSiteInput\.value, \{ includeQuery: true \}\)/);
-    assert.match(popup, /const defaultSettingsKey = normalizeSiteSettingsEntryInput\(tab\.url\)/);
+    assert.match(popup, /const defaultSettingsKey = normalizeSiteSettingsEntryInput\(url\)/);
 });
 
 test('empty explicit whitelist stays empty after mode toggles', () => {
@@ -1247,6 +1247,7 @@ test('normalizer preference saves even without an active audio route or tab rece
         normalizerRequestGeneration: 0,
         document: { querySelector: () => checkbox },
         applyNormalizerState: ({ normalizerEnabled }) => { checkbox.checked = Boolean(normalizerEnabled); },
+        currentTabUrl: async tab => tab.url,
         normalizeSiteSettingsEntryInput: () => 'example.com/video',
         mutateSiteNormalizerSettings: async (mutation) => { saved.push(mutation); return { ok: true }; },
         tabsSendMessage: async () => { throw new Error('No receiving content script'); },
@@ -1614,4 +1615,123 @@ test('browser smoke covers startup mute restoration and page wrapper ownership',
     assert.match(source, /preflightRestored/);
     assert.match(source, /siteWrapperPreservedOnDisable/);
     assert.match(source, /siteWrapperPreservedOnReenable/);
+});
+
+
+test('media route source capture is recoverable and rescue path never boosts without limiter', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const begin = source.indexOf('    function ensureMediaRoute(element) {');
+    const end = source.indexOf('    // Rate-limited fallback write shared', begin);
+    assert.ok(begin > 0 && end > begin);
+    const setup = source.slice(begin, end);
+    assert.ok(setup.indexOf('connectNative(inputAnalyser, gain)') < setup.indexOf('createMediaRouteSource(context, element)'));
+    assert.match(setup, /mediaRoutes\.set\(element, route\);\s*connectNative\(route\.source, inputAnalyser\)/);
+    assert.match(setup, /route\.fallbackDirectOnly = true/);
+    assert.match(source, /if \(route\.fallbackDirectOnly\) \{/);
+    assert.match(source, /\(route\.limiterFallbackActive \|\| route\.fallbackDirectOnly\)/);
+    assert.match(source, /clampUnprotectedOutput\(route\)/);
+});
+
+test('remembered profile rename preserves exact URL query and closed hotkeys never retarget tabs', () => {
+    const options = readFileSync(join(root, 'options.js'), 'utf8');
+    const background = readFileSync(join(root, 'background.js'), 'utf8');
+    assert.match(options, /normalizeSiteSettingsEntryInput\(newDomain, \{ includeQuery: true \}\)/);
+    const start = background.indexOf('async function getActiveTab(commandTab) {');
+    const end = background.indexOf('async function getDomainState(tab)', start);
+    assert.ok(start >= 0 && end > start);
+    const fn = background.slice(start, end);
+    assert.match(fn, /return null;/);
+    assert.doesNotMatch(fn, /return commandTab/);
+});
+
+test('real-site probes trigger on engine changes and pull requests', () => {
+    const workflow = readFileSync(join(root, '.github/workflows/real-sites.yml'), 'utf8');
+    assert.match(workflow, /pull_request:/);
+    assert.match(workflow, /- 'page-audio-hook.js'/);
+    assert.match(workflow, /- 'cs.js'/);
+});
+
+test('page bridge rejects incompatible and malformed control states', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(page, /data\.version !== BRIDGE_VERSION - 1/);
+    assert.match(page, /Number\.isFinite\(data\.dB\)/);
+});
+
+
+test('popup serializes in-flight volume commands and applies the latest request last', async () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = popup.indexOf('async function setVolume(dB, tab, options = {}) {');
+    const end = popup.indexOf('async function toggleMono(tab)', start);
+    assert.ok(start >= 0 && end > start);
+    assert.match(popup, /let volumeDeliveryChain = Promise\.resolve\(\)/);
+    const sends = [];
+    let currentVolume = 0;
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const context = {
+        volumeRequestGeneration: 0,
+        volumeDeliveryChain: Promise.resolve(),
+        setDisplayedVolume: v => v,
+        tabsSendMessage: async (id, message) => {
+            if (message.command === 'setVolume') {
+                if (message.dB === -10) await delay(30);
+                currentVolume = message.dB;
+                sends.push(message.dB);
+            }
+            return { response: { volume: currentVolume, muted: false } };
+        },
+        TOP_FRAME_OPTIONS: { frameId: 0 },
+        handleError: () => {},
+        applyAudioControlState: () => {},
+        cached: { muteBtn: null },
+        runtimeSendMessage: async () => ({}),
+        saveSiteSettings: async () => {}
+    };
+    const setVolume = runInNewContext('(' + popup.slice(start, end).trim() + ')', context);
+    const first = setVolume(-10, { id: 1 }, { showFeedback: false });
+    await delay(5);
+    const last = setVolume(-20, { id: 1 }, { showFeedback: false });
+    await Promise.all([first, last]);
+    assert.equal(currentVolume, -20, 'late earlier message must not override latest slider input');
+    assert.deepEqual(sends, [-10, -20]);
+});
+
+
+test('Remember writes use the currently navigated tab URL instead of popup open snapshot', async () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = popup.indexOf('async function currentTabUrl(tab) {');
+    const end = popup.indexOf('function saveSiteSettings(tab)', start);
+    assert.ok(start >= 0 && end > start);
+    const changes = [];
+    const ctx = {
+        tabsGet: async id => ({ id, url: 'https://example.com/watch?track=next' }),
+        document: { getElementById: id => id === 'remember-checkbox' ? { checked: true } : null },
+        cached: {
+            slider: { value: '-13' },
+            monoCheckbox: { checked: false },
+            muteBtn: { classList: { contains: () => false } }
+        },
+        normalizeSiteSettingsEntryInput: url => new URL(url).hostname + new URL(url).pathname,
+        normalizeControlDb: value => Number(value),
+        mutateSiteSettings: async mutation => { changes.push(mutation); },
+        handleError: error => { throw error; }
+    };
+    runInNewContext(popup.slice(start, end) + '\nthis.saveCurrent = saveSiteSettingsNow;', ctx);
+    await ctx.saveCurrent({ id: 4, url: 'https://example.com/watch?track=previous' });
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].url, 'https://example.com/watch?track=next');
+    assert.equal(changes[0].patch.volume, -13);
+    assert.match(popup, /type: "setForUrl",\s*url,/);
+    assert.match(popup, /type: "removeForUrl", url \}/);
+});
+
+test('cross-input debounce and invalid text edits cancel obsolete volume commits', () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const sliderInput = popup.indexOf('volumeSlider.addEventListener("input"');
+    const textInput = popup.indexOf('volumeText.addEventListener("input"');
+    assert.ok(sliderInput >= 0 && textInput >= 0);
+    assert.match(popup.slice(sliderInput, sliderInput + 175), /cancelPendingTextCommit\(\)/);
+    const section = popup.slice(textInput, textInput + 650);
+    assert.match(section, /cancelPendingVolumeCommit\(\)/);
+    assert.ok(section.indexOf('cancelPendingTextCommit()') < section.indexOf('if (parsed === null) return'),
+        'clearing the input must cancel its old pending valid dB write');
 });
