@@ -1655,3 +1655,41 @@ test('page bridge rejects incompatible and malformed control states', () => {
     assert.match(page, /data\.version !== BRIDGE_VERSION - 1/);
     assert.match(page, /Number\.isFinite\(data\.dB\)/);
 });
+
+
+test('popup serializes in-flight volume commands and applies the latest request last', async () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = popup.indexOf('async function setVolume(dB, tab, options = {}) {');
+    const end = popup.indexOf('async function toggleMono(tab)', start);
+    assert.ok(start >= 0 && end > start);
+    assert.match(popup, /let volumeDeliveryChain = Promise\.resolve\(\)/);
+    const sends = [];
+    let currentVolume = 0;
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const context = {
+        volumeRequestGeneration: 0,
+        volumeDeliveryChain: Promise.resolve(),
+        setDisplayedVolume: v => v,
+        tabsSendMessage: async (id, message) => {
+            if (message.command === 'setVolume') {
+                if (message.dB === -10) await delay(30);
+                currentVolume = message.dB;
+                sends.push(message.dB);
+            }
+            return { response: { volume: currentVolume, muted: false } };
+        },
+        TOP_FRAME_OPTIONS: { frameId: 0 },
+        handleError: () => {},
+        applyAudioControlState: () => {},
+        cached: { muteBtn: null },
+        runtimeSendMessage: async () => ({}),
+        saveSiteSettings: async () => {}
+    };
+    const setVolume = runInNewContext('(' + popup.slice(start, end).trim() + ')', context);
+    const first = setVolume(-10, { id: 1 }, { showFeedback: false });
+    await delay(5);
+    const last = setVolume(-20, { id: 1 }, { showFeedback: false });
+    await Promise.all([first, last]);
+    assert.equal(currentVolume, -20, 'late earlier message must not override latest slider input');
+    assert.deepEqual(sends, [-10, -20]);
+});
