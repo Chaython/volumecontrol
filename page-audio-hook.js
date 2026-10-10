@@ -589,10 +589,17 @@
         route.outputConnected = false;
     }
 
+    function cancelMediaRouteRecovery(route) {
+        if (!route || !route.recoveryTimer) return;
+        clearTimeout(route.recoveryTimer);
+        route.recoveryTimer = null;
+    }
+
     function releaseMediaRoute(element) {
         const route = mediaRoutes.get(element);
         if (!route) return;
 
+        cancelMediaRouteRecovery(route);
         disconnectMediaRouteOutput(route);
 
         // Do NOT disconnect route.source from route.inputAnalyser, and do NOT delete the
@@ -1758,6 +1765,29 @@
         setMediaGainValue(route);
     }
 
+    function scheduleMediaRouteRecovery(element, route) {
+        if (!route || route.outputConnected || route.recoveryTimer ||
+            (route.recoveryAttempts || 0) >= 6 ||
+            !route.context || route.context.state === "closed") return;
+
+        // No second createMediaElementSource is possible. A transient
+        // connect() failure must retry the SAME captured node even when the
+        // player is already playing and will not emit another play event.
+        route.recoveryTimer = setTimeout(() => {
+            route.recoveryTimer = null;
+            if (mediaRoutes.get(element) !== route ||
+                route.context.state === "closed" || route.outputConnected) return;
+            route.recoveryAttempts = (route.recoveryAttempts || 0) + 1;
+            wireMediaRoute(route);
+            if (route.outputConnected) {
+                route.recoveryAttempts = 0;
+                resumeContext(route.context);
+            } else {
+                scheduleMediaRouteRecovery(element, route);
+            }
+        }, 250);
+    }
+
     function ensureMediaRoute(element) {
         if (!mediaNeedsAudioRoute() || !isAudibleMediaElement(element)) return null;
         if (isLikelyDrmMedia(element)) return null;
@@ -1854,6 +1884,7 @@
                 safeDisconnect(route.gain);
                 mediaRoutes.set(element, route);
                 wireMediaRoute(route);
+                if (!route.outputConnected) scheduleMediaRouteRecovery(element, route);
                 return route;
             }
             return null;
@@ -1903,6 +1934,7 @@
             if (existingRoute) {
                 setNativeVolume(element, existingRoute.muteNative ? 0 : entry.baseVolume);
                 wireMediaRoute(existingRoute);
+                if (!existingRoute.outputConnected) scheduleMediaRouteRecovery(element, existingRoute);
                 return;
             }
 
@@ -1945,6 +1977,7 @@
             // causes an audible dip-then-snap spike.
             setNativeVolume(element, route.muteNative ? 0 : entry.baseVolume);
             wireMediaRoute(route);
+            if (!route.outputConnected) scheduleMediaRouteRecovery(element, route);
             // After wireMediaRoute, output should be reconnected. If the context
             // was suspended (e.g. after pause), resume it so audio flows again.
             if (route.outputConnected) resumeContext(route.context);
@@ -1989,7 +2022,10 @@
             entry.pendingFallbackVolume = null;
         }
         const route = mediaRoutes.get(element);
-        if (route) disconnectMediaRouteOutput(route);
+        if (route) {
+            cancelMediaRouteRecovery(route);
+            disconnectMediaRouteOutput(route);
+        }
         mediaElements.delete(element);
     }
 
@@ -2106,6 +2142,7 @@
                     route.sourceGainResetPending = true;
                     setNativeVolume(element, route.muteNative ? 0 : getMediaState(element).baseVolume);
                     wireMediaRoute(route);
+                    if (!route.outputConnected) scheduleMediaRouteRecovery(element, route);
                 } else {
                     applyMediaElementState(element, { immediateFallback: true, eagerRoute: true });
                 }
@@ -2329,6 +2366,7 @@
     function resetDirectMediaStreamRoute(element) {
         const route = mediaRoutes.get(element);
         if (!route || route.sourceKind !== "mediaStream") return;
+        cancelMediaRouteRecovery(route);
         disconnectMediaRouteOutput(route);
         safeDisconnect(route.source);
         mediaRoutes.delete(element);
