@@ -1615,3 +1615,43 @@ test('browser smoke covers startup mute restoration and page wrapper ownership',
     assert.match(source, /siteWrapperPreservedOnDisable/);
     assert.match(source, /siteWrapperPreservedOnReenable/);
 });
+
+
+test('media route source capture is recoverable and rescue path never boosts without limiter', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const begin = source.indexOf('    function ensureMediaRoute(element) {');
+    const end = source.indexOf('    // Rate-limited fallback write shared', begin);
+    assert.ok(begin > 0 && end > begin);
+    const setup = source.slice(begin, end);
+    assert.ok(setup.indexOf('connectNative(inputAnalyser, gain)') < setup.indexOf('createMediaRouteSource(context, element)'));
+    assert.match(setup, /mediaRoutes\.set\(element, route\);\s*connectNative\(route\.source, inputAnalyser\)/);
+    assert.match(setup, /route\.fallbackDirectOnly = true/);
+    assert.match(source, /if \(route\.fallbackDirectOnly\) \{/);
+    assert.match(source, /\(route\.limiterFallbackActive \|\| route\.fallbackDirectOnly\)/);
+    assert.match(source, /clampUnprotectedOutput\(route\)/);
+});
+
+test('remembered profile rename preserves exact URL query and closed hotkeys never retarget tabs', () => {
+    const options = readFileSync(join(root, 'options.js'), 'utf8');
+    const background = readFileSync(join(root, 'background.js'), 'utf8');
+    assert.match(options, /normalizeSiteSettingsEntryInput\(newDomain, \{ includeQuery: true \}\)/);
+    const start = background.indexOf('async function getActiveTab(commandTab) {');
+    const end = background.indexOf('async function getDomainState(tab)', start);
+    assert.ok(start >= 0 && end > start);
+    const fn = background.slice(start, end);
+    assert.match(fn, /return null;/);
+    assert.doesNotMatch(fn, /return commandTab/);
+});
+
+test('real-site probes trigger on engine changes and pull requests', () => {
+    const workflow = readFileSync(join(root, '.github/workflows/real-sites.yml'), 'utf8');
+    assert.match(workflow, /pull_request:/);
+    assert.match(workflow, /- 'page-audio-hook.js'/);
+    assert.match(workflow, /- 'cs.js'/);
+});
+
+test('page bridge rejects incompatible and malformed control states', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(page, /if \(data\.version !== BRIDGE_VERSION\)/);
+    assert.match(page, /Number\.isFinite\(data\.dB\)/);
+});
