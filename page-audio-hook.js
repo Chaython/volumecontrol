@@ -1629,8 +1629,8 @@
 
     function setMediaGainValue(route) {
         const autoGain = state.normalizerEnabled ? dbToGain(route.normalizerGainDb || 0) : 1;
-        const targetGain = route.limiterFallbackActive
-            ? Math.min(1, effectiveGain()) : effectiveGain() * autoGain;
+        const targetGain = (route.limiterFallbackActive || route.fallbackDirectOnly)
+            ? Math.max(0, Math.min(1, effectiveGain())) : effectiveGain() * autoGain;
 
         try {
             const now = route.context.currentTime;
@@ -1702,8 +1702,8 @@
                     return;
                 }
             }
-            // The recovery path has no limiter: keep positive boost disabled
-            // even when subsequent state changes request a higher dB value.
+            // The recovery path has no limiter: later gain updates must
+            // also remain <= unity, including when Normalize is on.
             clampUnprotectedOutput(route);
             return;
         }
@@ -2642,9 +2642,18 @@
 
         if (data.command !== "setState") return;
 
-        // Version check — log a warning on mismatch but continue processing.
-        if (data.version !== undefined && data.version !== BRIDGE_VERSION) {
-            log(`Bridge version mismatch: page hook v${BRIDGE_VERSION}, content script v${data.version}. Some features may not work correctly.`);
+        // An old content script must not overwrite a newer page hook state.
+        // This validates protocol compatibility, not page-script authenticity:
+        // MAIN-world scripts can still observe window.postMessage traffic.
+        if (data.version !== BRIDGE_VERSION) {
+            log(`Ignoring incompatible bridge state v${data.version}; expected v${BRIDGE_VERSION}`);
+            return;
+        }
+        if (typeof data.dB !== "number" || !Number.isFinite(data.dB) ||
+            typeof data.enabled !== "boolean" || typeof data.mono !== "boolean" ||
+            typeof data.muted !== "boolean" || typeof data.normalizerEnabled !== "boolean") {
+            log("Ignoring malformed bridge control state");
+            return;
         }
 
         lastHeartbeat = Date.now();
