@@ -2503,3 +2503,48 @@ test('rejected srcObject replacement preserves the existing MediaStream audio ro
     assert.equal(listenersUpdated, 2);
     assert.equal(elementsRegistered, 2);
 });
+
+
+test('high resolution trackpad wheel deltas accumulate without multiplying normal wheel steps', () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const begin = popup.indexOf('  let wheelRemainder = 0;');
+    const end = popup.indexOf('  refreshShortcutHints()', begin);
+    assert.ok(begin > 0 && end > begin);
+    const calls = [];
+    const eventHandlers = {};
+    const cached = { activeTab: { id: 1 }, slider: { value: '0' } };
+    const document = {
+        activeElement: { id: '' },
+        addEventListener: (name, fn) => { eventHandlers[name] = fn; }
+    };
+    runInNewContext(popup.slice(begin, end), {
+        document, cached,
+        WHEEL_STEP_DB: 1,
+        normalizeDb: value => Math.max(-32, Math.min(32, value)),
+        setVolume: (value, tab) => {
+            calls.push({ value, id: tab.id });
+            cached.slider.value = String(value);
+        }
+    });
+    const wheel = (deltaY, deltaMode = 0) => {
+        let prevented = false;
+        eventHandlers.wheel({
+            deltaY, deltaMode,
+            preventDefault: () => { prevented = true; }
+        });
+        return prevented;
+    };
+    assert.equal(wheel(5), false);
+    assert.equal(wheel(5), false);
+    assert.equal(wheel(5), true, 'three 5px trackpad deltas should make one step');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].value, -1);
+    assert.equal(wheel(120), true);
+    assert.equal(calls.length, 2, 'one ordinary wheel event still makes only one step');
+    assert.equal(calls[1].value, -2);
+    assert.equal(wheel(1, 1), true, 'line-mode wheel deltas must count as notches');
+    assert.equal(calls[2].value, -3);
+    document.activeElement.id = 'volume-text';
+    assert.equal(wheel(-120), false);
+    assert.equal(calls.length, 3);
+});
