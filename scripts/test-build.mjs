@@ -1730,7 +1730,7 @@ test('cross-input debounce and invalid text edits cancel obsolete volume commits
     const textInput = popup.indexOf('volumeText.addEventListener("input"');
     assert.ok(sliderInput >= 0 && textInput >= 0);
     assert.match(popup.slice(sliderInput, sliderInput + 175), /cancelPendingTextCommit\(\)/);
-    const section = popup.slice(textInput, textInput + 340);
+    const section = popup.slice(textInput, textInput + 650);
     assert.match(section, /cancelPendingVolumeCommit\(\)/);
     assert.ok(section.indexOf('cancelPendingTextCommit()') < section.indexOf('if (parsed === null) return'),
         'clearing the input must cancel its old pending valid dB write');
