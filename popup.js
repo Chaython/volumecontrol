@@ -836,12 +836,24 @@ async function initializeControls(tab) {
 
     applyAudioControlState({ maxDb: MAX_DB, boostLimited: false, limitation: "" });
 
+    // Pending edits from the other control must never arrive later and undo
+    // the user's most recent slider/text adjustment.
+    let volumeCommitTimer = null;
+    let textCommitTimer = null;
+    const cancelPendingVolumeCommit = () => {
+        if (volumeCommitTimer !== null) clearTimeout(volumeCommitTimer);
+        volumeCommitTimer = null;
+    };
+    const cancelPendingTextCommit = () => {
+        if (textCommitTimer !== null) clearTimeout(textCommitTimer);
+        textCommitTimer = null;
+    };
+
     if (volumeSlider) {
       // Debounce the storage write and background feedback so rapid slider
       // dragging doesn't flood the content script with messages and trigger
       // excessive storage.local.set calls. The UI updates immediately; only
       // the downstream side effects are debounced.
-      let volumeCommitTimer = null;
       let lastCommittedDb = null;
       const commitVolume = (dB) => {
           if (volumeCommitTimer) clearTimeout(volumeCommitTimer);
@@ -852,11 +864,13 @@ async function initializeControls(tab) {
           }, 40);
       };
       volumeSlider.addEventListener("input", () => {
+          cancelPendingTextCommit();
           const normalizedDb = setDisplayedVolume(volumeSlider.value);
           commitVolume(normalizedDb);
       });
       // Commit immediately when the user releases the slider.
       volumeSlider.addEventListener("change", () => {
+          cancelPendingTextCommit();
           if (volumeCommitTimer) {
               clearTimeout(volumeCommitTimer);
               volumeCommitTimer = null;
@@ -869,8 +883,8 @@ async function initializeControls(tab) {
       // Debounced live update as the user types -- no Enter required.
       // The debounce lets the user finish typing multi-digit values
       // (e.g. "-15") before we commit, avoiding partial-number jumps.
-      let textCommitTimer = null;
       volumeText.addEventListener("input", () => {
+            cancelPendingVolumeCommit();
             const parsed = parseDbText(volumeText.value);
             if (parsed === null) return;
             if (textCommitTimer) clearTimeout(textCommitTimer);
@@ -882,6 +896,7 @@ async function initializeControls(tab) {
       // Commit immediately on Enter so the user does not have to wait
       // for the debounce, and reformat the field on blur.
       volumeText.addEventListener("change", () => {
+           cancelPendingVolumeCommit();
            if (textCommitTimer) { clearTimeout(textCommitTimer); textCommitTimer = null; }
            const parsed = parseDbText(volumeText.value);
             if (parsed !== null) setVolume(parsed, tab);
