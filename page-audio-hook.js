@@ -2645,13 +2645,15 @@
         // An old content script must not overwrite a newer page hook state.
         // This validates protocol compatibility, not page-script authenticity:
         // MAIN-world scripts can still observe window.postMessage traffic.
-        if (data.version !== BRIDGE_VERSION) {
+        if (data.version !== undefined && data.version !== BRIDGE_VERSION &&
+            data.version !== BRIDGE_VERSION - 1) {
             log(`Ignoring incompatible bridge state v${data.version}; expected v${BRIDGE_VERSION}`);
             return;
         }
         if (typeof data.dB !== "number" || !Number.isFinite(data.dB) ||
             typeof data.enabled !== "boolean" || typeof data.mono !== "boolean" ||
-            typeof data.muted !== "boolean" || typeof data.normalizerEnabled !== "boolean") {
+            typeof data.muted !== "boolean" ||
+            (data.normalizerEnabled !== undefined && typeof data.normalizerEnabled !== "boolean")) {
             log("Ignoring malformed bridge control state");
             return;
         }
