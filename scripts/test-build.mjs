@@ -258,7 +258,7 @@ test('normalizer input detection is upstream of the manual slider in all audio p
     assert.match(page, /connectNative\(masterGain, graph\.inputAnalyser\)/);
     assert.match(page, /sourceAnalyser\.getFloatTimeDomainData\(processor\.inputBuffer\)/);
     assert.doesNotMatch(page, /gainDb \+ \(config\.targetDb - rmsDb\)/);
-    assert.match(content, /tc\.vars\.inputAnalyserNode\.connect\(tc\.vars\.gainNode\)/);
+    assert.match(content, /input\.connect\(gain\)/);
     assert.match(content, /source\.connect\(tc\.vars\.inputAnalyserNode\)/);
     assert.match(content, /sourceAnalyser\.getFloatTimeDomainData\(tc\.vars\.inputAnalyserBuffer\)/);
     assert.doesNotMatch(content, /gainDb \+ \(config\.targetDb - rmsDb\)/);
@@ -358,7 +358,7 @@ test('automatic normalization gains are bounded by source peaks and silence gate
         let highGain = 0;
         for (let n = 0; n < 100; n++) highGain = update(highGain, -50, -45, highCfg);
         assert.ok(highGain <= 24, 'even user-selected high boost remains bounded');
-        assert.match(src, /inputAnalyser(?:Node)?\.fftSize = 8192/);
+        assert.match(src, /(?:inputAnalyser|input)\.fftSize = 8192/);
         assert.match(src, /0\.008 : 0\.035/);
     }
 });
@@ -1470,7 +1470,7 @@ test('normalizer source peak detector windows overlap 100ms updates in both worl
     assert.ok(frameDurationMs > 100,
         'sample-peak buffer must span longer than successive 100ms AGC updates');
     assert.equal((page.match(/inputAnalyser\.fftSize = 8192/g) || []).length, 2);
-    assert.match(isolated, /tc\.vars\.inputAnalyserNode\.fftSize = 8192/);
+    assert.match(isolated, /input\.fftSize = 8192/);
     assert.match(docs, /8,192 samples/);
 });
 
