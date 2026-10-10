@@ -9,6 +9,7 @@ const {
   storageGet,
   storageSet,
   tabsQuery,
+  tabsGet,
   tabsSendMessage,
   TOP_FRAME_OPTIONS,
   runtimeSendMessage,
@@ -569,12 +570,27 @@ async function pollMeterState(tab) {
     return state;
 }
 
+async function currentTabUrl(tab) {
+    // A long-lived popup can outlast a same-tab SPA or playlist navigation.
+    // Storage changes must apply to the URL currently open, not the snapshot
+    // passed to initializeControls when the popup first appeared.
+    if (!tab || !Number.isInteger(tab.id)) return null;
+    try {
+        const current = await tabsGet(tab.id);
+        return current && typeof current.url === "string" ? current.url : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 async function saveSiteSettingsNow(tab) {
     try {
         const rememberCheckbox = document.getElementById("remember-checkbox");
-        if (!rememberCheckbox || !rememberCheckbox.checked || !tab || !tab.url) return;
+        if (!rememberCheckbox || !rememberCheckbox.checked || !tab) return;
+        const url = await currentTabUrl(tab);
+        if (!url) return;
 
-        const defaultSettingsKey = normalizeSiteSettingsEntryInput(tab.url);
+        const defaultSettingsKey = normalizeSiteSettingsEntryInput(url);
         if (!defaultSettingsKey) return;
 
         const volumeSlider = cached.slider || document.getElementById("volume-slider");
@@ -588,7 +604,7 @@ async function saveSiteSettingsNow(tab) {
         };
         await mutateSiteSettings({
             type: "mergeForUrl",
-            url: tab.url,
+            url,
             defaultKey: defaultSettingsKey,
             patch
         });
@@ -679,13 +695,14 @@ async function toggleNormalizer(tab) {
   cached.normalizerPending = true;
   applyNormalizerState({ normalizerEnabled: enabled });
   try {
-    const defaultKey = normalizeSiteSettingsEntryInput(tab.url);
+    const url = await currentTabUrl(tab);
+    const defaultKey = normalizeSiteSettingsEntryInput(url);
     if (!defaultKey) throw new Error("Cannot save a normalization preference for this URL");
     // Save before messaging the tab: a still-loading or restricted page may
     // not have a content-script receiver, but its saved preference is valid.
     const result = await mutateSiteNormalizerSettings({
       type: "setForUrl",
-      url: tab.url,
+      url,
       defaultKey,
       enabled
     });
@@ -732,13 +749,14 @@ async function toggleMute(tab, muted) {
 async function toggleRemember(tab) {
     try {
         const rememberCheckbox = document.getElementById("remember-checkbox");
-        const defaultSettingsKey = normalizeSiteSettingsEntryInput(tab.url);
+        const url = await currentTabUrl(tab);
+        const defaultSettingsKey = normalizeSiteSettingsEntryInput(url);
         if (!defaultSettingsKey) return;
 
         if (rememberCheckbox && rememberCheckbox.checked) {
             await saveSiteSettings(tab);
         } else {
-            await mutateSiteSettings({ type: "removeForUrl", url: tab.url });
+            await mutateSiteSettings({ type: "removeForUrl", url });
         }
     } catch (e) {
         handleError(e);
