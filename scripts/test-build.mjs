@@ -2213,6 +2213,10 @@ test('queued hotkeys without an event tab keep their original tab through a tab 
     const enqueue = runInNewContext('(' + source.slice(begin, end).trim() + ')', ctx);
     const first = enqueue('first');
     const second = enqueue('second');
+    // Resolve both command-event tab snapshots before the simulated switch.
+    // The first command still remains in flight while the second is queued.
+    await Promise.resolve();
+    await Promise.resolve();
     active = { id: 2 };
     const third = enqueue('third');
     await Promise.all([first, second, third]);
