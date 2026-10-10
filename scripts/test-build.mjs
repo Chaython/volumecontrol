@@ -1817,9 +1817,13 @@ test('failed first MediaElementSource connection keeps its source and restores a
         resetMediaBoundaryGain: () => true,
         log: () => {}
     });
+    // Earlier independent failures may have used up the retry budget.
+    // Any eventual connection, including rescue-direct, must reset it.
+    route.recoveryAttempts = 6;
     wire(route);
     assert.equal(route.outputConnected, true);
     assert.equal(route.sourceConnected, true);
+    assert.equal(route.recoveryAttempts, 0, 'successful rescue replenishes the retry budget');
     assert.equal(route.gain.gain.value, 1, 'rescue output must not expose boost');
     assert.ok(connections.some(([from, to]) => from === sourceNode && to === route.gain));
     assert.ok(connections.some(([from, to]) => from === route.gain && to === destination));
