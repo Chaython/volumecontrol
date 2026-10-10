@@ -2410,3 +2410,51 @@ test('isolated captured-source retry does not resume the audio device when playb
     assert.equal(resumes, 0, 'a paused element must not wake Bluetooth or OS output');
     assert.equal(updates, 1);
 });
+
+
+test('hotkey retries and remembered writes do not cross SPA/tab navigation', async () => {
+    const source = readFileSync(join(root, 'background.js'), 'utf8');
+    const start = source.indexOf('async function isOriginalTabPage(tab) {');
+    const end = source.indexOf('async function setVolume(tab, domainState, dB) {', start);
+    assert.ok(start >= 0 && end > start);
+
+    const originalUrl = 'https://example.com/watch?id=one';
+    const nextUrl = 'https://example.com/watch?id=two';
+    let liveUrl = originalUrl;
+    const delivered = [];
+    const saved = [];
+    const sandbox = {
+        tabsGet: async () => ({ id: 42, url: liveUrl }),
+        tabsSendMessage: async (_id, message) => {
+            delivered.push(message.command);
+            if (message.command === 'getAudioControlState') {
+                liveUrl = nextUrl; // playlist advanced while hotkey was waiting
+                return { response: { volume: 8, muted: false } };
+            }
+            return {};
+        },
+        TOP_FRAME_OPTIONS: { frameId: 0 },
+        HOTKEY_DELIVERY_RETRY_MS: 5,
+        normalizeDb: v => Number(v),
+        mutateSiteSettings: async mutation => { saved.push(mutation); },
+        handleError: error => { throw error; }
+    };
+    runInNewContext(source.slice(start, end) +
+        '\nthis.helpers = {isOriginalTabPage, sendHotkeyCommandAndConfirm, saveRememberedSettings};', sandbox);
+    const tab = { id: 42, url: originalUrl };
+    const response = await sandbox.helpers.sendHotkeyCommandAndConfirm(tab,
+        { command: 'setVolume', dB: 8 });
+    assert.equal(response, null, 'navigation must invalidate the confirmation');
+    assert.deepEqual(delivered, ['setVolume', 'getAudioControlState'],
+        'new page must not receive another stale hotkey attempt');
+
+    const domainState = { settingsKey: 'example.com/watch', siteSettings: {} };
+    await sandbox.helpers.saveRememberedSettings(tab, domainState, { volume: 8 });
+    assert.equal(saved.length, 0, 'old page profile cannot be saved after navigation');
+
+    liveUrl = originalUrl;
+    await sandbox.helpers.saveRememberedSettings(tab, domainState, { volume: 8 });
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].key, domainState.settingsKey);
+    assert.equal(saved[0].patch.volume, 8);
+});
