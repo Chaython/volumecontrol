@@ -1547,7 +1547,12 @@ function scheduleIsolatedCapturedSourceRetry(element) {
         if (reconnectIsolatedCapturedSource(element)) {
             // A player may already be playing; no new 'play' event is
             // guaranteed after our first failed AudioNode.connect().
-            if (tc.vars.audioCtx.state === 'suspended') resumeAudioContext();
+            // A successful retry can finish after playback was paused.
+            // Leave the audio device suspended until the next real play,
+            // instead of reviving Bluetooth/OS audio handles for idle media.
+            if (isMediaPlaying(element) && tc.vars.audioCtx.state === 'suspended') {
+                resumeAudioContext();
+            }
             applyState();
         } else {
             scheduleIsolatedCapturedSourceRetry(element);
