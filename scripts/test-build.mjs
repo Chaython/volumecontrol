@@ -2595,3 +2595,65 @@ test('remembered-site volume editor preserves cleared values and commits change/
     assert.equal(updates.length, 1, 'an incomplete negative number must preserve the last valid volume');
     assert.equal(volumeField.value, '+5 dB');
 });
+
+
+test('closed direct MediaStream routes rebuild on a fresh AudioContext without recapturing element', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = page.indexOf('    function ensureMediaRoute(element) {');
+    const end = page.indexOf('    // Rate-limited fallback write shared', start);
+    assert.ok(start >= 0 && end > start);
+    const setup = page.slice(start, end);
+    const element = { tagName: 'AUDIO', src: '' };
+    const oldRoute = { sourceKind: 'mediaStream', context: { state: 'closed' }, outputConnected: false };
+    const mediaRoutes = new Map([[element, oldRoute]]);
+    let resetCount = 0;
+    let newSources = 0;
+    let contexts = 0;
+    const context = {
+        state: 'running', currentTime: 0,
+        createGain: () => ({ gain: { value: 1 } }),
+        createAnalyser: () => ({}),
+        createChannelSplitter: () => ({}),
+        createChannelMerger: () => ({}),
+        createDynamicsCompressor: () => ({})
+    };
+    const sandbox = {
+        mediaRoutes,
+        mediaNeedsAudioRoute: () => true,
+        isAudibleMediaElement: () => true,
+        isLikelyDrmMedia: () => false,
+        isLikelyCrossOriginMedia: () => false,
+        resetDirectMediaStreamRoute: media => {
+            assert.equal(media, element);
+            resetCount++;
+            mediaRoutes.delete(media);
+        },
+        getMediaContext: () => { contexts++; return context; },
+        markNode: n => n,
+        createMediaRouteSource: () => {
+            newSources++;
+            return { source: {}, kind: 'mediaStream', muteNative: true, stream: {} };
+        },
+        connectNative: () => {},
+        effectiveGain: () => 2,
+        log: () => {}
+    };
+    const ensure = runInNewContext('(' + setup.trim() + ')', sandbox);
+    const fresh = ensure(element);
+    assert.notEqual(fresh, oldRoute);
+    assert.equal(mediaRoutes.get(element), fresh);
+    assert.equal(fresh.sourceKind, 'mediaStream');
+    assert.equal(resetCount, 1);
+    assert.equal(contexts, 1);
+    assert.equal(newSources, 1);
+
+    mediaRoutes.set(element, { sourceKind: 'mediaElement', context: { state: 'closed' } });
+    assert.equal(ensure(element), mediaRoutes.get(element),
+        'an irreversible MediaElementSource must remain owned, even if its context died');
+    assert.equal(resetCount, 1);
+    assert.equal(newSources, 1);
+    const applyBegin = page.indexOf('    function applyMediaElementState(element, options = {}) {');
+    const applyEnd = page.indexOf('    function detachMediaElementListeners(element) {', applyBegin);
+    const apply = page.slice(applyBegin, applyEnd);
+    assert.match(apply, /previousRoute.sourceKind === "mediaStream"[\s\S]*?resetDirectMediaStreamRoute\(element\);[\s\S]*?const existingRoute = mediaRoutes.get\(element\)/);
+});
