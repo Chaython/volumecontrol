@@ -1781,7 +1781,10 @@
             wireMediaRoute(route);
             if (route.outputConnected) {
                 route.recoveryAttempts = 0;
-                resumeContext(route.context);
+                // A paused source may reconnect successfully while the
+                // context is suspended. Do not awaken the audio device until
+                // playback actually resumes.
+                if (isMediaPlaying(element)) resumeContext(route.context);
             } else {
                 scheduleMediaRouteRecovery(element, route);
             }
