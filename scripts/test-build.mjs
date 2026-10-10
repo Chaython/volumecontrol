@@ -1245,6 +1245,7 @@ test('normalizer preference saves even without an active audio route or tab rece
     const sandbox = {
         cached: { normalizerCheckbox: checkbox, normalizerAvailable: false },
         normalizerRequestGeneration: 0,
+        normalizerDeliveryChain: Promise.resolve(),
         document: { querySelector: () => checkbox },
         applyNormalizerState: ({ normalizerEnabled }) => { checkbox.checked = Boolean(normalizerEnabled); },
         currentTabUrl: async tab => tab.url,
@@ -1894,4 +1895,47 @@ test('rapid mono toggles deliver in order and do not save stale state', async ()
     assert.equal(currentMono, false);
     assert.deepEqual(delivered, [true, false]);
     assert.deepEqual(saved, [false]);
+});
+
+
+test('rapid Normalize toggles serialize storage and cannot leave stale enabled state', async () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = popup.indexOf('async function toggleNormalizer(tab) {');
+    const end = popup.indexOf('async function toggleMute(tab, muted) {', start);
+    assert.ok(start >= 0 && end > start);
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const checkbox = { checked: true, disabled: false };
+    const delivered = [];
+    const saved = [];
+    let effective = false;
+    const sandbox = {
+        cached: { normalizerCheckbox: checkbox, normalizerPending: false },
+        normalizerRequestGeneration: 0,
+        normalizerDeliveryChain: Promise.resolve(),
+        document: { querySelector: () => checkbox },
+        applyNormalizerState: ({ normalizerEnabled }) => { checkbox.checked = Boolean(normalizerEnabled); },
+        currentTabUrl: async tab => tab.url,
+        normalizeSiteSettingsEntryInput: () => 'example.com/video',
+        mutateSiteNormalizerSettings: async mutation => {
+            if (mutation.enabled) await delay(30);
+            effective = mutation.enabled;
+            saved.push(effective);
+            return { ok: true };
+        },
+        tabsSendMessage: async (_id, msg) => { delivered.push(msg.enabled); },
+        TOP_FRAME_OPTIONS: { frameId: 0 },
+        refreshAudioControlState: async () => {},
+        handleError: e => { throw e; }
+    };
+    const fn = runInNewContext('(' + popup.slice(start, end).trim() + ')', sandbox);
+    const first = fn({ id: 1, url: 'https://example.com/video' });
+    await delay(3);
+    checkbox.checked = false;
+    const second = fn({ id: 1, url: 'https://example.com/video' });
+    await Promise.all([first, second]);
+    assert.equal(effective, false, 'latest preference must persist');
+    assert.deepEqual(saved, [true, false]);
+    assert.deepEqual(delivered, [false], 'obsolete ON message must not follow OFF');
+    assert.equal(checkbox.checked, false);
+    assert.equal(sandbox.cached.normalizerPending, false);
 });
