@@ -2311,7 +2311,8 @@ test('page-world captured source retries connection failures without a new media
             reconnectCalls++;
             if (reconnectCalls === 2) current.outputConnected = true;
         },
-        resumeContext: () => { resumed++; }
+        resumeContext: () => { resumed++; },
+        isMediaPlaying: () => true
     });
     schedule(element, route);
     schedule(element, route);
@@ -2340,7 +2341,8 @@ test('page-world media route retries stop when the capture is released or retry 
         mediaRoutes: routes,
         setTimeout: fn => { pending.push(fn); return pending.length; },
         wireMediaRoute: () => { attempts++; },
-        resumeContext: () => {}
+        resumeContext: () => {},
+        isMediaPlaying: () => false
     });
     schedule(element, route);
     for (let i = 0; i < 6; i++) {
@@ -2357,4 +2359,26 @@ test('page-world media route retries stop when the capture is released or retry 
     pending.shift()();
     assert.equal(attempts, 6, 'released sources must not reconnect');
     assert.match(source, /cancelMediaRouteRecovery\(route\);\s*disconnectMediaRouteOutput\(route\)/);
+});
+
+
+test('page-world route recovery does not wake AudioContext for paused media', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const begin = source.indexOf('    function scheduleMediaRouteRecovery(element, route) {');
+    const end = source.indexOf('    function ensureMediaRoute(element) {', begin);
+    const element = { paused: true };
+    const route = { context: { state: 'suspended' }, outputConnected: false };
+    const timers = [];
+    let resumes = 0;
+    const schedule = runInNewContext('(' + source.slice(begin, end).trim() + ')', {
+        mediaRoutes: new Map([[element, route]]),
+        setTimeout: fn => { timers.push(fn); return timers.length; },
+        wireMediaRoute: current => { current.outputConnected = true; },
+        resumeContext: () => { resumes++; },
+        isMediaPlaying: () => false
+    });
+    schedule(element, route);
+    timers.shift()();
+    assert.equal(route.outputConnected, true);
+    assert.equal(resumes, 0, 'paused media must not reactivate its audio device');
 });
