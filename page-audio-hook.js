@@ -2645,7 +2645,7 @@
         // An old content script must not overwrite a newer page hook state.
         // This validates protocol compatibility, not page-script authenticity:
         // MAIN-world scripts can still observe window.postMessage traffic.
-        if (data.version !== BRIDGE_VERSION) {
+        if (data.version !== undefined && data.version !== BRIDGE_VERSION) {
             log(`Ignoring incompatible bridge state v${data.version}; expected v${BRIDGE_VERSION}`);
             return;
         }
