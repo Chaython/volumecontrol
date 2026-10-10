@@ -1462,8 +1462,15 @@ function registerMediaElement(element) {
 function reconnectIsolatedCapturedSource(element) {
     const captured = tc.vars.capturedMediaSources && tc.vars.capturedMediaSources.get(element);
     if (!captured) return false;
+    // Even a previously successful source goes silent if its AudioContext
+    // was closed by the page. A second MediaElementSource is impossible.
+    // Report failure rather than treating its old "connected" bit as sound.
+    if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') {
+        element.dataset.vcFallbackReason = 'route-failed';
+        invalidateBoostLimitCache();
+        return false;
+    }
     if (captured.connected) return true;
-    if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') return false;
 
     // createMediaElementSource() irreversibly captures the element. If its
     // first .connect() fails, NEVER attempt another createMediaElementSource:
