@@ -2713,3 +2713,22 @@ test('detached paused captured media wakes without a strong tracking-set referen
     assert.match(source.slice(registerStart, registerEnd),
         /if \(entry\.detachedPlayWake\) \{[\s\S]*?removeEventListener\("play", entry\.detachedPlayWake\)/);
 });
+
+
+test('queued hotkeys cannot switch to a newly navigated URL in the same tab', async () => {
+    const source = readFileSync(join(root, 'background.js'), 'utf8');
+    const start = source.indexOf('async function getActiveTab(commandTab) {');
+    const end = source.indexOf('async function getDomainState(tab) {', start);
+    assert.ok(start >= 0 && end > start);
+    let liveUrl = 'https://example.com/watch?v=old';
+    const fn = runInNewContext('(' + source.slice(start, end).trim() + ')', {
+        tabsGet: async id => ({ id, url: liveUrl }),
+        tabsQuery: async () => [{ id: 4, url: liveUrl }]
+    });
+    const initial = { id: 4, url: liveUrl };
+    assert.equal((await fn(initial)).url, initial.url);
+    liveUrl = 'https://example.com/watch?v=new';
+    assert.equal(await fn(initial), null, 'a queued hotkey must not target a later playlist item');
+    assert.equal((await fn(null)).url, liveUrl, 'a new command without an origin may resolve the current tab');
+    assert.equal(await fn({ id: 4, url: 'https://example.com/unrelated' }), null);
+});
