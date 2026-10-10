@@ -27,6 +27,7 @@ const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain
 const WHEEL_STEP_DB = 1;  // volume change per wheel notch (matches hotkey step)
 let siteSettingsSaveChain = Promise.resolve();
 let volumeRequestGeneration = 0;
+let volumeDeliveryChain = Promise.resolve();
 let normalizerRequestGeneration = 0;
 
 function mutateSiteSettings(mutation) {
@@ -604,28 +605,30 @@ function saveSiteSettings(tab) {
 
 async function setVolume(dB, tab, options = {}) {
   const requestGeneration = ++volumeRequestGeneration;
-  let normalizedDb = setDisplayedVolume(dB);
+  const requestedDb = setDisplayedVolume(dB);
+  if (!tab) return;
 
-  if (tab) {
-      // Broadcast the new volume to EVERY frame in the tab so media living in
-      // embedded iframes (embedded players, ads with audio) is controlled too.
-      // The broadcast response is a race (first frame to respond wins) and is
-      // deliberately ignored.
+  // Serialize deliveries, not just UI responses. Otherwise a slow first
+  // tabs.sendMessage can apply *after* a newer slider movement and leave
+  // the real media volume older than the value visible in the popup.
+  const deliver = async () => {
+      // Drop obsolete requests that have not started delivery yet.
+      if (requestGeneration !== volumeRequestGeneration) return;
+      let normalizedDb = requestedDb;
+
+      // Apply to all frames, but use only the top frame's state for verdicts.
       await tabsSendMessage(tab.id, {
           command: "setVolume",
           dB: normalizedDb
       }).catch(handleError);
 
-      // Authoritative state: query the TOP FRAME only. Its response carries
-      // the verdict-clamped volume and the real boost-limit/DRM status, so the
-      // UI cannot flip between frames' answers as the slider moves.
+      // A more recent request will be delivered after this one; do not
+      // persist or display this now-obsolete response.
+      if (requestGeneration !== volumeRequestGeneration) return;
+
       const response = await tabsSendMessage(tab.id, {
           command: "getAudioControlState"
       }, TOP_FRAME_OPTIONS).catch(handleError);
-
-      // A newer slider/text request has already been issued. The newer message
-      // is authoritative; do not let this older response snap the UI backward,
-      // overwrite its remembered value, or repaint the badge.
       if (requestGeneration !== volumeRequestGeneration) return;
 
       if (response && response.response) {
@@ -647,7 +650,12 @@ async function setVolume(dB, tab, options = {}) {
           }).catch(() => {});
       }
       await saveSiteSettings(tab);
-  }
+  };
+
+  const next = volumeDeliveryChain.then(deliver, deliver);
+  // Keep the chain usable even if a downstream API unexpectedly rejects.
+  volumeDeliveryChain = next.catch(() => {});
+  return next;
 }
 
 async function toggleMono(tab) {
