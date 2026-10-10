@@ -1704,6 +1704,7 @@
                 try {
                     connectNative(route.gain, route.context.destination);
                     route.outputConnected = true;
+                    route.recoveryAttempts = 0;
                 } catch (e) {
                     log(`media rescue output reconnect failed: ${e && e.message}`);
                     return;
@@ -1712,6 +1713,7 @@
             // The recovery path has no limiter: later gain updates must
             // also remain <= unity, including when Normalize is on.
             clampUnprotectedOutput(route);
+            if (route.outputConnected) route.recoveryAttempts = 0;
             return;
         }
         if (route.sourceGainResetPending) {
@@ -1727,6 +1729,7 @@
         const wantMode = currentRoutingMode();
         if (route.currentMode === wantMode && route.outputConnected && !route.limiterFallbackActive) {
             setMediaGainValue(route);
+            route.recoveryAttempts = 0;
             return;
         }
         if (!safetyLimiterRequired() && !clampDirectOutputGain(route)) return;
@@ -1747,6 +1750,7 @@
                 connectNative(route.analyser, route.context.destination);
             }
             route.outputConnected = true;
+            route.recoveryAttempts = 0;
             route.currentMode = wantMode;
             route.limiterFallbackActive = false;
         } catch (e) {
