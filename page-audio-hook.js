@@ -1675,6 +1675,36 @@
     }
 
     function wireMediaRoute(route) {
+        if (route.fallbackDirectOnly) {
+            // A captured MediaElementSource cannot go back to native audio.
+            // Retry a minimal source -> clamped gain -> destination chain
+            // without ever exposing positive gain outside a limiter.
+            if (route.sourceGainResetPending) {
+                if (!resetMediaBoundaryGain(route)) return;
+                route.sourceGainResetPending = false;
+            }
+            if (!clampUnprotectedOutput(route)) return;
+            if (!route.sourceConnected) {
+                try {
+                    connectNative(route.source, route.gain);
+                    route.sourceConnected = true;
+                } catch (e) {
+                    log(`media rescue source reconnect failed: ${e && e.message}`);
+                    return;
+                }
+            }
+            if (!route.outputConnected) {
+                try {
+                    connectNative(route.gain, route.context.destination);
+                    route.outputConnected = true;
+                } catch (e) {
+                    log(`media rescue output reconnect failed: ${e && e.message}`);
+                    return;
+                }
+            }
+            setMediaGainValue(route);
+            return;
+        }
         if (route.sourceGainResetPending) {
             if (!resetMediaBoundaryGain(route)) return;
             route.sourceGainResetPending = false;
@@ -1728,17 +1758,9 @@
 
     function ensureMediaRoute(element) {
         if (!mediaNeedsAudioRoute() || !isAudibleMediaElement(element)) return null;
-        // DRM-restricted media is never routed (see createMediaRouteSource).
         if (isLikelyDrmMedia(element)) return null;
         if (mediaRoutes.has(element)) {
             const existing = mediaRoutes.get(element);
-            // Defensive: if the route's context was closed out from under us
-            // (e.g. the page itself called .close() on it, or the tab was
-            // suspended by the OS and the context did not survive), we cannot
-            // recover via a new context -- createMediaElementSource() throws
-            // InvalidStateError when called twice on the same element. Log
-            // loudly so this is diagnosable; audio for this element will not
-            // play again until the page is reloaded.
             if (existing && existing.context && existing.context.state === "closed") {
                 log(`media route context is closed -- element audio is dead until page reload: ${getMediaSourceUrl(element) || element.tagName}`);
             }
@@ -1748,13 +1770,14 @@
         const context = getMediaContext();
         if (!context) return null;
 
+        let routeSource = null;
+        let route = null;
         try {
-            const routeSource = createMediaRouteSource(context, element);
-            if (!routeSource) return null;
-
-            const source = routeSource.source;
+            // Build every fallible node and allocate the analyser buffers BEFORE
+            // createMediaElementSource(). Once that call succeeds, native output
+            // is permanently redirected; a later allocation failure must not
+            // strand the element without a usable WebAudio path.
             const gain = markNode(context.createGain());
-            // Measure source RMS before the slider and automatic gain.
             const inputAnalyser = markNode(context.createAnalyser());
             const splitter = markNode(context.createChannelSplitter(2));
             const leftGain = markNode(context.createGain());
@@ -1768,19 +1791,20 @@
             rightGain.gain.value = 0.5;
             analyser.fftSize = 1024;
             analyser.smoothingTimeConstant = 0.35;
-            // 8192 frames span ~171ms at 48kHz, overlapping adjacent
-            // 100ms AGC samples rather than leaving ~15ms peak blind spots.
             inputAnalyser.fftSize = 8192;
             inputAnalyser.smoothingTimeConstant = 0.35;
-            // Set the gain value BEFORE connecting the source so there is no
-            // brief moment of full-volume (gain=1.0) audio at route creation.
-            gain.gain.value = effectiveGain();
-            connectNative(source, inputAnalyser);
+            // No positive gain until the limiter is actually wired.
+            gain.gain.value = Math.max(0, Math.min(1, effectiveGain()));
+            const meterBuffer = new Float32Array(analyser.fftSize);
+            const inputBuffer = new Float32Array(inputAnalyser.fftSize);
             connectNative(inputAnalyser, gain);
 
-            const route = {
+            routeSource = createMediaRouteSource(context, element);
+            if (!routeSource) return null;
+
+            route = {
                 context,
-                source,
+                source: routeSource.source,
                 gain,
                 inputAnalyser,
                 splitter,
@@ -1791,8 +1815,8 @@
                 analyser,
                 normalizerGainDb: 0,
                 meterPeakDb: -Infinity,
-                meterBuffer: new Float32Array(analyser.fftSize),
-                inputBuffer: new Float32Array(inputAnalyser.fftSize),
+                meterBuffer,
+                inputBuffer,
                 sourceKind: routeSource.kind,
                 muteNative: Boolean(routeSource.muteNative),
                 stream: routeSource.stream || null,
@@ -1800,13 +1824,31 @@
                 currentMode: null,
                 limiterFallbackActive: false
             };
+            // Retain ownership BEFORE connecting the irreversible source, so
+            // a failed connection can be recovered without constructing a
+            // second MediaElementAudioSourceNode for this element.
             mediaRoutes.set(element, route);
-            // The caller restores base/native volume before exposing the route,
-            // avoiding fallback-volume × GainNode transition artifacts.
+            connectNative(route.source, inputAnalyser);
             log(`media route attached (${route.sourceKind}): ${element.currentSrc || element.src || element.tagName}`);
             return route;
         } catch (e) {
             log(`media route failed: ${e && e.message}`);
+            if (routeSource && route) {
+                // Source capture already happened. Retain the existing route
+                // and recover with a gain-clamped direct connection. If that
+                // also fails, keep it disconnected and retry at the next
+                // playback/state update rather than leaking unbounded gain.
+                route.fallbackDirectOnly = true;
+                route.currentMode = "rescue-direct";
+                route.outputConnected = false;
+                route.sourceConnected = false;
+                safeDisconnect(route.source);
+                safeDisconnect(route.inputAnalyser);
+                safeDisconnect(route.gain);
+                mediaRoutes.set(element, route);
+                wireMediaRoute(route);
+                return route;
+            }
             return null;
         }
     }
