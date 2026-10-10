@@ -1769,6 +1769,11 @@
             return existing;
         }
 
+        // Cross-origin media without CORS cannot enter WebAudio at all.
+        // Check before constructing an AudioContext and eight graph nodes:
+        // a blocked route must not hold an unnecessary audio-device handle.
+        if (isLikelyCrossOriginMedia(element)) return null;
+
         const context = getMediaContext();
         if (!context) return null;
 
