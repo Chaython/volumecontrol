@@ -1721,12 +1721,17 @@ function connectOutput(element) {
         // return at the vcHooked check above means they cannot be re-hooked
         // here (createMediaElementSource throws on second call). Those
         // elements will fall back to native volume via applyFallbackVolume.
-        tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        tc.vars.audioCtx.onstatechange = () => {
-            // Guard against null: the context may be suspended/closed and
-            // tc.vars.audioCtx may be reassigned before this handler fires.
-            if (!tc.vars.audioCtx) return;
-            if (tc.vars.audioCtx.state === 'running') applyState();
+        const context = new (window.AudioContext || window.webkitAudioContext)();
+        tc.vars.audioCtx = context;
+        context.onstatechange = () => {
+            // A closed/replaced context can deliver its final event after the
+            // replacement is already live; it must not alter its timer/graph.
+            if (tc.vars.audioCtx !== context) return;
+            // Browsers can suspend AudioContexts independently of our own
+            // idle suspend helper (power saving, device interruption). Stop
+            // the 100ms normalizer sampler on every non-running transition.
+            ensureIsolatedNormalizerTimer();
+            if (context.state === 'running') applyState();
         };
     }
 

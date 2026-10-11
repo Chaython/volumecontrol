@@ -3218,3 +3218,37 @@ test('forced native routing clamps unsupported boost even before playback, then 
     assert.match(source, /"native-route": "Force native fallback is selected/);
     assert.match(source, /reason === "native-route"/);
 });
+
+
+test('isolated audio statechange stops sampling on external suspension and ignores stale contexts', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = source.indexOf('const context = new (window.AudioContext || window.webkitAudioContext)();');
+    const end = source.indexOf('\n    }\n\n    if (!tc.vars.gainNode', begin);
+    assert.ok(begin > 0 && end > begin);
+    const events = [];
+    const tc = { vars: { audioCtx: null } };
+    const ctx = {
+        tc,
+        window: { AudioContext: class AudioContext {
+            constructor() { this.state = 'suspended'; }
+        } },
+        ensureIsolatedNormalizerTimer: () => events.push('timer-reconciled'),
+        applyState: () => events.push('applied')
+    };
+    const instance = runInNewContext(
+        '(function () {\n' + source.slice(begin, end) + '\nreturn tc.vars.audioCtx;\n})()', ctx
+    );
+    instance.onstatechange();
+    assert.deepEqual(events, ['timer-reconciled'], 'suspended contexts must reconcile/stop sampling');
+    instance.state = 'running';
+    instance.onstatechange();
+    assert.deepEqual(events, ['timer-reconciled', 'timer-reconciled', 'applied'],
+        'running transition must restart sampling and apply the controls');
+    instance.state = 'closed';
+    instance.onstatechange();
+    assert.deepEqual(events.slice(-1), ['timer-reconciled'], 'closed contexts must stop sampling');
+    const oldLength = events.length;
+    tc.vars.audioCtx = { state: 'running' };
+    instance.onstatechange();
+    assert.equal(events.length, oldLength, 'late events from replaced contexts are ignored');
+});
