@@ -2767,3 +2767,83 @@ test('temporary route restrictions clamp effective gain without forgetting the r
     assert.match(source, /tc\.vars\.requestedDb = normalizeDb\(s\.volume\)/);
     assert.match(source, /if \(enforceBoostLimit\(\)\) applyState\(\)/);
 });
+
+
+test('Remember saves requested boost rather than DRM-clamped displayed slider dB', async () => {
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = popup.indexOf('async function currentTabUrl(tab) {');
+    const end = popup.indexOf('function saveSiteSettings(tab)', start);
+    assert.ok(start > 0 && end > start);
+    const saved = [];
+    const ctx = {
+        cached: {
+            requestedDb: 12,
+            slider: { value: '0' },
+            monoCheckbox: { checked: false },
+            muteBtn: { classList: { contains: () => false } }
+        },
+        tabsGet: async id => ({ id, url: 'https://example.com/watch?v=next' }),
+        document: { getElementById: id => id === 'remember-checkbox' ? { checked: true } : null },
+        normalizeSiteSettingsEntryInput: () => 'example.com/watch',
+        normalizeControlDb: db => Math.min(0, Number(db)),
+        normalizeDb: Number,
+        mutateSiteSettings: async mutation => { saved.push(mutation); },
+        handleError: error => { throw error; }
+    };
+    runInNewContext(popup.slice(start, end) + '\nthis.saveNow = saveSiteSettingsNow;', ctx);
+    await ctx.saveNow({ id: 12, url: 'https://example.com/watch?v=previous' });
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].patch.volume, 12, 'storage must retain requested boost, not applied 0 dB');
+    assert.equal(saved[0].url, 'https://example.com/watch?v=next');
+
+    ctx.cached.requestedDb = -9;
+    ctx.cached.slider.value = '-9';
+    await ctx.saveNow({ id: 12 });
+    assert.equal(saved[1].patch.volume, -9, 'explicit attenuation must overwrite pending boost');
+});
+
+test('hotkey persists requested gain while native feedback reports actual limited volume', async () => {
+    const source = readFileSync(join(root, 'background.js'), 'utf8');
+    const start = source.indexOf('async function setVolume(tab, domainState, dB) {');
+    const end = source.indexOf('async function setMono(tab, domainState, mono) {', start);
+    assert.ok(start >= 0 && end > start);
+    const feedback = [];
+    const saved = [];
+    const ctx = {
+        normalizeDb: value => Number(value),
+        sendHotkeyCommandAndConfirm: async () => ({
+            volume: 0,
+            requestedVolume: 12,
+            muted: false
+        }),
+        showNativeVolumeFeedback: async (tabId, applied, muted) => {
+            feedback.push({ tabId, applied, muted });
+        },
+        saveRememberedSettings: async (_tab, _state, updates) => { saved.push(updates); }
+    };
+    const fn = runInNewContext('(' + source.slice(start, end).trim() + ')', ctx);
+    assert.equal(await fn({ id: 4 }, { settingsKey: 'example.com/watch' }, 12), true);
+    assert.equal(feedback[0].applied, 0);
+    assert.equal(saved[0].volume, 12);
+});
+
+test('content state exposes both requested and applied volume during temporary restrictions', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = content.indexOf('function getAudioControlState() {');
+    const end = content.indexOf('function enforceBoostLimit(options = {}) {', begin);
+    assert.ok(begin > 0 && end > begin);
+    const vars = { dB: 0, requestedDb: 12, mono: false, muted: false, normalizerEnabled: false };
+    const ctx = {
+        tc: { vars },
+        enforceBoostLimit: () => false,
+        getBoostLimitInfo: () => ({ maxDb: 0, boostLimited: true, reason: 'cross-origin' }),
+        getMonoAvailability: () => ({ available: false }),
+        getNormalizerAvailability: () => ({ available: false }),
+        normalizeDb: Number
+    };
+    const getState = runInNewContext('(' + content.slice(begin, end).trim() + ')', ctx);
+    const state = getState();
+    assert.equal(state.volume, 0);
+    assert.equal(state.requestedVolume, 12);
+    assert.equal(state.boostLimited, true);
+});
