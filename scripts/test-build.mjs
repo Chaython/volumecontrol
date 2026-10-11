@@ -1607,7 +1607,7 @@ test('normalizer off state folds popup meter and Options settings', () => {
     assert.match(popupHtml, /id="normalizer-details"[^>]*hidden/);
     assert.match(optionsHtml, /id="normalizer-options-details" hidden/);
     assert.match(optionsHtml, /id="normalizerDefaultEnabled"/);
-    assert.match(popup, /details\.hidden = !\(checkbox && checkbox\.checked\)/);
+    assert.match(popup, /details\.hidden = !enabled \|\| !available/);
     assert.match(options, /normalizerOptionsDetails\.hidden = !active/);
     assert.match(popup, /!cached\.normalizerCheckbox\?\.checked/);
 });
