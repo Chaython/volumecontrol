@@ -1196,40 +1196,95 @@ test('MAIN-world meter messages treat null and missing peaks as silence', () => 
     assert.equal(tc.vars.normalizerGainDb, -4, 'blocked site must ignore in-flight meter tick');
 });
 
-test('normalizer popup preserves restrictions and pending checkbox state', () => {
+test('normalizer popup preserves saved preference while disabling unsupported DRM/CORS controls', () => {
     const source = readFileSync(join(root, 'popup.js'), 'utf8');
     const start = source.indexOf('function applyNormalizerState(state = {}) {');
     const end = source.indexOf('function applyAudioControlState(state = {}) {', start);
     assert.ok(start >= 0 && end > start);
     const toggles = [];
+    const attributes = {};
+    const label = { title: '' };
     const classList = { toggle(name, enabled) { toggles.push({ name, enabled }); } };
-    const panel = { classList };
+    const panel = { classList, querySelector: () => label };
     const checkbox = { checked: true, disabled: false,
-        closest: () => panel, setAttribute: () => {} };
+        closest: () => panel, setAttribute: (name, val) => { attributes[name] = val; } };
     const details = { hidden: false };
     const note = { textContent: '', classList };
     const cached = {
         normalizerCheckbox: checkbox, normalizerNote: note,
-        normalizerAvailable: false, normalizerPending: true
+        normalizerAvailable: true, normalizerUnavailableReason: '', normalizerPending: true
     };
     const apply = runInNewContext('(' + source.slice(start, end).trim() + ')', {
         cached,
         document: { querySelector: () => null, getElementById: () => details },
         formatMeterDb: () => '−∞ dBFS'
     });
-    apply({ normalizerEnabled: false }); // stale state arrives while saving
-    assert.equal(checkbox.checked, true);
-    assert.equal(details.hidden, false);
-    assert.equal(cached.normalizerAvailable, false);
-    assert.ok(toggles.some(x => x.name === 'is-unavailable' && x.enabled));
+
+    apply({ normalizerEnabled: false, normalizerAvailable: false, normalizerUnavailableReason: 'restricted' });
+    assert.equal(checkbox.checked, true, 'an in-flight preference must not be overwritten by old replies');
+    assert.equal(checkbox.disabled, true, 'unavailable Normalize must be disabled');
+    assert.equal(attributes['aria-disabled'], 'true');
+    assert.equal(attributes['aria-describedby'], 'normalizer-note');
+    assert.equal(details.hidden, true, 'inaccessible gain/meter must fold even when enabled');
+    assert.match(note.textContent, /DRM/);
+    assert.match(note.textContent, /saved Normalize preference will resume/);
+    assert.ok(toggles.some(x => x.name === 'hidden' && x.enabled === false));
+    assert.ok(toggles.some(x => x.name === 'is-unavailable' && x.enabled === true));
 
     cached.normalizerPending = false;
-    apply({ normalizerEnabled: false });
-    assert.equal(checkbox.checked, false);
+    apply({ normalizerEnabled: false, normalizerAvailable: false, normalizerUnavailableReason: 'cross-origin' });
+    assert.equal(checkbox.checked, false, 'actual disabled preference is retained separately');
+    assert.equal(checkbox.disabled, true);
     assert.equal(details.hidden, true);
-    // Only an explicit availability verdict can clear the restriction.
-    apply({ normalizerAvailable: true });
-    assert.equal(cached.normalizerAvailable, true);
+    assert.match(note.textContent, /cross-origin/);
+    assert.doesNotMatch(note.textContent, /saved Normalize preference will resume/);
+    assert.ok(toggles.some(x => x.name === 'hidden' && x.enabled === false),
+        'restriction note must stay visible with Normalize OFF');
+
+    apply({ normalizerAvailable: false, normalizerUnavailableReason: 'native-route' });
+    assert.match(note.textContent, /Force native/);
+
+    // Meter-only frames do not send the restriction reason. Keep the last
+    // known reason so polling cannot replace it with a generic warning.
+    apply({ peakDb: -20 });
+    assert.match(note.textContent, /Force native/);
+
+    apply({ normalizerEnabled: true, normalizerAvailable: true, normalizerUnavailableReason: '' });
+    assert.equal(checkbox.checked, true);
+    assert.equal(checkbox.disabled, false, 'compatible audio restores the control');
+    assert.equal(attributes['aria-disabled'], 'false');
+    assert.equal(details.hidden, false, 'saved enabled preference resumes with the meter');
+    assert.ok(toggles.some(x => x.name === 'hidden' && x.enabled === true));
+});
+
+test('Normalize warning stays outside the folded meter and DRM fallback note mentions it', () => {
+    const html = readFileSync(join(root, 'popup.html'), 'utf8');
+    const css = readFileSync(join(root, 'popup.css'), 'utf8');
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const note = html.indexOf('id="normalizer-note"');
+    const details = html.indexOf('id="normalizer-details"');
+    assert.ok(note >= 0 && details > note,
+        'Normalize availability warning must be outside the meter/details hidden section');
+    assert.match(css, /\.normalizer-panel\.is-unavailable \.normalizer-switch\s*\{[^}]*opacity:\s*0\.[0-9]+/);
+    assert.match(popup, /checkbox\.disabled = !available/);
+    assert.match(popup, /Normalize is also unavailable until compatible WebAudio playback resumes/);
+    assert.match(popup, /!cached\.normalizerAvailable\) return null;/);
+});
+
+test('normalizer route availability distinguishes DRM/CORS and forced native', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = content.indexOf('function getNormalizerAvailability(limit = getBoostLimitInfo()) {');
+    const end = content.indexOf('function getAudioControlState() {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    const ctx = { tc: { settings: { debugRouteMode: 'auto' } } };
+    const fn = runInNewContext('(' + content.slice(begin, end).trim() + ')', ctx);
+    assert.equal(fn({ boostLimited: true, reason: 'restricted' }).available, false);
+    assert.equal(fn({ boostLimited: true, reason: 'restricted' }).reason, 'restricted');
+    assert.equal(fn({ boostLimited: true, reason: 'cross-origin' }).available, false);
+    ctx.tc.settings.debugRouteMode = 'native';
+    assert.equal(fn({ boostLimited: false }).reason, 'native-route');
+    ctx.tc.settings.debugRouteMode = 'auto';
+    assert.equal(fn({ boostLimited: false, reason: '' }).available, true);
 });
 
 test('normalizer preference saves even without an active audio route or tab receiver', async () => {
