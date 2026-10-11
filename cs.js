@@ -37,7 +37,7 @@ const PAGE_BRIDGE_HEARTBEAT_MS = 3000;
 const BOOST_LIMIT_NOTES = {
     "cross-origin": "Limited by cross-origin media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
     "restricted": "Limited by DRM-protected or otherwise restricted media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
-    "route-failed": "Limited because the page blocked or already owns the audio route. Fallback volume control can still lower volume, but boosting and mono may be unavailable.",
+    "route-failed": "WebAudio routing failed or is unavailable. Native media may allow attenuation, but boosting and mono are unavailable; an already-captured element with a closed audio context may stay silent until reload.",
     "native-route": "Force native fallback is selected. Native HTML media volume can attenuate or mute, but boosting, mono, and Normalize require WebAudio.",
     "fallback": BOOST_LIMIT_NOTE
 };
@@ -459,7 +459,17 @@ function getBoostLimitReason(element) {
     // than admitting boost is unavailable. Check protection FIRST.
     if (isProbablyProtectedMedia(element)) return "restricted";
 
-    if (element.dataset.vcHooked === "true") return "";
+    if (element.dataset.vcHooked === "true") {
+        // A successful MediaElementSource capture is irreversible. If its
+        // AudioContext closes or reconnection fails, the element is STILL
+        // marked hooked, but no longer has a functional output route.
+        // Honor that failure before claiming unrestricted +32 dB support.
+        if (element.dataset.vcFallbackReason === "route-failed" ||
+            !tc.vars.audioCtx || tc.vars.audioCtx.state === "closed") {
+            return "route-failed";
+        }
+        return "";
+    }
 
     const crossOrigin = isLikelyCrossOriginMedia(element);
     if (isPageAudioManaged(element)) return crossOrigin ? "cross-origin" : "";

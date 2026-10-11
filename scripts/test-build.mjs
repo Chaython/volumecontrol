@@ -3252,3 +3252,37 @@ test('isolated audio statechange stops sampling on external suspension and ignor
     instance.onstatechange();
     assert.equal(events.length, oldLength, 'late events from replaced contexts are ignored');
 });
+
+
+test('failed captured MediaElementSource does not advertise unrestricted boost', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function getBoostLimitReason(element) {');
+    const end = source.indexOf('// Boost limit cache:', start);
+    assert.ok(start >= 0 && end > start);
+    const tc = { vars: { audioCtx: { state: 'running' } }, settings: {} };
+    const reason = runInNewContext(
+        source.slice(start, end) + '\ngetBoostLimitReason',
+        {
+            tc,
+            isProbablyProtectedMedia: () => false,
+            isLikelyCrossOriginMedia: () => false,
+            isPageAudioManaged: () => false,
+            isBoostLimitReasonBypassed: () => false
+        }
+    );
+    const element = { dataset: { vcHooked: 'true', vcFallbackReason: 'route-failed' } };
+    assert.equal(reason(element), 'route-failed',
+        'a captured but disconnected source must be reported as unrouteable');
+    delete element.dataset.vcFallbackReason;
+    assert.equal(reason(element), '',
+        'successful reconnection must clear the restriction');
+    tc.vars.audioCtx.state = 'closed';
+    assert.equal(reason(element), 'route-failed',
+        'a closed context must be reported even if the failure flag has not arrived');
+    tc.vars.audioCtx = { state: 'running' };
+    element.dataset.vcHooked = 'false';
+    element.dataset.vcFallbackReason = 'route-failed';
+    assert.equal(reason(element), 'route-failed',
+        'uncaptured failed routes must still use their existing fallback warning');
+    assert.match(source, /already-captured element with a closed audio context may stay silent until reload/);
+});
