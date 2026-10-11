@@ -2894,3 +2894,47 @@ test('boost limit invalidation automatically restores preserved gain with one re
     events.shift()();
     assert.equal(ctx.tc.vars.dB, 12, 'restriction removal restores boost without opening popup');
 });
+
+
+test('Volume Up at a DRM/CORS ceiling never overwrites a preserved requested boost', async () => {
+    const source = readFileSync(join(root, 'background.js'), 'utf8');
+    const begin = source.indexOf('async function handleCommand(command, commandTab) {');
+    const end = source.indexOf('async function showNativeVolumeFeedback(', begin);
+    assert.ok(begin >= 0 && end > begin);
+    let applied = 0;
+    let ceiling = 0;
+    let restricted = true;
+    const changes = [];
+    const ctx = {
+        getActiveTab: async tab => tab,
+        getDomainState: async () => ({ blocked: false, settingsKey: 'example.com/watch' }),
+        getContentState: async () => ({
+            volume: applied,
+            mono: false,
+            muted: false,
+            monoAvailable: true,
+            maxDb: ceiling,
+            boostLimited: restricted
+        }),
+        getFallbackState: async () => ({ volume: 0, mono: false, muted: false }),
+        setVolume: async (_tab, _domain, value) => {
+            changes.push(value);
+            applied = Math.min(value, ceiling);
+        },
+        setMono: async () => {},
+        setMute: async () => {},
+        HOTKEY_STEP_DB: 1
+    };
+    const handle = runInNewContext('(' + source.slice(begin, end).trim() + ')', ctx);
+    const tab = { id: 5, url: 'https://example.com/watch?v=1' };
+    await handle('volume-up', tab);
+    assert.equal(changes.length, 0,
+        'restricted volume-up at 0 dB must not replace a previously saved +12 dB request');
+    await handle('volume-down', tab);
+    assert.deepEqual(changes, [-1], 'volume-down must remain usable for safe attenuation');
+    restricted = false;
+    ceiling = 32;
+    applied = 12;
+    await handle('volume-up', tab);
+    assert.deepEqual(changes, [-1, 13], 'normal volume-up works after restriction clears');
+});
