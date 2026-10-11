@@ -2938,3 +2938,45 @@ test('Volume Up at a DRM/CORS ceiling never overwrites a preserved requested boo
     await handle('volume-up', tab);
     assert.deepEqual(changes, [-1, 13], 'normal volume-up works after restriction clears');
 });
+
+
+test('media src/CORS and page restriction attribute changes refresh boost verdicts', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = content.indexOf('function setupBoostLimitObserver() {');
+    const end = content.indexOf('function stopBoostLimitObserver() {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    let observerCallback;
+    let observerOptions;
+    let invalidations = 0;
+    const rootElement = { nodeName: 'HTML' };
+    const ctx = {
+        boostLimitObserver: null,
+        knownMediaSweepInterval: null,
+        KNOWN_MEDIA_SWEEP_MS: 30000,
+        document: { documentElement: rootElement },
+        MutationObserver: function (callback) {
+            observerCallback = callback;
+            return { observe: (_root, options) => { observerOptions = options; } };
+        },
+        setInterval: () => 1,
+        sweepKnownMediaElements: () => {},
+        invalidateBoostLimitCache: () => { invalidations++; }
+    };
+    const install = runInNewContext('(' + content.slice(begin, end).trim() + ')', ctx);
+    install();
+    assert.equal(observerOptions.attributes, true);
+    assert.ok(observerOptions.attributeFilter.includes('src'));
+    assert.ok(observerOptions.attributeFilter.includes('crossorigin'));
+    assert.ok(observerOptions.attributeFilter.includes('data-vc-page-media-restriction'));
+
+    observerCallback([{ type: 'attributes', target: { nodeName: 'VIDEO' }, attributeName: 'src' }]);
+    assert.equal(invalidations, 1);
+    observerCallback([{ type: 'attributes', target: { nodeName: 'AUDIO' }, attributeName: 'crossorigin' }]);
+    assert.equal(invalidations, 2);
+    observerCallback([{ type: 'attributes', target: rootElement, attributeName: 'data-vc-page-media-restriction' }]);
+    assert.equal(invalidations, 3);
+    observerCallback([{ type: 'attributes', target: { nodeName: 'DIV' }, attributeName: 'src' }]);
+    assert.equal(invalidations, 3, 'unrelated DOM changes must not trigger a scan');
+    observerCallback([{ type: 'childList', addedNodes: [{ nodeName: 'VIDEO' }], removedNodes: [] }]);
+    assert.equal(invalidations, 4, 'existing media insertion detection remains active');
+});
