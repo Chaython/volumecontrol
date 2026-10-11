@@ -3089,9 +3089,16 @@ test('isolated normalization sampler pauses on unrouteable DRM/CORS and resumes 
     available = true;
     ensure();
     assert.equal(ctx.tc.vars.normalizerTimer, 2, 'the same saved preference resumes on clear audio');
+    ctx.tc.vars.audioCtx.state = 'suspended';
+    ensure();
+    assert.equal(ctx.tc.vars.normalizerTimer, null, 'paused media must not keep a sampler alive');
+    ctx.tc.vars.audioCtx.state = 'running';
+    ensure();
+    assert.equal(ctx.tc.vars.normalizerTimer, 3, 'playback resume restarts analysis');
     ctx.tc.vars.audioCtx.state = 'closed';
     ensure();
     assert.equal(ctx.tc.vars.normalizerTimer, null, 'closed AudioContexts cannot analyze');
+    assert.match(source, /context\.suspend\(\)[\s\S]*?ensureIsolatedNormalizerTimer\(\)/);
 });
 
 test('a DRM transition stops stale automatic boost even when manual dB remains zero', () => {
