@@ -752,6 +752,9 @@ function getAudioControlState() {
     const normalizerAvailability = getNormalizerAvailability(limit);
     return {
         volume: Math.min(normalizeDb(tc.vars.dB), limit.maxDb),
+        // Applied gain can be capped by DRM/CORS. Keep the intended dB
+        // distinct so Remember and hotkeys do not persist that temporary cap.
+        requestedVolume: normalizeDb(tc.vars.requestedDb),
         mono: tc.vars.mono,
         monoAvailable: monoAvailability.available,
         monoUnavailableReason: monoAvailability.reason,
