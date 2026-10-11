@@ -3177,3 +3177,44 @@ test('expired iframe DRM/CORS reports invalidate the parent boost and Normalize 
     assert.equal(aggregate(), null);
     assert.equal(invalidated, 2);
 });
+
+
+test('forced native routing clamps unsupported boost even before playback, then restores available range', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = source.indexOf('function getBoostLimitInfo() {');
+    const end = source.indexOf('// ----- Cross-frame boost-limit aggregation', begin);
+    assert.ok(begin >= 0 && end > begin);
+    const ctx = {
+        tc: { vars: { isBlocked: false }, settings: { debugRouteMode: 'native' } },
+        MAX_DB: 32,
+        boostLimitCache: null,
+        boostLimitCacheTime: 0,
+        BOOST_LIMIT_CACHE_TTL_MS: 1000,
+        document: { querySelectorAll: () => [] },
+        getHookPageRestriction: () => '',
+        getAggregatedFrameLimit: () => null,
+        reasonSeverity: (reason) => reason === 'restricted' ? 3 : reason ? 2 : 0,
+        isBoostLimitReasonBypassed: () => false,
+        makeBoostLimitedResult: (reason) => ({ boostLimited: true, reason, maxDb: 0, note: reason })
+    };
+    const getLimit = runInNewContext(source.slice(begin, end) + '\ngetBoostLimitInfo', ctx);
+
+    assert.equal(getLimit().maxDb, 0, 'forced native media cannot amplify above 0 dB');
+    assert.equal(getLimit().reason, 'native-route');
+    ctx.getHookPageRestriction = () => 'restricted';
+    ctx.boostLimitCache = null;
+    assert.equal(getLimit().reason, 'restricted', 'do not conceal actual protected media');
+    ctx.getHookPageRestriction = () => 'cross-origin';
+    ctx.boostLimitCache = null;
+    assert.equal(getLimit().reason, 'cross-origin', 'retain actionable CORS restriction');
+    ctx.getHookPageRestriction = () => '';
+    ctx.tc.settings.debugRouteMode = 'auto';
+    ctx.boostLimitCache = null;
+    assert.equal(getLimit().maxDb, 32, 'switching back to auto must restore the available range');
+    ctx.tc.vars.isBlocked = true;
+    ctx.tc.settings.debugRouteMode = 'native';
+    ctx.boostLimitCache = null;
+    assert.equal(getLimit().maxDb, 32, 'disabled extension must not claim to control tab gain');
+    assert.match(source, /"native-route": "Force native fallback is selected/);
+    assert.match(source, /reason === "native-route"/);
+});

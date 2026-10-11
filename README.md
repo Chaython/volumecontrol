@@ -71,6 +71,7 @@ Some media cannot be routed through WebAudio, and whether that applies depends o
 - The extension **remembers your requested gain separately from the applied gain**. For example, +12 dB requested on a clear song is temporarily applied as 0 dB maximum when the next song is DRM/CORS-limited, and can be restored automatically if the route becomes safe again. Remember and hotkeys save the requested setting, not the temporary clamp. Volume Up at the restricted ceiling does not silently overwrite that pending boost; Volume Down can still attenuate.
 - Lowering volume still works: the element's native volume is used (attenuation only, exact dB math, and mute).
 - Mono mixing is unavailable on such media.
+- **Force native fallback** (the debug routing override) also caps the displayed/applied volume at **0 dB**, even before playback starts, because native HTML media controls cannot boost. Your higher requested volume remains saved separately, and the normal range returns when WebAudio routing is available again; Mono and Normalize remain disabled while forced native is selected.
 
 **How detection works**
 

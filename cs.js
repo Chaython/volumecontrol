@@ -38,6 +38,7 @@ const BOOST_LIMIT_NOTES = {
     "cross-origin": "Limited by cross-origin media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
     "restricted": "Limited by DRM-protected or otherwise restricted media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
     "route-failed": "Limited because the page blocked or already owns the audio route. Fallback volume control can still lower volume, but boosting and mono may be unavailable.",
+    "native-route": "Force native fallback is selected. Native HTML media volume can attenuate or mute, but boosting, mono, and Normalize require WebAudio.",
     "fallback": BOOST_LIMIT_NOTE
 };
 let pageBridgeResyncInterval = null;
@@ -424,7 +425,7 @@ function getHookPageRestriction() {
 // outranks everything: routing such media is a one-way trip to silence.
 function reasonSeverity(reason) {
     if (reason === "restricted") return 3;
-    if (reason === "cross-origin" || reason === "route-failed") return 2;
+    if (reason === "cross-origin" || reason === "route-failed" || reason === "native-route") return 2;
     return reason ? 1 : 0;
 }
 
@@ -564,6 +565,14 @@ function getBoostLimitInfo() {
         : rawFrameReason;
     if (effectiveFrameReason && reasonSeverity(effectiveFrameReason) > reasonSeverity(result.reason)) {
         result = makeBoostLimitedResult(effectiveFrameReason);
+    }
+
+    // Force native is a route policy, not a decoded-audio capability. Clamp
+    // before playback too, otherwise the popup can advertise +32 dB while
+    // native HTMLMediaElement.volume is physically limited to 1. Preserve a
+    // more informative DRM/CORS/failed-route restriction if one is present.
+    if (tc.settings.debugRouteMode === "native" && !result.boostLimited) {
+        result = makeBoostLimitedResult("native-route");
     }
 
     boostLimitCache = result;
