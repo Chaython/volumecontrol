@@ -1673,6 +1673,7 @@ test('popup serializes in-flight volume commands and applies the latest request 
         volumeRequestGeneration: 0,
         volumeDeliveryChain: Promise.resolve(),
         setDisplayedVolume: v => v,
+        normalizeDb: Number,
         tabsSendMessage: async (id, message) => {
             if (message.command === 'setVolume') {
                 if (message.dB === -10) await delay(30);
