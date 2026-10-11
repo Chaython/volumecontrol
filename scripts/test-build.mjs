@@ -2848,3 +2848,49 @@ test('content state exposes both requested and applied volume during temporary r
     assert.equal(state.requestedVolume, 12);
     assert.equal(state.boostLimited, true);
 });
+
+
+test('boost limit invalidation automatically restores preserved gain with one reconciliation per event batch', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = content.indexOf('function invalidateBoostLimitCache() {');
+    const end = content.indexOf('function getBoostLimitInfo() {', start);
+    assert.ok(start > 0 && end > start);
+    const events = [];
+    let ceiling = 0;
+    let applied = 0;
+    const ctx = {
+        boostLimitCache: {},
+        boostReconcileScheduled: false,
+        controlProfileReady: true,
+        tc: { vars: { requestedDb: 12, dB: 0, isBlocked: false } },
+        queueMicrotask: fn => { events.push(fn); },
+        scheduleFrameBoostLimitReport: () => {},
+        normalizeDbForCurrentMedia: value => Math.min(ceiling, value),
+        applyState: () => {
+            applied++;
+            ctx.tc.vars.dB = Math.min(ctx.tc.vars.requestedDb, ceiling);
+        }
+    };
+    const invalidate = runInNewContext('(' + content.slice(start, end).trim() + ')', ctx);
+    ceiling = 32;
+    invalidate();
+    invalidate();
+    invalidate();
+    assert.equal(events.length, 1, 'multiple restriction changes schedule only one update');
+    assert.equal(applied, 0, 'the state reconcile is deferred, avoiding mutation observer reentrancy');
+    events.shift()();
+    assert.equal(ctx.tc.vars.dB, 12);
+    assert.equal(applied, 1);
+    invalidate();
+    events.shift()();
+    assert.equal(applied, 1, 'unchanged verdict must not trigger audio rewiring');
+    ceiling = 0;
+    invalidate();
+    events.shift()();
+    assert.equal(ctx.tc.vars.dB, 0, 'new restrictions still clamp playback');
+    assert.equal(ctx.tc.vars.requestedDb, 12, 'requested volume survives clamp');
+    ceiling = 32;
+    invalidate();
+    events.shift()();
+    assert.equal(ctx.tc.vars.dB, 12, 'restriction removal restores boost without opening popup');
+});
