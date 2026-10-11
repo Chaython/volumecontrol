@@ -568,7 +568,11 @@ function applyAudioControlState(state = {}) {
   }
 
   if (note) {
-    note.textContent = state.limitation || BOOST_LIMIT_NOTE;
+    const normalizerUnavailable = state.normalizerAvailable === false;
+    const restriction = state.limitation || BOOST_LIMIT_NOTE;
+    note.textContent = normalizerUnavailable
+      ? restriction + " Normalize is also unavailable until compatible WebAudio playback resumes."
+      : restriction;
     note.classList.toggle("hidden", !cached.boostLimited);
   }
 
@@ -624,7 +628,10 @@ async function pollAudioControlState(tab) {
 
 
 async function pollMeterState(tab) {
-    if (!tab || tab.id === undefined || !cached.normalizerCheckbox?.checked) return null;
+    // Restricted DRM/CORS and forced-native routes cannot produce analyzer
+    // samples. Skip the 125ms meter queries until routing becomes available.
+    if (!tab || tab.id === undefined || !cached.normalizerCheckbox?.checked ||
+        !cached.normalizerAvailable) return null;
     const response = await tabsSendMessage(tab.id, { command: "getMeterState" }, TOP_FRAME_OPTIONS).catch(() => null);
     const state = response && response.response ? response.response : null;
     if (state) applyNormalizerState(state);
