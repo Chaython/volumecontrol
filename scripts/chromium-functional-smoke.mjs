@@ -246,6 +246,49 @@ try {
     check('Popup Normalize off and folded', await cdp.eval(popupSession,
         'document.getElementById("normalizer-details").hidden'));
 
+    const normalizationRestrictions = await cdp.eval(popupSession, `(() => {
+        const e = document.getElementById("normalizer-checkbox");
+        const note = document.getElementById("normalizer-note");
+        const details = document.getElementById("normalizer-details");
+        const panel = e.closest(".normalizer-panel");
+        const label = panel.querySelector(".normalizer-switch");
+        applyNormalizerState({
+            normalizerEnabled: true,
+            normalizerAvailable: false,
+            normalizerUnavailableReason: "cross-origin"
+        });
+        const restricted = {
+            checked: e.checked, disabled: e.disabled,
+            aria: e.getAttribute("aria-disabled"),
+            folded: details.hidden,
+            visibleNote: !note.classList.contains("hidden"),
+            mentionsCors: /cross-origin/i.test(note.textContent),
+            opacity: parseFloat(getComputedStyle(label).opacity)
+        };
+        applyNormalizerState({ normalizerEnabled: false, normalizerAvailable: false,
+            normalizerUnavailableReason: "restricted" });
+        const offNoteVisible = !note.classList.contains("hidden") &&
+            /DRM/i.test(note.textContent) && details.hidden;
+        applyNormalizerState({ normalizerEnabled: false, normalizerAvailable: true,
+            normalizerUnavailableReason: "" });
+        const restored = !e.disabled && note.classList.contains("hidden") &&
+            !e.checked && details.hidden;
+        return { restricted, offNoteVisible, restored };
+    })()`);
+    check('Restricted Normalize is grayed out and saved ON preference remains checked',
+        normalizationRestrictions.restricted.disabled &&
+        normalizationRestrictions.restricted.checked &&
+        normalizationRestrictions.restricted.aria === 'true' &&
+        normalizationRestrictions.restricted.folded &&
+        normalizationRestrictions.restricted.opacity < 0.8,
+        normalizationRestrictions.restricted);
+    check('DRM/CORS Normalize warnings remain visible even with meter folded',
+        normalizationRestrictions.restricted.visibleNote &&
+        normalizationRestrictions.restricted.mentionsCors &&
+        normalizationRestrictions.offNoteVisible, normalizationRestrictions);
+    check('Normalize re-enables on supported audio without losing OFF preference',
+        normalizationRestrictions.restored, normalizationRestrictions);
+
     await cdp.eval(popupSession,
         '(()=>{const e=document.getElementById("remember-checkbox");e.checked=true;' +
         'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
