@@ -493,9 +493,12 @@ async function setVolume(tab, domainState, dB) {
     const appliedVolume = state.volume !== undefined
         ? normalizeDb(state.volume)
         : requestedVolume;
+    const rememberedVolume = state.requestedVolume !== undefined
+        ? normalizeDb(state.requestedVolume)
+        : requestedVolume;
     const muted = state.muted !== undefined ? Boolean(state.muted) : false;
     await showNativeVolumeFeedback(tab.id, appliedVolume, muted);
-    await saveRememberedSettings(tab, domainState, { volume: appliedVolume });
+    await saveRememberedSettings(tab, domainState, { volume: rememberedVolume });
     return true;
 }
 
