@@ -545,6 +545,11 @@ async function handleCommand(command, commandTab) {
 
     switch (command) {
         case "volume-up":
+            // When DRM/CORS restricts playback to native volume, a press at
+            // the effective 0 dB ceiling cannot make audio louder. Do not
+            // replace a preserved +12 dB request with an invisible +1 dB
+            // setting that only takes effect on a later, routable song.
+            if (contentState.boostLimited && currentVolume >= contentState.maxDb) break;
             await setVolume(tab, domainState, currentVolume + HOTKEY_STEP_DB);
             break;
         case "volume-down":
