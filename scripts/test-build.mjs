@@ -3052,3 +3052,83 @@ test('media src/CORS and page restriction attribute changes refresh boost verdic
     observerCallback([{ type: 'childList', addedNodes: [{ nodeName: 'VIDEO' }], removedNodes: [] }]);
     assert.equal(invalidations, 4, 'existing media insertion detection remains active');
 });
+
+
+test('isolated normalization sampler pauses on unrouteable DRM/CORS and resumes on clear media', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function ensureIsolatedNormalizerTimer() {');
+    const end = source.indexOf('function createGainNode() {', start);
+    assert.ok(start > 0 && end > start);
+    let available = true;
+    let scheduled = 0;
+    const cleared = [];
+    const ctx = {
+        tc: { vars: {
+            isBlocked: false, normalizerEnabled: true, gainNode: {},
+            audioCtx: { state: 'running' }, normalizerTimer: null
+        } },
+        getNormalizerAvailability: () => ({ available }),
+        setInterval: (_fn, delay) => {
+            assert.equal(delay, 100);
+            return ++scheduled;
+        },
+        clearInterval: id => { cleared.push(id); },
+        sampleIsolatedNormalizer: () => {}
+    };
+    const ensure = runInNewContext('(' + source.slice(start, end).trim() + ')', ctx);
+    ensure();
+    assert.equal(ctx.tc.vars.normalizerTimer, 1);
+    ensure();
+    assert.equal(scheduled, 1, 'a running route needs only one sample timer');
+    available = false;
+    ensure();
+    assert.equal(ctx.tc.vars.normalizerTimer, null);
+    assert.deepEqual(cleared, [1]);
+    ensure();
+    assert.equal(scheduled, 1, 'restricted audio must not restart its sampler');
+    available = true;
+    ensure();
+    assert.equal(ctx.tc.vars.normalizerTimer, 2, 'the same saved preference resumes on clear audio');
+    ctx.tc.vars.audioCtx.state = 'closed';
+    ensure();
+    assert.equal(ctx.tc.vars.normalizerTimer, null, 'closed AudioContexts cannot analyze');
+});
+
+test('a DRM transition stops stale automatic boost even when manual dB remains zero', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function invalidateBoostLimitCache() {');
+    const end = source.indexOf('function getBoostLimitInfo() {', start);
+    assert.ok(start > 0 && end > start);
+    const microtasks = [];
+    let availability = true;
+    let stateApplies = 0;
+    let timerChecks = 0;
+    const context = {
+        boostLimitCache: {},
+        boostReconcileScheduled: false,
+        controlProfileReady: true,
+        tc: { vars: {
+            isBlocked: false, normalizerEnabled: true,
+            requestedDb: 0, dB: 0, normalizerGainDb: 9, normalizerPeakDb: -8,
+            gainNode: {}
+        } },
+        queueMicrotask: fn => { microtasks.push(fn); },
+        scheduleFrameBoostLimitReport: () => {},
+        normalizeDbForCurrentMedia: value => value,
+        getNormalizerAvailability: () => ({ available: availability }),
+        ensureIsolatedNormalizerTimer: () => { timerChecks++; },
+        applyState: () => { stateApplies++; }
+    };
+    const invalidate = runInNewContext('(' + source.slice(start, end).trim() + ')', context);
+    availability = false;
+    invalidate();
+    assert.equal(microtasks.length, 1);
+    microtasks.shift()();
+    assert.equal(context.tc.vars.normalizerGainDb, 0, 'unrouteable output must not keep old +9 dB normalization');
+    assert.equal(context.tc.vars.normalizerPeakDb, -Infinity);
+    assert.equal(stateApplies, 1);
+    availability = true;
+    invalidate();
+    microtasks.shift()();
+    assert.equal(timerChecks, 1, 'clear audio restarts checking even with unchanged manual gain');
+});
