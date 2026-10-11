@@ -3132,3 +3132,41 @@ test('a DRM transition stops stale automatic boost even when manual dB remains z
     microtasks.shift()();
     assert.equal(timerChecks, 1, 'clear audio restarts checking even with unchanged manual gain');
 });
+
+
+test('expired iframe DRM/CORS reports invalidate the parent boost and Normalize verdict', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = source.indexOf('function getAggregatedFrameLimit() {');
+    const end = source.indexOf('function ensureFrameReportPurge() {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    let invalidated = 0;
+    const cleared = [];
+    let now = 20000;
+    const ctx = {
+        frameLimitReports: new Map([
+            [1, { reason: 'restricted', ts: 1000 }],
+            [2, { reason: 'cross-origin', ts: 18000 }]
+        ]),
+        frameReportPurgeInterval: 17,
+        FRAME_REPORT_TTL_MS: 15000,
+        isTopFrame: () => true,
+        Date: { now: () => now },
+        clearInterval: id => { cleared.push(id); },
+        reasonSeverity: reason => reason === 'restricted' ? 3 : reason === 'cross-origin' ? 2 : 0,
+        invalidateBoostLimitCache: () => { invalidated++; }
+    };
+    const aggregate = runInNewContext('(' + source.slice(begin, end).trim() + ')', ctx);
+    assert.equal(aggregate().reason, 'cross-origin');
+    assert.equal(invalidated, 1, 'purging expired DRM must re-evaluate restricted gain and Normalize');
+    assert.equal(ctx.frameLimitReports.has(1), false);
+    assert.deepEqual(cleared, [], 'the purge timer stays active while another frame reports');
+    assert.equal(aggregate().reason, 'cross-origin');
+    assert.equal(invalidated, 1, 'fresh restriction reads do not force repeated audio rebuilds');
+    now = 36000;
+    assert.equal(aggregate(), null);
+    assert.equal(invalidated, 2, 'last expired iframe must release its boost limit without popup interaction');
+    assert.deepEqual(cleared, [17]);
+    assert.equal(ctx.frameReportPurgeInterval, null);
+    assert.equal(aggregate(), null);
+    assert.equal(invalidated, 2);
+});
