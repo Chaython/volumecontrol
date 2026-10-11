@@ -1285,7 +1285,7 @@ function ensureIsolatedNormalizerTimer() {
     // when an actual isolated route needs automatic gain control.
     const shouldRun = !tc.vars.isBlocked && tc.vars.normalizerEnabled &&
         Boolean(tc.vars.gainNode && tc.vars.audioCtx &&
-            tc.vars.audioCtx.state !== 'closed') &&
+            tc.vars.audioCtx.state === 'running') &&
         getNormalizerAvailability().available;
     if (!shouldRun) {
         if (tc.vars.normalizerTimer !== null) clearInterval(tc.vars.normalizerTimer);
@@ -1457,6 +1457,10 @@ function suspendAudioContextIfIdle() {
     promise = Promise.resolve()
         .then(() => context.suspend())
         .then(() => {
+            // A suspended context cannot provide new analyzer samples.
+            // Stop its 100ms sampling timer; resumeAudioContext() calls
+            // applyState(), which reinstates sampling once running again.
+            ensureIsolatedNormalizerTimer();
             if (tc.settings.debugMode) {
                 log(hasHooked
                     ? "audio context suspended (media paused) — device handle released"
