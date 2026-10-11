@@ -68,6 +68,7 @@ Some media cannot be routed through WebAudio, and whether that applies depends o
 **What you will see when media is restricted** (Chromium + DRM, or any engine + cross-origin)
 
 - The popup shows a "restricted by DRM" note (or a cross-origin restriction note) and the slider clamps at 0 dB — no boost is offered because none is possible on that media in that browser.
+- The extension **remembers your requested gain separately from the applied gain**. For example, +12 dB requested on a clear song is temporarily applied as 0 dB maximum when the next song is DRM/CORS-limited, and can be restored automatically if the route becomes safe again. Remember and hotkeys save the requested setting, not the temporary clamp. Volume Up at the restricted ceiling does not silently overwrite that pending boost; Volume Down can still attenuate.
 - Lowering volume still works: the element's native volume is used (attenuation only, exact dB math, and mute).
 - Mono mixing is unavailable on such media.
 
