@@ -594,9 +594,11 @@ function getAggregatedFrameLimit() {
     if (!isTopFrame() || frameLimitReports.size === 0) return null;
     const now = Date.now();
     let best = null;
+    let expired = false;
     for (const [frameId, entry] of Array.from(frameLimitReports)) {
         if (!Number.isInteger(frameId) || now - entry.ts > FRAME_REPORT_TTL_MS) {
             frameLimitReports.delete(frameId);
+            expired = true;
             continue;
         }
         if (!best || reasonSeverity(entry.reason) > reasonSeverity(best.reason)) best = entry;
@@ -605,6 +607,11 @@ function getAggregatedFrameLimit() {
         clearInterval(frameReportPurgeInterval);
         frameReportPurgeInterval = null;
     }
+    // A removed iframe can disappear without sending an unrestricted report.
+    // Expiring its stale restriction must also recheck requested volume and
+    // Normalize availability; dropping it from the Map alone left applied
+    // audio capped until the popup was reopened or another event occurred.
+    if (expired) invalidateBoostLimitCache();
     return best;
 }
 
