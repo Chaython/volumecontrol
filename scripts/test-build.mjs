@@ -1287,6 +1287,23 @@ test('normalizer route availability distinguishes DRM/CORS and forced native', (
     assert.equal(fn({ boostLimited: false, reason: '' }).available, true);
 });
 
+test('confirmed unavailable Normalize ignores toggle requests without altering saved preference', async () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    const begin = source.indexOf('async function toggleNormalizer(tab) {');
+    const end = source.indexOf('async function toggleMute(tab, muted) {', begin);
+    assert.ok(begin > 0 && end > begin);
+    const checkbox = { checked: true, disabled: true };
+    const writes = [];
+    const fn = runInNewContext('(' + source.slice(begin, end).trim() + ')', {
+        cached: { normalizerCheckbox: checkbox, normalizerAvailable: false },
+        document: { querySelector: () => checkbox },
+        mutateSiteNormalizerSettings: mutation => { writes.push(mutation); }
+    });
+    await fn({ id: 1, url: 'https://example.com/watch' });
+    assert.equal(checkbox.checked, true, 'saved Normalize-on preference remains checked while unavailable');
+    assert.equal(writes.length, 0, 'disabled Normalize must never save a new preference');
+});
+
 test('normalizer preference saves even without an active audio route or tab receiver', async () => {
     const source = readFileSync(join(root, 'popup.js'), 'utf8');
     const start = source.indexOf('async function toggleNormalizer(tab) {');
