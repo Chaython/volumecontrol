@@ -78,6 +78,7 @@ const cached = {
   boostLimited: false,
   monoAvailable: true,
   normalizerAvailable: true,
+  normalizerUnavailableReason: "",
   normalizerPending: false,
   mutePending: false,
   monoPending: false,
@@ -475,31 +476,55 @@ function applyNormalizerState(state = {}) {
   const note = cached.normalizerNote || document.querySelector("#normalizer-note");
   const panel = checkbox ? checkbox.closest(".normalizer-panel") : null;
 
+  // A site/path's enabled preference is distinct from the current media's
+  // availability. Keep it stored/checked, but prevent changes while DRM,
+  // unrouteable CORS, or forced native output makes analysis impossible.
   if (state.normalizerEnabled !== undefined && checkbox && !cached.normalizerPending) {
     checkbox.checked = Boolean(state.normalizerEnabled);
   }
-  const details = document.getElementById("normalizer-details");
-  if (details) details.hidden = !(checkbox && checkbox.checked);
-
   if (state.normalizerAvailable !== undefined) {
     cached.normalizerAvailable = state.normalizerAvailable !== false;
   }
-  const available = cached.normalizerAvailable;
-  if (checkbox) {
-    // Keep the switch available even when this media cannot be processed.
-    checkbox.disabled = false;
-    checkbox.setAttribute("aria-disabled", "false");
+  if (state.normalizerUnavailableReason !== undefined) {
+    cached.normalizerUnavailableReason = state.normalizerUnavailableReason || "";
+  } else if (state.limitationReason !== undefined) {
+    cached.normalizerUnavailableReason = state.limitationReason || "";
   }
-  if (panel) panel.classList.toggle("is-unavailable", !available);
+  const available = cached.normalizerAvailable;
+  const enabled = Boolean(checkbox && checkbox.checked);
+  const details = document.getElementById("normalizer-details");
+  if (details) details.hidden = !enabled || !available;
+
+  const reason = cached.normalizerUnavailableReason;
+  const message = reason === "restricted"
+    ? "Normalize cannot process DRM-protected audio in this browser."
+    : reason === "cross-origin"
+      ? "Normalize cannot analyze cross-origin audio without WebAudio access."
+      : reason === "native-route"
+        ? "Normalize requires WebAudio; Force native routing is selected."
+        : "Normalize needs a supported WebAudio route and cannot process this media.";
+  const explanation = enabled && !available
+    ? message + " Your saved Normalize preference will resume when supported audio plays."
+    : message;
+
+  if (checkbox) {
+    checkbox.disabled = !available;
+    checkbox.setAttribute("aria-disabled", String(!available));
+    checkbox.setAttribute("aria-describedby", available ? "" : "normalizer-note");
+  }
+  if (panel) {
+    panel.classList.toggle("is-unavailable", !available);
+    const label = panel.querySelector(".normalizer-switch");
+    if (label) {
+      label.title = available
+        ? "Automatically even out loud and quiet audio"
+        : explanation;
+    }
+  }
+  // Keep the explanation OUTSIDE the collapsed meter section, even when
+  // Normalize was off before the restriction appeared.
   if (note) {
-    const reason = state.normalizerUnavailableReason || state.limitationReason || "";
-    note.textContent = reason === "restricted"
-      ? "Normalization is unavailable for this DRM/restricted media in the current browser."
-      : reason === "cross-origin"
-        ? "Normalization is unavailable because this media cannot be safely routed through WebAudio."
-        : reason === "native-route"
-          ? "Normalization is unavailable while HTML Media Route Override is set to Force native."
-          : "Normalization needs the WebAudio route and is unavailable on this media.";
+    note.textContent = explanation;
     note.classList.toggle("hidden", available);
   }
 
