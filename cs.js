@@ -494,7 +494,20 @@ function invalidateBoostLimitCache() {
             boostReconcileScheduled = false;
             if (!controlProfileReady || tc.vars.isBlocked) return;
             const next = normalizeDbForCurrentMedia(tc.vars.requestedDb);
-            if (next !== tc.vars.dB) applyState();
+            // Availability can change even while manual dB is already 0.
+            // Stop/restart the isolated sampling timer and release any stale
+            // automatic boost without waiting for a popup or slider event.
+            const unavailable = tc.vars.normalizerEnabled &&
+                !getNormalizerAvailability().available;
+            if (unavailable && tc.vars.normalizerGainDb !== 0) {
+                tc.vars.normalizerGainDb = 0;
+                tc.vars.normalizerPeakDb = -Infinity;
+                applyState();
+            } else if (next !== tc.vars.dB) {
+                applyState();
+            } else if (tc.vars.normalizerEnabled && tc.vars.gainNode) {
+                ensureIsolatedNormalizerTimer();
+            }
         });
     }
 }
@@ -1264,7 +1277,9 @@ function ensureIsolatedNormalizerTimer() {
     // Even an empty 100ms interval keeps waking background tabs. Only sample
     // when an actual isolated route needs automatic gain control.
     const shouldRun = !tc.vars.isBlocked && tc.vars.normalizerEnabled &&
-        Boolean(tc.vars.gainNode && tc.vars.audioCtx);
+        Boolean(tc.vars.gainNode && tc.vars.audioCtx &&
+            tc.vars.audioCtx.state !== 'closed') &&
+        getNormalizerAvailability().available;
     if (!shouldRun) {
         if (tc.vars.normalizerTimer !== null) clearInterval(tc.vars.normalizerTimer);
         tc.vars.normalizerTimer = null;
