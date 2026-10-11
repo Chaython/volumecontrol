@@ -73,6 +73,8 @@ const cached = {
   muteBtn: null,
   activeTab: null,
   maxDb: MAX_DB,
+  requestedDb: null,
+  volumeEditPending: false,
   boostLimited: false,
   monoAvailable: true,
   normalizerAvailable: true,
@@ -522,6 +524,10 @@ function applyNormalizerState(state = {}) {
 }
 
 function applyAudioControlState(state = {}) {
+  if (typeof state.requestedVolume === "number" && Number.isFinite(state.requestedVolume) &&
+      !cached.volumeEditPending) {
+    cached.requestedDb = normalizeDb(state.requestedVolume);
+  }
   const maxDb = Number.isFinite(Number(state.maxDb)) ? normalizeDb(state.maxDb) : MAX_DB;
 
   cached.maxDb = Math.min(MAX_DB, Math.max(MIN_DB, maxDb));
@@ -628,7 +634,12 @@ async function saveSiteSettingsNow(tab) {
         const muteBtn = cached.muteBtn || document.getElementById("mute-btn");
 
         const patch = {
-            volume: normalizeControlDb(volumeSlider?.value),
+            // Remember the requested dB, not the temporarily clamped 0 dB
+            // shown during DRM/CORS playback. If a user explicitly changes
+            // the slider, setVolume() updates this independently.
+            volume: Number.isFinite(cached.requestedDb)
+                ? normalizeDb(cached.requestedDb)
+                : normalizeControlDb(volumeSlider?.value),
             mono: Boolean(monoCheckbox?.checked),
             muted: Boolean(muteBtn && muteBtn.classList.contains("muted"))
         };
@@ -652,7 +663,12 @@ function saveSiteSettings(tab) {
 async function setVolume(dB, tab, options = {}) {
   const requestGeneration = ++volumeRequestGeneration;
   const requestedDb = setDisplayedVolume(dB);
-  if (!tab) return;
+  cached.requestedDb = normalizeDb(dB);
+  cached.volumeEditPending = true;
+  if (!tab) {
+    cached.volumeEditPending = false;
+    return;
+  }
 
   // Serialize deliveries, not just UI responses. Otherwise a slow first
   // tabs.sendMessage can apply *after* a newer slider movement and leave
@@ -678,6 +694,11 @@ async function setVolume(dB, tab, options = {}) {
       if (requestGeneration !== volumeRequestGeneration) return;
 
       if (response && response.response) {
+          // Preserve the requested gain from the authoritative content state.
+          // Never replace it with response.volume while boost is capped.
+          if (Number.isFinite(response.response.requestedVolume)) {
+              cached.requestedDb = normalizeDb(response.response.requestedVolume);
+          }
           applyAudioControlState(response.response);
           if (response.response.volume !== undefined) {
               normalizedDb = setDisplayedVolume(response.response.volume);
@@ -695,6 +716,7 @@ async function setVolume(dB, tab, options = {}) {
               muted
           }).catch(() => {});
       }
+      cached.volumeEditPending = false;
       await saveSiteSettings(tab);
   };
 
