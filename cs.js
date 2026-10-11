@@ -476,6 +476,7 @@ function getBoostLimitReason(element) {
 // and by a TTL to catch async state changes (e.g., mediaKeys being set).
 let boostLimitCache = null;
 let boostLimitCacheTime = 0;
+let boostReconcileScheduled = false;
 let boostLimitObserver = null;
 let knownMediaSweepInterval = null;
 const BOOST_LIMIT_CACHE_TTL_MS = 1000;
@@ -484,6 +485,18 @@ const KNOWN_MEDIA_SWEEP_MS = 30000;
 function invalidateBoostLimitCache() {
     boostLimitCache = null;
     scheduleFrameBoostLimitReport();
+    // Merely invalidating the verdict left applied dB at its previously
+    // clamped value until the popup was reopened or another control changed.
+    // Reconcile once per event batch when media/DRM/CORS conditions change.
+    if (controlProfileReady && !tc.vars.isBlocked && !boostReconcileScheduled) {
+        boostReconcileScheduled = true;
+        queueMicrotask(() => {
+            boostReconcileScheduled = false;
+            if (!controlProfileReady || tc.vars.isBlocked) return;
+            const next = normalizeDbForCurrentMedia(tc.vars.requestedDb);
+            if (next !== tc.vars.dB) applyState();
+        });
+    }
 }
 
 function getBoostLimitInfo() {
