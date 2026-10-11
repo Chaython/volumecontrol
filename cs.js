@@ -686,14 +686,26 @@ function setupBoostLimitObserver() {
     if (boostLimitObserver || typeof MutationObserver === 'undefined') return;
     const observer = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
-            for (const node of mutation.addedNodes) {
+            if (mutation.type === 'attributes') {
+                const target = mutation.target;
+                // A reused <audio>/<video> can switch from clear to CDN/DRM
+                // content without DOM insertion. The MAIN hook also publishes
+                // restrictions on the root element's data attribute.
+                const media = target && (target.nodeName === 'AUDIO' || target.nodeName === 'VIDEO');
+                if (media || (target === document.documentElement &&
+                    mutation.attributeName === 'data-vc-page-media-restriction')) {
+                    invalidateBoostLimitCache();
+                    return;
+                }
+            }
+            for (const node of mutation.addedNodes || []) {
                 if (node.nodeName === 'AUDIO' || node.nodeName === 'VIDEO' ||
                     (node.querySelectorAll && node.querySelector('audio, video'))) {
                     invalidateBoostLimitCache();
                     return;
                 }
             }
-            for (const node of mutation.removedNodes) {
+            for (const node of mutation.removedNodes || []) {
                 if (node.nodeName === 'AUDIO' || node.nodeName === 'VIDEO' ||
                     (node.querySelectorAll && node.querySelector('audio, video'))) {
                     invalidateBoostLimitCache();
@@ -708,7 +720,12 @@ function setupBoostLimitObserver() {
     }
     const startObserving = () => {
         if (boostLimitObserver !== observer) return;
-        observer.observe(document.documentElement || document, { childList: true, subtree: true });
+        observer.observe(document.documentElement || document, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['src', 'crossorigin', 'data-vc-page-media-restriction']
+        });
     };
     if (document.documentElement) {
         startObserving();
