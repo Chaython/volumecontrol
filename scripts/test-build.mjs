@@ -459,6 +459,7 @@ test('MAIN-world media element route failures cannot bypass limiter with boosted
         state: { extensionActive: true, enabled: true, mono: false, normalizerEnabled: true, muted: false, dB: 20 },
         effectiveGain: () => 10, dbToGain: d => 10 ** (d / 20), connectNative,
         configureLimiter: () => {}, log: () => {}, safetyLimiterRequired: () => true,
+        syncNormalizerMeterTimer: () => {},
         currentRoutingMode: () => 'stereo-limited',
         disconnectMediaRouteOutput: r => {
             for (const name of ['gain', 'splitter', 'leftGain', 'rightGain', 'merger', 'limiter', 'analyser']) r[name].edges = [];
@@ -1077,6 +1078,7 @@ test('MAIN-world media route clamps before bypassing limiter on Normalize off', 
     const wire = runInNewContext('(() => {\n' + source.slice(start,end) + '\nreturn wireMediaRoute;})()', {
         state: { extensionActive: true, enabled: true, normalizerEnabled: false, muted: false, mono: false, dB: -10 },
         log: () => {}, configureLimiter: () => {}, safetyLimiterRequired: () => false,
+        syncNormalizerMeterTimer: () => {},
         currentRoutingMode: () => 'stereo-direct',
         dbToGain: v => 10 ** (v/20), effectiveGain: () => 10 ** (-10/20),
         connectNative: (a,b) => {
