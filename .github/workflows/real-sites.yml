@@ -46,7 +46,7 @@ permissions:
 
 # Keep the latest probe for each branch, instead of queuing obsolete runs.
 concurrency:
-  group: streaming-${{ github.head_ref || github.ref_name }}
+  group: streaming-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
