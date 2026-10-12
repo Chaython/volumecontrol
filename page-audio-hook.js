@@ -295,6 +295,9 @@
         const resumeNow = async () => {
             try {
                 if (context.state === "suspended") await context.resume();
+                // A browser/user-gesture resume can occur without a new media
+                // play event or graph connection. Restart sampling on resume.
+                syncNormalizerMeterTimer();
             } catch (e) {
                 log(`context resume failed: ${e && e.message}`);
             }
@@ -312,6 +315,7 @@
         let promise;
         promise = Promise.resolve()
             .then(() => context.suspend())
+            .then(() => syncNormalizerMeterTimer())
             .catch((e) => {
                 log(`${label} suspend failed: ${e && e.message}`);
             })

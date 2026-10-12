@@ -3424,3 +3424,28 @@ test('new MAIN-world media routes wake normalizer sampling after initial page st
     assert.match(code, /route\.currentMode === wantMode && route\.outputConnected[\s\S]*?syncNormalizerMeterTimer\(\);/,
         'existing connected route can recover sampling after a previous suspension');
 });
+
+test('MAIN sampler reconciles when an AudioContext resumes without a new play event', () => {
+    const src = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const begin = src.indexOf('    function resumeContext(context) {');
+    const end = src.indexOf('    function readNativeMuted(element) {', begin);
+    assert.ok(begin > 0 && end > begin);
+    const events = [];
+    const env = {
+        pendingContextSuspends: new WeakMap(),
+        syncNormalizerMeterTimer: () => events.push('sample'),
+        log: () => {}
+    };
+    const ops = runInNewContext(src.slice(begin,end) + '\n({resumeContext,suspendContext})', env);
+    const context = {state:'suspended',
+        resume: async function(){this.state='running'; events.push('resume');},
+        suspend: async function(){this.state='suspended'; events.push('suspend');}
+    };
+    return ops.resumeContext(context).then(async () => {
+        assert.deepEqual(events, ['resume','sample']);
+        await ops.suspendContext(context);
+        assert.deepEqual(events, ['resume','sample','suspend','sample']);
+        await ops.resumeContext(context);
+        assert.deepEqual(events.slice(-2), ['resume','sample']);
+    });
+});
