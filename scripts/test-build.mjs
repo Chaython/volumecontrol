@@ -3449,3 +3449,28 @@ test('MAIN sampler reconciles when an AudioContext resumes without a new play ev
         assert.deepEqual(events.slice(-2), ['resume','sample']);
     });
 });
+
+
+test('streaming workflow fails closed when required decoded-media coverage disappears', () => {
+    const probe = readFileSync(join(root, 'scripts/chromium-real-sites.mjs'), 'utf8');
+    const workflow = readFileSync(join(root, '.github/workflows/real-sites.yml'), 'utf8');
+    const release = readFileSync(join(root, '.github/workflows/daily-prerelease.yml'), 'utf8');
+    const ci = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8');
+    assert.match(probe, /const missingRequired = required\.filter/);
+    for (const scenario of ['Downloaded real audio', 'Downloaded real video',
+        'Concurrent decoded MP3 and MP4', 'Real MP4 same-element playlist transition']) {
+        assert.ok(probe.includes(scenario), scenario + ' must be a required scenario');
+    }
+    assert.match(probe, /missingRequired\.length\) \{/);
+    assert.match(probe, /GITHUB_STEP_SUMMARY/);
+    assert.match(probe, /Number\.isFinite\(meter\?\.peakDb\)/);
+    for (const name of ['manifest.json', 'popup.html', 'popup.css',
+        'options.html', 'options.css', 'scripts/build.ps1', 'scripts/minify.mjs']) {
+        assert.equal(workflow.split("'" + name + "'").length, 3,
+            name + ' must trigger both push and pull-request streaming probes');
+    }
+    assert.match(release, /node scripts\/chromium-functional-smoke\.mjs/);
+    assert.match(release, /node scripts\/firefox-extension-smoke\.mjs/);
+    assert.match(release, /Create SHA-256 checksums/);
+    assert.match(ci, /cancel-in-progress:.*github\.ref/);
+});

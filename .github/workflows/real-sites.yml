@@ -12,6 +12,15 @@ on:
       - 'options.js'
       - 'scripts/chromium-real-sites.mjs'
       - '.github/workflows/real-sites.yml'
+      - 'manifest.json'
+      - 'popup.html'
+      - 'popup.css'
+      - 'options.html'
+      - 'options.css'
+      - 'scripts/build.ps1'
+      - 'scripts/minify.mjs'
+      - 'package.json'
+      - 'package-lock.json'
   pull_request:
     paths:
       - 'cs.js'
@@ -22,9 +31,23 @@ on:
       - 'options.js'
       - 'scripts/chromium-real-sites.mjs'
       - '.github/workflows/real-sites.yml'
+      - 'manifest.json'
+      - 'popup.html'
+      - 'popup.css'
+      - 'options.html'
+      - 'options.css'
+      - 'scripts/build.ps1'
+      - 'scripts/minify.mjs'
+      - 'package.json'
+      - 'package-lock.json'
 
 permissions:
   contents: read
+
+# Keep the latest probe for each branch, instead of queuing obsolete runs.
+concurrency:
+  group: streaming-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   real-sites:
