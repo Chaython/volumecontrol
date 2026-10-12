@@ -540,7 +540,7 @@ function getBoostLimitInfo() {
         // If nothing is playing, don't restrict — the user might be about to
         // play something, and we don't want to lock the slider based on stale state.
         for (const el of document.querySelectorAll('audio, video')) {
-            if (!isMediaPlaying(el) && !el.src && !el.currentSrc) continue;
+            if (!isMediaPlaying(el)) continue;
             const reason = getBoostLimitReason(el);
             if (reason) {
                 result = makeBoostLimitedResult(reason);

@@ -63,6 +63,7 @@ const cached = {
   limitNote: null,
   monoCheckbox: null,
   rememberCheckbox: null,
+  rememberUrl: null,
   normalizerCheckbox: null,
   normalizerGain: null,
   peakMeter: null,
@@ -613,6 +614,7 @@ async function refreshAudioControlState(tab, shouldApply = () => true) {
 
 async function pollAudioControlState(tab) {
     if (!tab || tab.id === undefined) return null;
+    await syncRememberContext(tab).catch(handleError);
     const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(() => null);
     const state = response && response.response ? response.response : null;
     if (!state) return null;
@@ -651,12 +653,30 @@ async function currentTabUrl(tab) {
     }
 }
 
+async function syncRememberContext(tab) {
+    const checkbox = cached.rememberCheckbox || document.getElementById("remember-checkbox");
+    if (!checkbox || !tab) return;
+    const url = await currentTabUrl(tab);
+    if (!url || url === cached.rememberUrl) return;
+    const generation = rememberRequestGeneration;
+    const data = await storageGet({ siteSettings: {} });
+    if (generation !== rememberRequestGeneration || await currentTabUrl(tab) !== url) return;
+    const key = getSiteSettingsKey(data.siteSettings || {}, url);
+    cached.rememberUrl = url;
+    checkbox.checked = Boolean(key);
+}
+
 async function saveSiteSettingsNow(tab) {
     try {
         const rememberCheckbox = document.getElementById("remember-checkbox");
         if (!rememberCheckbox || !rememberCheckbox.checked || !tab) return;
         const url = await currentTabUrl(tab);
         if (!url) return;
+        // Do not save a previous SPA path's checkbox state on a new URL.
+        if (cached.rememberUrl && url !== cached.rememberUrl) {
+            await syncRememberContext(tab);
+            return;
+        }
 
         const defaultSettingsKey = normalizeSiteSettingsEntryInput(url);
         if (!defaultSettingsKey) return;
@@ -675,6 +695,10 @@ async function saveSiteSettingsNow(tab) {
             mono: Boolean(monoCheckbox?.checked),
             muted: Boolean(muteBtn && muteBtn.classList.contains("muted"))
         };
+        if (await currentTabUrl(tab) !== url) {
+            await syncRememberContext(tab);
+            return;
+        }
         await mutateSiteSettings({
             type: "mergeForUrl",
             url,
@@ -883,6 +907,10 @@ async function toggleRemember(tab) {
         try {
             const url = await currentTabUrl(tab);
             if (requestGeneration !== rememberRequestGeneration) return;
+            if (cached.rememberUrl && url !== cached.rememberUrl) {
+                await syncRememberContext(tab);
+                return;
+            }
             const defaultSettingsKey = normalizeSiteSettingsEntryInput(url);
             if (!defaultSettingsKey) return;
 
@@ -982,6 +1010,7 @@ async function initializeControls(tab) {
     cached.limitNote = limitNote;
     cached.monoCheckbox = monoCheckbox;
     cached.rememberCheckbox = rememberCheckbox;
+    cached.rememberUrl = tab.url;
     cached.normalizerCheckbox = normalizerCheckbox;
     cached.normalizerGain = document.querySelector("#normalizer-gain");
     cached.peakMeter = document.querySelector(".peak-meter");
@@ -1098,7 +1127,15 @@ async function initializeControls(tab) {
 
     try {
         const audioState = await refreshAudioControlState(tab);
+        if (await currentTabUrl(tab) !== tab.url) {
+            await syncRememberContext(tab);
+            return;
+        }
         const data = await storageGet({ siteSettings: {} });
+        if (await currentTabUrl(tab) !== tab.url) {
+            await syncRememberContext(tab);
+            return;
+        }
         const settingsKey = getSiteSettingsKey(data.siteSettings || {}, tab.url);
         const saved = settingsKey ? data.siteSettings[settingsKey] : null;
         if (saved) {

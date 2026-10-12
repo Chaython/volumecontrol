@@ -1108,9 +1108,9 @@
     function updatePageMediaRestriction() {
         let restriction = "";
         for (const element of mediaElements) {
-            // Mirror the content script's verdict gate: an element that is
-            // neither playing nor holding a source cannot limit boost.
-            if (!isMediaPlaying(element) && !getMediaSourceUrl(element)) continue;
+            // A paused/ended DRM player must not cap a separate clear player;
+            // routing guards remain active when playback begins.
+            if (!isMediaPlaying(element)) continue;
             // VERDICT (the popup note + slider clamp) requires per-element
             // DRM evidence on engines that silence routed EME audio. The
             // pending window and page-level probes gate ROUTING only (see
@@ -2099,6 +2099,7 @@
             applyMediaElementState(element);
         }
         updatePageMediaRestriction();
+        syncNormalizerMeterTimer();
     }
 
     function registerMediaElement(element, options = {}) {
@@ -2280,6 +2281,7 @@
                     const entry = trackDestinationConnection(this, destination, outputIndex, inputIndex, true);
                     try {
                         connectNative(this, graph.inputAnalyser, outputIndex, 0);
+                        syncNormalizerMeterTimer();
                         return destination;
                     } catch (e) {
                         entry.routed = false;
@@ -2978,7 +2980,10 @@
     }
 
     function updateNormalizerAndMeter() {
-        if (!state.normalizerEnabled) return;
+        if (!state.normalizerEnabled || !hasAnalyzableAudioRoute()) {
+            syncNormalizerMeterTimer();
+            return;
+        }
         let peakDb = -Infinity;
         let gainDb = 0;
         let gainCount = 0;
@@ -3011,8 +3016,26 @@
         });
     }
 
+    function hasAnalyzableAudioRoute() {
+        // A saved preference is not evidence of routable decoded samples.
+        if (state.debugRouteMode === "native") return false;
+        for (const element of mediaElements) {
+            const route = mediaRoutes.get(element);
+            if (route && route.outputConnected &&
+                route.context && route.context.state === "running" &&
+                isMediaPlaying(element)) return true;
+        }
+        for (const entry of destinationConnections) {
+            if (!entry.routed) continue;
+            const context = nodeFromRef(entry.contextRef);
+            if (context && context.state === "running" && graphs.has(context)) return true;
+        }
+        return false;
+    }
+
     function syncNormalizerMeterTimer() {
-        const shouldRun = state.extensionActive && state.enabled && state.normalizerEnabled;
+        const shouldRun = state.extensionActive && state.enabled && state.normalizerEnabled &&
+            hasAnalyzableAudioRoute();
         if (!shouldRun) {
             if (normalizerMeterTimerId !== null) clearInterval(normalizerMeterTimerId);
             normalizerMeterTimerId = null;

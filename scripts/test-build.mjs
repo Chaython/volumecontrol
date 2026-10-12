@@ -3288,3 +3288,85 @@ test('failed captured MediaElementSource does not advertise unrestricted boost',
         'uncaptured failed routes must still use their existing fallback warning');
     assert.match(source, /already-captured element with a closed audio context may stay silent until reload/);
 });
+
+test('paused DRM and CORS players cannot limit a separately playing clear element', () => {
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const hook = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(content, /for \(const el of document\.querySelectorAll\('audio, video'\)\) \{\s*if \(!isMediaPlaying\(el\)\) continue;/);
+    assert.match(hook, /for \(const element of mediaElements\) \{[\s\S]*?if \(!isMediaPlaying\(element\)\) continue;/);
+    assert.match(hook, /if \(isLikelyDrmMedia\(element\)\) \{[\s\S]*?return null;/);
+});
+
+test('MAIN normalizer sampler requires live routable audio and stops after pause', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8').replace(/\r\n/g, '\n');
+    const start = source.indexOf('    function hasAnalyzableAudioRoute() {');
+    const end = source.indexOf('    function startMaintenanceTimers() {', start);
+    assert.ok(start > 0 && end > start);
+    const active = new Set();
+    const media = { paused: false, ended: false };
+    const routes = new Map();
+    const ctx = {
+        state: { enabled: true, extensionActive: true, normalizerEnabled: true, debugRouteMode: 'auto' },
+        mediaElements: new Set([media]), mediaRoutes: routes,
+        destinationConnections: new Set(), graphs: new WeakMap(),
+        nodeFromRef: value => value, isMediaPlaying: el => !el.paused && !el.ended,
+        normalizerMeterTimerId: null,
+        setInterval: () => { active.add(1); return 1; },
+        clearInterval: id => active.delete(id),
+        updateNormalizerAndMeter: () => {}
+    };
+    const sync = runInNewContext(source.slice(start, end) + '\nsyncNormalizerMeterTimer', ctx);
+    sync();
+    assert.equal(active.size, 0, 'no decoded audio route: no timer');
+    routes.set(media, { context: { state: 'running' }, outputConnected: true });
+    sync();
+    assert.equal(active.size, 1);
+    media.paused = true;
+    sync();
+    assert.equal(active.size, 0, 'paused route: timer stopped');
+    media.paused = false;
+    routes.get(media).context.state = 'suspended';
+    sync();
+    assert.equal(active.size, 0, 'suspended route: timer stopped');
+    routes.get(media).context.state = 'running';
+    ctx.state.debugRouteMode = 'native';
+    sync();
+    assert.equal(active.size, 0, 'native: timer stopped');
+    ctx.state.debugRouteMode = 'auto';
+    sync();
+    assert.equal(active.size, 1, 'active WebAudio: sampler recovered');
+});
+
+test('Remember profile isolation follows SPA changes without writing to next URL', async () => {
+    const source = readFileSync(join(root, 'popup.js'), 'utf8');
+    const start = source.indexOf('async function currentTabUrl(tab) {');
+    const end = source.indexOf('function saveSiteSettings(tab)', start);
+    assert.ok(start > 0 && end > start);
+    let url = 'https://example.com/old';
+    const checkbox = { checked: true };
+    const writes = [];
+    const cached = { rememberUrl: url, rememberCheckbox: checkbox,
+        requestedDb: -12, monoCheckbox: {checked:false},
+        muteBtn: {classList:{contains:()=>false}}, slider:{value:-12} };
+    const ctx = {
+        tabsGet: async () => ({url}), cached, rememberRequestGeneration:0,
+        document:{getElementById:()=>checkbox},
+        storageGet:async()=>({siteSettings:{}}),
+        getSiteSettingsKey:()=>null,
+        normalizeSiteSettingsEntryInput:value=>new URL(value).pathname,
+        normalizeDb:value=>Number(value),
+        normalizeControlDb:value=>Number(value),
+        mutateSiteSettings:async value=>writes.push(value),
+        handleError:error=>{throw error}
+    };
+    runInNewContext(source.slice(start,end)+'\nthis.saveNow=saveSiteSettingsNow;',ctx);
+    url='https://example.com/new';
+    await ctx.saveNow({id:2});
+    assert.equal(writes.length,0,'old Remember selection must not write a new path');
+    assert.equal(cached.rememberUrl,url);
+    assert.equal(checkbox.checked,false,'new path without profile starts unchecked');
+    checkbox.checked=true;
+    await ctx.saveNow({id:2});
+    assert.equal(writes.length,1);
+    assert.equal(writes[0].url,url);
+});
