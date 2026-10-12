@@ -3410,3 +3410,15 @@ test('only extension-owned media AudioContext may be suspended', () => {
     assert.doesNotMatch(hook, /trackSelf:\s*true/,
         'extension must not suspend arbitrary page contexts');
 });
+
+test('new MAIN-world media routes wake normalizer sampling after initial page state', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const begin = page.indexOf('    function wireMediaRoute(route) {');
+    const end = page.indexOf('    function scheduleMediaRouteRecovery(element, route) {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    const code = page.slice(begin, end);
+    assert.match(code, /if \(route\.outputConnected\) syncNormalizerMeterTimer\(\);/,
+        'new media graph must start polling once its audio output connects');
+    assert.match(code, /route\.currentMode === wantMode && route\.outputConnected[\s\S]*?syncNormalizerMeterTimer\(\);/,
+        'existing connected route can recover sampling after a previous suspension');
+});

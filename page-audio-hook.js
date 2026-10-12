@@ -1700,6 +1700,7 @@
         const wantMode = currentRoutingMode();
         if (route.currentMode === wantMode && route.outputConnected && !route.limiterFallbackActive) {
             setMediaGainValue(route);
+            syncNormalizerMeterTimer();
             route.recoveryAttempts = 0;
             return;
         }
@@ -1738,6 +1739,10 @@
             log(`media graph wire failed: ${e && e.message}`);
         }
         setMediaGainValue(route);
+        // Playback often starts after the initial setState when no route
+        // existed. Start the 100ms meter as soon as a usable graph connects.
+        // Without this, a paused-on-load video never starts normalization.
+        if (route.outputConnected) syncNormalizerMeterTimer();
     }
 
     function scheduleMediaRouteRecovery(element, route) {
