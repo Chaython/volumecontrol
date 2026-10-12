@@ -3221,7 +3221,9 @@ test('forced native routing clamps unsupported boost even before playback, then 
 
 
 test('isolated audio statechange stops sampling on external suspension and ignores stale contexts', () => {
-    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    // Git's Windows checkouts may use CRLF; fragment boundaries must match
+    // the same normalized newline convention on every CI runner.
+    const source = readFileSync(join(root, 'cs.js'), 'utf8').replace(/\r\n/g, '\n');
     const begin = source.indexOf('const context = new (window.AudioContext || window.webkitAudioContext)();');
     const end = source.indexOf('\n    }\n\n    if (!tc.vars.gainNode', begin);
     assert.ok(begin > 0 && end > begin);
