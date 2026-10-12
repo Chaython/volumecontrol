@@ -676,14 +676,14 @@ try {
             '',
             '| Scenario | Result |',
             '| --- | --- |',
-            ...results.map(entry => '| ' + String(entry.site).replace(/\\|/g, '/') +
+            ...results.map(entry => '| ' + String(entry.site).replace(/\|/g, '/') +
                 ' | ' + entry.status + ' |'),
             '',
             '**Required decoded-media scenarios:** ' +
                 (missingRequired.length ? 'FAILED: ' + missingRequired.join(', ') : 'all passed'),
             ''
         ];
-        appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\\n') + '\\n');
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
     }
     if (results.some(r => r.status === 'failed') || missingRequired.length) {
         if (missingRequired.length) console.error('REQUIRED_MEDIA_PROBES_FAILED=' + missingRequired.join(', '));
