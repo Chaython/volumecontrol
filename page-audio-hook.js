@@ -50,7 +50,6 @@
 
     const graphs = new WeakMap();
     const contexts = new Set();
-    const selfSuspendedContexts = new WeakSet();
     const vcNodes = new WeakSet();
     const destinationConnections = new Set();
     const howlerRoutes = new WeakMap();
@@ -296,7 +295,6 @@
         const resumeNow = async () => {
             try {
                 if (context.state === "suspended") await context.resume();
-                selfSuspendedContexts.delete(context);
             } catch (e) {
                 log(`context resume failed: ${e && e.message}`);
             }
@@ -305,7 +303,7 @@
         return pending ? pending.catch(() => {}).then(resumeNow) : resumeNow();
     }
 
-    function suspendContext(context, { trackSelf = false, label = "context" } = {}) {
+    function suspendContext(context, { label = "context" } = {}) {
         if (!context || typeof context.suspend !== "function") return Promise.resolve();
         const existing = pendingContextSuspends.get(context);
         if (existing) return existing;
@@ -314,9 +312,6 @@
         let promise;
         promise = Promise.resolve()
             .then(() => context.suspend())
-            .then(() => {
-                if (trackSelf && context.state === "suspended") selfSuspendedContexts.add(context);
-            })
             .catch((e) => {
                 log(`${label} suspend failed: ${e && e.message}`);
             })
@@ -466,9 +461,8 @@
     }
 
     function suspendMediaContextIfIdle() {
-        // Also suspend any idle page-level contexts we've routed through.
-        suspendIdleContexts();
-
+        // Page-created AudioContexts are owned by the site. Missing tracked
+        // connections does not prove they are silent; never suspend those.
         if (!mediaAudioContext || mediaAudioContext.state === "closed") return;
         if (mediaAudioContext.state !== "running") return;
 
@@ -529,51 +523,14 @@
         contexts.add(supportsWeakRef ? new WeakRef(context) : context);
     }
 
-    // Resume a context ONLY when the extension itself suspended it. Pages call
-    // suspend() deliberately (pause-on-blur, battery savers); those must stay
-    // suspended. A context WE suspended that receives a new destination
-    // connection (page playing its next sound) must be revived, or the new
-    // audio would silently play into a suspended context — "extension killed
-    // my game audio".
+    // Never resume page-created AudioContexts suspended by the site itself.
+    // Only an in-flight extension-owned suspension can be reversed here.
     function resumeIfSelfSuspended(context) {
         try {
-            if (context && (selfSuspendedContexts.has(context) || pendingContextSuspends.has(context))) {
+            if (context && pendingContextSuspends.has(context)) {
                 resumeContext(context);
             }
         } catch (e) {}
-    }
-
-    function suspendIdleContexts() {
-        // Suspend page-level AudioContexts that the extension has routed through
-        // but which no longer have any active audio sources. This is critical for
-        // Bluetooth devices: a running AudioContext keeps the OS audio output
-        // stream open, preventing the device from returning to idle.
-        eachTrackedContext((ctx) => {
-            if (ctx.state !== "running") return;
-            if (ctx === mediaAudioContext) return; // handled by suspendMediaContextIfIdle
-
-            // Check if any media route on this context is still playing.
-            if (hasActiveMediaRoute(ctx)) return;
-
-            // Check if any destination connection on this context is still
-            // tracked (routed OR native). Counting only routed connections
-            // meant a context whose connections we had restored to native
-            // (e.g. after the user set 0 dB) would be suspended while its
-            // audio was still playing — killing audio on sites whose graphs
-            // we had previously routed through.
-            let hasTrackedConnection = false;
-            for (const entry of destinationConnections) {
-                if (nodeFromRef(entry.contextRef) === ctx) {
-                    hasTrackedConnection = true;
-                    break;
-                }
-            }
-            if (hasTrackedConnection) return;
-
-            suspendContext(ctx, { trackSelf: true, label: "page context" }).then(() => {
-                log(`page context suspended (idle): state=${ctx.state}`);
-            });
-        });
     }
 
     function disconnectMediaRouteOutput(route) {
@@ -879,7 +836,11 @@
     // verdict.
     function markElementRestricted(element) {
         try {
-            if (element && element.dataset) element.dataset.vcRestrictedMedia = "true";
+            if (element && element.dataset) {
+                element.dataset.vcRestrictedMedia = "true";
+                const source = getMediaSourceUrl(element);
+                if (source) element.dataset.vcRestrictedMediaSource = source;
+            }
         } catch (e) {}
         // The aggregate page restriction may have just appeared (this element
         // is now DRM-restricted even if it is detached or in shadow DOM).
@@ -934,11 +895,21 @@
     function elementDrmEvidence(element) {
         if (!element) return false;
         try {
-            if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
-            if (element.mediaKeys) return true;
-            if (element.webkitKeys) return true;
+            const keys = element.mediaKeys || element.webkitKeys;
+            if (element.dataset && element.dataset.vcRestrictedMedia === "true") {
+                const previous = element.dataset.vcRestrictedMediaSource;
+                const current = getMediaSourceUrl(element);
+                if (previous && current && previous !== current && !keys) {
+                    delete element.dataset.vcRestrictedMedia;
+                    delete element.dataset.vcRestrictedMediaSource;
+                } else {
+                    return true;
+                }
+            }
+            if (keys) return true;
         } catch (e) {
-            return false;
+            // An uninspectable DRM state is not proof of a clear stream.
+            return true;
         }
         return false;
     }
@@ -2851,7 +2822,6 @@
         }
 
         suspendMediaContextIfIdle();
-        suspendIdleContexts();
         restorePatchedPageApis();
         bridgeToken = null;
     }

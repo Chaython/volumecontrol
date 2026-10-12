@@ -560,3 +560,7 @@ https://github.com/Chaython/TogglePIP (Allow a site to run PIP consistently with
 https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colors, search providers....)
 
 ***
+
+### Source changes and audio-context ownership (October 2026)
+
+A reused media element's DRM marker is discarded only when a different, nonempty media source is observed **and no EME MediaKeys remain attached**. Attached keys, unreadable DRM state, and source-less transitions retain the conservative capture guard; this avoids irreversible silence on protected Chromium content. Page-created AudioContexts are never suspended by Volume Control merely because tracked output connections disappear; only its own idle media AudioContext is suspended to release the audio device.

@@ -274,11 +274,24 @@ const EME_AUDIO_SILENCED_WHEN_ROUTED = !isGeckoRuntime();
 function elementDrmEvidence(element) {
     if (!element) return false;
     try {
-        if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
-        if (element.mediaKeys) return true;
-        if (element.webkitKeys) return true;
+        // An encrypted event on the previous track must not permanently mark
+        // a reused <video> as DRM. Only clear evidence when a *different,
+        // nonempty* source is established and no MediaKeys remain attached.
+        const keys = element.mediaKeys || element.webkitKeys;
+        if (element.dataset && element.dataset.vcRestrictedMedia === "true") {
+            const previous = element.dataset.vcRestrictedMediaSource;
+            const current = getMediaSourceUrl(element);
+            if (previous && current && previous !== current && !keys) {
+                delete element.dataset.vcRestrictedMedia;
+                delete element.dataset.vcRestrictedMediaSource;
+            } else {
+                return true;
+            }
+        }
+        if (keys) return true;
     } catch (e) {
-        return false;
+        // An unreadable MediaKeys getter must not authorize unsafe capture.
+        return true;
     }
     return false;
 }
@@ -1511,7 +1524,11 @@ function registerMediaElement(element) {
         if (element.dataset && element.dataset.vcEncryptedWatched !== "true") {
             element.dataset.vcEncryptedWatched = "true";
             element.addEventListener('encrypted', () => {
-                try { element.dataset.vcRestrictedMedia = "true"; } catch (e) {}
+                try {
+                    element.dataset.vcRestrictedMedia = "true";
+                    const source = getMediaSourceUrl(element);
+                    if (source) element.dataset.vcRestrictedMediaSource = source;
+                } catch (e) {}
                 // Invalidate boost limit cache since this element just became restricted.
                 invalidateBoostLimitCache();
             }, { passive: true });

@@ -3372,3 +3372,41 @@ test('Remember profile isolation follows SPA changes without writing to next URL
     assert.equal(writes.length,1);
     assert.equal(writes[0].url,url);
 });
+
+test('reused media clears DRM evidence only on a real source swap without keys', () => {
+    for (const file of ['cs.js','page-audio-hook.js']) {
+        const source = readFileSync(join(root, file), 'utf8');
+        const begin = source.indexOf('function elementDrmEvidence(element) {');
+        const end = source.indexOf(file === 'cs.js'
+            ? '// Gecko keys-attached marker:' : '    // Gecko keys-attached marker:', begin);
+        assert.ok(begin >= 0 && end > begin, file + ': evidence function not found');
+        const check = runInNewContext('(' + source.slice(begin,end).trim() + ')', {
+            getMediaSourceUrl: el => el.src
+        });
+        const element = { src:'blob:new', dataset: {
+            vcRestrictedMedia:'true', vcRestrictedMediaSource:'blob:old'
+        }, mediaKeys: null, webkitKeys: null };
+        assert.equal(check(element), false, file + ': clear the previous source marker');
+        assert.equal(element.dataset.vcRestrictedMedia, undefined);
+        element.dataset.vcRestrictedMedia = 'true';
+        element.dataset.vcRestrictedMediaSource = 'blob:old';
+        element.mediaKeys = {};
+        assert.equal(check(element), true, file + ': attached keys still block capture');
+        element.mediaKeys = null;
+        element.src='blob:old';
+        assert.equal(check(element), true, file + ': unchanged source stays marked DRM');
+        element.src='';
+        assert.equal(check(element), true, file + ': empty transient source cannot remove evidence');
+    }
+});
+
+test('only extension-owned media AudioContext may be suspended', () => {
+    const hook = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const section = hook.slice(hook.indexOf('function suspendMediaContextIfIdle() {'),
+        hook.indexOf('function eachTrackedContext(', hook.indexOf('function suspendMediaContextIfIdle() {')));
+    assert.match(section, /suspendContext\(mediaAudioContext/);
+    assert.doesNotMatch(hook, /function suspendIdleContexts\(/,
+        'a missing tracked destination does not prove a site-owned context is inactive');
+    assert.doesNotMatch(hook, /trackSelf:\s*true/,
+        'extension must not suspend arbitrary page contexts');
+});
