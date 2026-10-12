@@ -1644,7 +1644,7 @@ test('disabled normalization does not keep 100ms timers alive in every tab', () 
 test('normalizer sampling returns early when switched off', () => {
     const hook = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const content = readFileSync(join(root, 'cs.js'), 'utf8');
-    assert.match(hook, /function updateNormalizerAndMeter\(\) \{\s*if \(!state\.normalizerEnabled\) return;/);
+    assert.match(hook, /function updateNormalizerAndMeter\(\) \{\s*if \(!state\.normalizerEnabled \|\| !hasAnalyzableAudioRoute\(\)\) \{/);
     assert.match(content, /function sampleIsolatedNormalizer\(\) \{\s*if \(!tc\.vars\.normalizerEnabled\) return;/);
 });
 
@@ -2034,6 +2034,7 @@ test('Remember-off waits for an in-flight profile write so it cannot be recreate
         rememberRequestGeneration: 0,
         rememberDeliveryChain: Promise.resolve(),
         siteSettingsSaveChain: oldSave,
+        cached: { rememberUrl: 'https://example.com/watch?track=two' },
         document: { getElementById: () => checkbox },
         currentTabUrl: async () => 'https://example.com/watch?track=two',
         normalizeSiteSettingsEntryInput: () => 'example.com/watch',
@@ -2063,6 +2064,7 @@ test('rapid Remember on-off preserves the most recent choice despite slow saving
         rememberRequestGeneration: 0,
         rememberDeliveryChain: Promise.resolve(),
         siteSettingsSaveChain: Promise.resolve(),
+        cached: { rememberUrl: 'https://example.com/watch' },
         document: { getElementById: () => checkbox },
         currentTabUrl: async () => 'https://example.com/watch',
         normalizeSiteSettingsEntryInput: () => 'example.com/watch',
