@@ -463,9 +463,15 @@ input:checked + .slider:before { transform: translateX(16px); }
     opacity: 0.82;
 }
 
-.normalizer-panel.is-unavailable .normalizer-header,
+.normalizer-panel.is-unavailable .normalizer-switch {
+    opacity: 0.48;
+    cursor: not-allowed;
+}
+.normalizer-panel.is-unavailable .normalizer-switch .slider {
+    cursor: not-allowed;
+}
 .normalizer-panel.is-unavailable .peak-meter-row {
-    opacity: 0.6;
+    opacity: 0.5;
 }
 
 /* Action popups are typically ~420px wide on DESKTOP too. A width-only
@@ -498,4 +504,6 @@ input:checked + .slider:before { transform: translateX(16px); }
 .normalizer-detail-header { display: flex; justify-content: flex-end; margin: 0 0 6px; }
 .normalizer-panel .normalizer-header { margin-bottom: 0; }
 .normalizer-panel .normalizer-details { padding-top: 8px; }
-.normalizer-panel.is-unavailable .normalizer-switch { opacity: 1; }
+.normalizer-panel.is-unavailable .normalizer-note {
+    opacity: 1;
+}

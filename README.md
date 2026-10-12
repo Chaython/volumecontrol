@@ -23,7 +23,7 @@ Media that cannot be boosted (DRM-protected or cross-origin streams) is detected
 
 ## Normalization, Manual Volume, and Peak Meter (6.23+)
 
-**Normalize is opt-in and OFF by default.** Enable it for the current site/path using the **Normalize** switch in the popup. The live **Gain** readout and **output peak meter** expand only when that site's switch is on; they fold away when it is off. In **Options → Normalizer**, **Normalize by default on sites without an override** controls the global default, and the target/boost/ceiling/response fields are folded away when the global default is off. A site-specific choice overrides the global default and is saved **separately** in `siteNormalizerSettings`; it does not require **Remember** and does not overwrite remembered volume, mute or mono.
+**Normalize is opt-in and OFF by default.** Enable it for the current site/path using the **Normalize** switch in the popup. The live **Gain** readout and **output peak meter** expand only when that site's switch is on and WebAudio analysis is available; they fold away when it is off or temporarily unsupported. During Chromium DRM, cross-origin no-CORS, or Force native playback, the switch is **disabled and grayed out**, with an explanation displayed under it even if Normalize is off. A saved enabled preference is not erased: the switch can stay checked-but-disabled and automatically become active again once the page uses routable media. Firefox DRM audio can be normalized when Gecko provides a usable WebAudio route. In **Options → Normalizer**, **Normalize by default on sites without an override** controls the global default, and the target/boost/ceiling/response fields are folded away when the global default is off. A site-specific choice overrides the global default and is saved **separately** in `siteNormalizerSettings`; it does not require **Remember** and does not overwrite remembered volume, mute or mono.
 
 ### Signal flow
 
@@ -46,7 +46,7 @@ Output analyser (post-compressor sampled peak) → speakers
 - **Safety guards:** source RMS at or below **−55 dBFS** is treated as near-silence; automatic gain is reset to unity so background noise does not attract a large boost. Invalid or missing detector readings also fail to unity. When above the gate, automatic gain is bounded by the **Maximum auto boost** (+12 dB default, configurable up to +24 dB), and by measured source sample-peak headroom (approximately **2 dB below the configured compressor threshold**, *before* the manual slider's gain). A detected loudness jump reduces auto gain quickly; increasing gain follows the configured response time (600 ms default). Input analyser windows contain 8,192 samples (roughly 171 ms at 48 kHz) and are checked about every 100 ms, reducing gaps in transient detection.
 - **Manual volume:** the −32…+32 dB slider applies a separate multiplier *after the source analysis*. Normalization does not increase gain just because you lower the slider. **Positive manual boost is not part of the source-only peak headroom budget** and can trigger substantial compressor reduction; +20 dB does not necessarily mean +20 dB more perceived loudness.
 - **Compressor and peaks:** the WebAudio `DynamicsCompressorNode` processes audio when Normalize is on or manual boost is positive. With Normalize off and no positive boost, the output bypasses it where possible. The default **Limiter ceiling** field sets a **−1 dBFS compressor threshold**, **not** a guaranteed hard ceiling: this is **not** a look-ahead brick-wall true-peak limiter. Sudden attacks, inter-sample peaks, compressor latency, and large manual boosts can still clip or sound distorted.
-- **Output meter and lifecycle:** the live meter displays sampled post-processor **sample peaks** in dBFS, **not** true peaks, LUFS or integrated perceived loudness. The Gain number describes *automatic* gain, not the manual slider value. Normalize enable/disable and reused-media source boundaries clear prior automatic gain; the 100 ms sampling timers stop when Normalize is off.
+- **Output meter and lifecycle:** the live meter displays sampled post-processor **sample peaks** in dBFS, **not** true peaks, LUFS or integrated perceived loudness. The Gain number describes *automatic* gain, not the manual slider value. Normalize enable/disable and reused-media source boundaries clear prior automatic gain; the 100 ms sampling timers stop when Normalize is off. The isolated-world 100 ms sampler also pauses during known DRM/CORS or forced-native fallback **and while its AudioContext is suspended for paused media**. It resumes when compatible playback restarts; an expired iframe restriction can also release the pause automatically.
 
 ### Unsupported media and practical limits
 
@@ -68,8 +68,10 @@ Some media cannot be routed through WebAudio, and whether that applies depends o
 **What you will see when media is restricted** (Chromium + DRM, or any engine + cross-origin)
 
 - The popup shows a "restricted by DRM" note (or a cross-origin restriction note) and the slider clamps at 0 dB — no boost is offered because none is possible on that media in that browser.
+- The extension **remembers your requested gain separately from the applied gain**. For example, +12 dB requested on a clear song is temporarily applied as 0 dB maximum when the next song is DRM/CORS-limited, and can be restored automatically if the route becomes safe again. Remember and hotkeys save the requested setting, not the temporary clamp. Volume Up at the restricted ceiling does not silently overwrite that pending boost; Volume Down can still attenuate.
 - Lowering volume still works: the element's native volume is used (attenuation only, exact dB math, and mute).
 - Mono mixing is unavailable on such media.
+- **Force native fallback** (the debug routing override) also caps the displayed/applied volume at **0 dB**, even before playback starts, because native HTML media controls cannot boost. Your higher requested volume remains saved separately, and the normal range returns when WebAudio routing is available again; Mono and Normalize remain disabled while forced native is selected.
 
 **How detection works**
 
@@ -558,3 +560,7 @@ https://github.com/Chaython/TogglePIP (Allow a site to run PIP consistently with
 https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colors, search providers....)
 
 ***
+
+### Source changes and audio-context ownership (October 2026)
+
+A reused media element's DRM marker is discarded only when a different, nonempty media source is observed **and no EME MediaKeys remain attached**. Attached keys, unreadable DRM state, and source-less transitions retain the conservative capture guard; this avoids irreversible silence on protected Chromium content. Page-created AudioContexts are never suspended by Volume Control merely because tracked output connections disappear; only its own idle media AudioContext is suspended to release the audio device.

@@ -9,6 +9,7 @@ const {
   storageGet,
   storageSet,
   tabsQuery,
+  tabsGet,
   tabsSendMessage,
   TOP_FRAME_OPTIONS,
   runtimeSendMessage,
@@ -27,7 +28,16 @@ const sharedExtractRootDomain = globalThis.VolumeControlShared.extractRootDomain
 const WHEEL_STEP_DB = 1;  // volume change per wheel notch (matches hotkey step)
 let siteSettingsSaveChain = Promise.resolve();
 let volumeRequestGeneration = 0;
+let volumeEditGeneration = 0;
+let volumeDeliveryChain = Promise.resolve();
 let normalizerRequestGeneration = 0;
+let normalizerDeliveryChain = Promise.resolve();
+let muteRequestGeneration = 0;
+let muteDeliveryChain = Promise.resolve();
+let monoRequestGeneration = 0;
+let monoDeliveryChain = Promise.resolve();
+let rememberRequestGeneration = 0;
+let rememberDeliveryChain = Promise.resolve();
 
 function mutateSiteSettings(mutation) {
   return runtimeSendMessage({ command: "mutateSiteSettings", mutation });
@@ -53,6 +63,7 @@ const cached = {
   limitNote: null,
   monoCheckbox: null,
   rememberCheckbox: null,
+  rememberUrl: null,
   normalizerCheckbox: null,
   normalizerGain: null,
   peakMeter: null,
@@ -63,10 +74,15 @@ const cached = {
   muteBtn: null,
   activeTab: null,
   maxDb: MAX_DB,
+  requestedDb: null,
+  volumeEditPending: false,
   boostLimited: false,
   monoAvailable: true,
   normalizerAvailable: true,
+  normalizerUnavailableReason: "",
   normalizerPending: false,
+  mutePending: false,
+  monoPending: false,
   shortcuts: {}
 };
 
@@ -130,18 +146,34 @@ document.addEventListener('DOMContentLoaded', () => {
   // Bound to document so it works anywhere in the popup. Skip when the user is
   // editing the dB text field so wheel-scrolling inside the field doesn't fight
   // with text selection.
+  let wheelRemainder = 0;
   document.addEventListener('wheel', (e) => {
     const tab = cached.activeTab;
     if (!tab) return;
     if (document.activeElement && document.activeElement.id === 'volume-text') return;
 
-    // High-resolution trackpads fire many small wheel events; only treat
-    // notches (|deltaY| >= 15) as volume changes to avoid runaway adjustments.
-    if (Math.abs(e.deltaY) < 15) return;
+    // Large wheel notches keep the existing one-step-per-event behavior.
+    // Accumulate sub-notch trackpad deltas instead of dropping each tiny
+    // event forever. Convert line/page wheel units to approximately pixels.
+    const delta = Number(e.deltaY) *
+        (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 120 : 1);
+    if (!Number.isFinite(delta) || delta === 0) return;
+    let adjustment = delta;
+    if (Math.abs(delta) >= 15) {
+      wheelRemainder = 0;
+    } else {
+      if (wheelRemainder && Math.sign(delta) !== Math.sign(wheelRemainder)) {
+        wheelRemainder = 0;
+      }
+      wheelRemainder += delta;
+      if (Math.abs(wheelRemainder) < 15) return;
+      adjustment = wheelRemainder;
+      wheelRemainder -= Math.sign(wheelRemainder) * 15;
+    }
 
     const sliderEl = cached.slider;
     const currentDb = sliderEl ? Number(sliderEl.value) : 0;
-    const direction = e.deltaY > 0 ? -1 : 1;
+    const direction = adjustment > 0 ? -1 : 1;
     const nextDb = normalizeDb(currentDb + direction * WHEEL_STEP_DB);
     if (nextDb === currentDb) return;
 
@@ -445,31 +477,55 @@ function applyNormalizerState(state = {}) {
   const note = cached.normalizerNote || document.querySelector("#normalizer-note");
   const panel = checkbox ? checkbox.closest(".normalizer-panel") : null;
 
+  // A site/path's enabled preference is distinct from the current media's
+  // availability. Keep it stored/checked, but prevent changes while DRM,
+  // unrouteable CORS, or forced native output makes analysis impossible.
   if (state.normalizerEnabled !== undefined && checkbox && !cached.normalizerPending) {
     checkbox.checked = Boolean(state.normalizerEnabled);
   }
-  const details = document.getElementById("normalizer-details");
-  if (details) details.hidden = !(checkbox && checkbox.checked);
-
   if (state.normalizerAvailable !== undefined) {
     cached.normalizerAvailable = state.normalizerAvailable !== false;
   }
-  const available = cached.normalizerAvailable;
-  if (checkbox) {
-    // Keep the switch available even when this media cannot be processed.
-    checkbox.disabled = false;
-    checkbox.setAttribute("aria-disabled", "false");
+  if (state.normalizerUnavailableReason !== undefined) {
+    cached.normalizerUnavailableReason = state.normalizerUnavailableReason || "";
+  } else if (state.limitationReason !== undefined) {
+    cached.normalizerUnavailableReason = state.limitationReason || "";
   }
-  if (panel) panel.classList.toggle("is-unavailable", !available);
+  const available = cached.normalizerAvailable;
+  const enabled = Boolean(checkbox && checkbox.checked);
+  const details = document.getElementById("normalizer-details");
+  if (details) details.hidden = !enabled || !available;
+
+  const reason = cached.normalizerUnavailableReason;
+  const message = reason === "restricted"
+    ? "Normalize cannot process DRM-protected audio in this browser."
+    : reason === "cross-origin"
+      ? "Normalize cannot analyze cross-origin audio without WebAudio access."
+      : reason === "native-route"
+        ? "Normalize requires WebAudio; Force native routing is selected."
+        : "Normalize needs a supported WebAudio route and cannot process this media.";
+  const explanation = enabled && !available
+    ? message + " Your saved Normalize preference will resume when supported audio plays."
+    : message;
+
+  if (checkbox) {
+    checkbox.disabled = !available;
+    checkbox.setAttribute("aria-disabled", String(!available));
+    checkbox.setAttribute("aria-describedby", available ? "" : "normalizer-note");
+  }
+  if (panel) {
+    panel.classList.toggle("is-unavailable", !available);
+    const label = panel.querySelector(".normalizer-switch");
+    if (label) {
+      label.title = available
+        ? "Automatically even out loud and quiet audio"
+        : explanation;
+    }
+  }
+  // Keep the explanation OUTSIDE the collapsed meter section, even when
+  // Normalize was off before the restriction appeared.
   if (note) {
-    const reason = state.normalizerUnavailableReason || state.limitationReason || "";
-    note.textContent = reason === "restricted"
-      ? "Normalization is unavailable for this DRM/restricted media in the current browser."
-      : reason === "cross-origin"
-        ? "Normalization is unavailable because this media cannot be safely routed through WebAudio."
-        : reason === "native-route"
-          ? "Normalization is unavailable while HTML Media Route Override is set to Force native."
-          : "Normalization needs the WebAudio route and is unavailable on this media.";
+    note.textContent = explanation;
     note.classList.toggle("hidden", available);
   }
 
@@ -494,6 +550,10 @@ function applyNormalizerState(state = {}) {
 }
 
 function applyAudioControlState(state = {}) {
+  if (typeof state.requestedVolume === "number" && Number.isFinite(state.requestedVolume) &&
+      !cached.volumeEditPending) {
+    cached.requestedDb = normalizeDb(state.requestedVolume);
+  }
   const maxDb = Number.isFinite(Number(state.maxDb)) ? normalizeDb(state.maxDb) : MAX_DB;
 
   cached.maxDb = Math.min(MAX_DB, Math.max(MIN_DB, maxDb));
@@ -509,7 +569,11 @@ function applyAudioControlState(state = {}) {
   }
 
   if (note) {
-    note.textContent = state.limitation || BOOST_LIMIT_NOTE;
+    const normalizerUnavailable = state.normalizerAvailable === false;
+    const restriction = state.limitation || BOOST_LIMIT_NOTE;
+    note.textContent = normalizerUnavailable
+      ? restriction + " Normalize is also unavailable until compatible WebAudio playback resumes."
+      : restriction;
     note.classList.toggle("hidden", !cached.boostLimited);
   }
 
@@ -519,10 +583,10 @@ function applyAudioControlState(state = {}) {
   // Keep the mute button in sync with the content script's actual state.
   // This matters when a setVolume response carries a muted flag that was
   // changed elsewhere (e.g. via the hotkey while the popup was open).
-  if (state.muted !== undefined) applyMuteButtonState(state.muted);
+  if (state.muted !== undefined && !cached.mutePending) applyMuteButtonState(state.muted);
 }
 
-async function refreshAudioControlState(tab) {
+async function refreshAudioControlState(tab, shouldApply = () => true) {
     if (!tab || tab.id === undefined) return null;
 
     // Ask ONLY the top frame (frameId 0). The top frame owns the page's media
@@ -531,14 +595,18 @@ async function refreshAudioControlState(tab) {
     // (captcha, payment, ads), those frames' content scripts answer with their
     // own unrestricted state, making the DRM/boost-limit note flicker in and
     // out while the volume slider is dragged.
+    const volumeGenerationAtRequest = volumeRequestGeneration;
+    const volumeEditGenerationAtRequest = volumeEditGeneration;
     const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(handleError);
     const state = response && response.response ? response.response : null;
 
-    if (state) {
+    if (state && shouldApply()) {
         applyAudioControlState(state);
-        if (state.volume !== undefined) setDisplayedVolume(state.volume);
-        if (state.mono !== undefined && cached.monoCheckbox) cached.monoCheckbox.checked = Boolean(state.mono);
-        if (state.muted !== undefined) applyMuteButtonState(state.muted);
+        if (state.volume !== undefined &&
+            volumeGenerationAtRequest === volumeRequestGeneration &&
+            volumeEditGenerationAtRequest === volumeEditGeneration) setDisplayedVolume(state.volume);
+        if (state.mono !== undefined && cached.monoCheckbox && !cached.monoPending) cached.monoCheckbox.checked = Boolean(state.mono);
+        if (state.muted !== undefined && !cached.mutePending) applyMuteButtonState(state.muted);
     }
 
     return state;
@@ -546,6 +614,7 @@ async function refreshAudioControlState(tab) {
 
 async function pollAudioControlState(tab) {
     if (!tab || tab.id === undefined) return null;
+    await syncRememberContext(tab).catch(handleError);
     const response = await tabsSendMessage(tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS).catch(() => null);
     const state = response && response.response ? response.response : null;
     if (!state) return null;
@@ -554,26 +623,62 @@ async function pollAudioControlState(tab) {
     // committed value lags the thumb by up to the 40ms debounce, and a poll
     // response landing mid-drag would snap the thumb back (stale-flash).
     applyAudioControlState(state);
-    if (state.mono !== undefined && cached.monoCheckbox) cached.monoCheckbox.checked = Boolean(state.mono);
-    if (state.muted !== undefined) applyMuteButtonState(state.muted);
+    if (state.mono !== undefined && cached.monoCheckbox && !cached.monoPending) cached.monoCheckbox.checked = Boolean(state.mono);
+    if (state.muted !== undefined && !cached.mutePending) applyMuteButtonState(state.muted);
     return state;
 }
 
 
 async function pollMeterState(tab) {
-    if (!tab || tab.id === undefined || !cached.normalizerCheckbox?.checked) return null;
+    // Restricted DRM/CORS and forced-native routes cannot produce analyzer
+    // samples. Skip the 125ms meter queries until routing becomes available.
+    if (!tab || tab.id === undefined || !cached.normalizerCheckbox?.checked ||
+        !cached.normalizerAvailable) return null;
     const response = await tabsSendMessage(tab.id, { command: "getMeterState" }, TOP_FRAME_OPTIONS).catch(() => null);
     const state = response && response.response ? response.response : null;
     if (state) applyNormalizerState(state);
     return state;
 }
 
+async function currentTabUrl(tab) {
+    // A long-lived popup can outlast a same-tab SPA or playlist navigation.
+    // Storage changes must apply to the URL currently open, not the snapshot
+    // passed to initializeControls when the popup first appeared.
+    if (!tab || !Number.isInteger(tab.id)) return null;
+    try {
+        const current = await tabsGet(tab.id);
+        return current && typeof current.url === "string" ? current.url : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function syncRememberContext(tab) {
+    const checkbox = cached.rememberCheckbox || document.getElementById("remember-checkbox");
+    if (!checkbox || !tab) return;
+    const url = await currentTabUrl(tab);
+    if (!url || url === cached.rememberUrl) return;
+    const generation = rememberRequestGeneration;
+    const data = await storageGet({ siteSettings: {} });
+    if (generation !== rememberRequestGeneration || await currentTabUrl(tab) !== url) return;
+    const key = getSiteSettingsKey(data.siteSettings || {}, url);
+    cached.rememberUrl = url;
+    checkbox.checked = Boolean(key);
+}
+
 async function saveSiteSettingsNow(tab) {
     try {
         const rememberCheckbox = document.getElementById("remember-checkbox");
-        if (!rememberCheckbox || !rememberCheckbox.checked || !tab || !tab.url) return;
+        if (!rememberCheckbox || !rememberCheckbox.checked || !tab) return;
+        const url = await currentTabUrl(tab);
+        if (!url) return;
+        // Do not save a previous SPA path's checkbox state on a new URL.
+        if (cached.rememberUrl && url !== cached.rememberUrl) {
+            await syncRememberContext(tab);
+            return;
+        }
 
-        const defaultSettingsKey = normalizeSiteSettingsEntryInput(tab.url);
+        const defaultSettingsKey = normalizeSiteSettingsEntryInput(url);
         if (!defaultSettingsKey) return;
 
         const volumeSlider = cached.slider || document.getElementById("volume-slider");
@@ -581,13 +686,22 @@ async function saveSiteSettingsNow(tab) {
         const muteBtn = cached.muteBtn || document.getElementById("mute-btn");
 
         const patch = {
-            volume: normalizeControlDb(volumeSlider?.value),
+            // Remember the requested dB, not the temporarily clamped 0 dB
+            // shown during DRM/CORS playback. If a user explicitly changes
+            // the slider, setVolume() updates this independently.
+            volume: Number.isFinite(cached.requestedDb)
+                ? normalizeDb(cached.requestedDb)
+                : normalizeControlDb(volumeSlider?.value),
             mono: Boolean(monoCheckbox?.checked),
             muted: Boolean(muteBtn && muteBtn.classList.contains("muted"))
         };
+        if (await currentTabUrl(tab) !== url) {
+            await syncRememberContext(tab);
+            return;
+        }
         await mutateSiteSettings({
             type: "mergeForUrl",
-            url: tab.url,
+            url,
             defaultKey: defaultSettingsKey,
             patch
         });
@@ -604,31 +718,43 @@ function saveSiteSettings(tab) {
 
 async function setVolume(dB, tab, options = {}) {
   const requestGeneration = ++volumeRequestGeneration;
-  let normalizedDb = setDisplayedVolume(dB);
+  const requestedDb = setDisplayedVolume(dB);
+  cached.requestedDb = normalizeDb(dB);
+  cached.volumeEditPending = true;
+  if (!tab) {
+    cached.volumeEditPending = false;
+    return;
+  }
 
-  if (tab) {
-      // Broadcast the new volume to EVERY frame in the tab so media living in
-      // embedded iframes (embedded players, ads with audio) is controlled too.
-      // The broadcast response is a race (first frame to respond wins) and is
-      // deliberately ignored.
+  // Serialize deliveries, not just UI responses. Otherwise a slow first
+  // tabs.sendMessage can apply *after* a newer slider movement and leave
+  // the real media volume older than the value visible in the popup.
+  const deliver = async () => {
+      // Drop obsolete requests that have not started delivery yet.
+      if (requestGeneration !== volumeRequestGeneration) return;
+      let normalizedDb = requestedDb;
+
+      // Apply to all frames, but use only the top frame's state for verdicts.
       await tabsSendMessage(tab.id, {
           command: "setVolume",
           dB: normalizedDb
       }).catch(handleError);
 
-      // Authoritative state: query the TOP FRAME only. Its response carries
-      // the verdict-clamped volume and the real boost-limit/DRM status, so the
-      // UI cannot flip between frames' answers as the slider moves.
+      // A more recent request will be delivered after this one; do not
+      // persist or display this now-obsolete response.
+      if (requestGeneration !== volumeRequestGeneration) return;
+
       const response = await tabsSendMessage(tab.id, {
           command: "getAudioControlState"
       }, TOP_FRAME_OPTIONS).catch(handleError);
-
-      // A newer slider/text request has already been issued. The newer message
-      // is authoritative; do not let this older response snap the UI backward,
-      // overwrite its remembered value, or repaint the badge.
       if (requestGeneration !== volumeRequestGeneration) return;
 
       if (response && response.response) {
+          // Preserve the requested gain from the authoritative content state.
+          // Never replace it with response.volume while boost is capped.
+          if (Number.isFinite(response.response.requestedVolume)) {
+              cached.requestedDb = normalizeDb(response.response.requestedVolume);
+          }
           applyAudioControlState(response.response);
           if (response.response.volume !== undefined) {
               normalizedDb = setDisplayedVolume(response.response.volume);
@@ -646,95 +772,164 @@ async function setVolume(dB, tab, options = {}) {
               muted
           }).catch(() => {});
       }
+      cached.volumeEditPending = false;
       await saveSiteSettings(tab);
-  }
+  };
+
+  const next = volumeDeliveryChain.then(deliver, deliver);
+  // Keep the chain usable even if a downstream API unexpectedly rejects.
+  volumeDeliveryChain = next.catch(() => {});
+  return next;
 }
 
 async function toggleMono(tab) {
   const monoCheckbox = cached.monoCheckbox || document.querySelector("#mono-checkbox");
-  if (tab && monoCheckbox && !monoCheckbox.disabled && cached.monoAvailable) {
-      await tabsSendMessage(tab.id, { command: "setMono", mono: monoCheckbox.checked }).catch(handleError);
+  if (!tab || !monoCheckbox || monoCheckbox.disabled || !cached.monoAvailable) return;
+  const mono = Boolean(monoCheckbox.checked);
+  const requestGeneration = ++monoRequestGeneration;
+  cached.monoPending = true;
+
+  const deliver = async () => {
+      if (requestGeneration !== monoRequestGeneration) return;
+      await tabsSendMessage(tab.id, { command: "setMono", mono }).catch(handleError);
+      if (requestGeneration !== monoRequestGeneration) return;
       await saveSiteSettings(tab);
-  }
+      if (requestGeneration === monoRequestGeneration) cached.monoPending = false;
+  };
+  const next = monoDeliveryChain.then(deliver, deliver);
+  monoDeliveryChain = next.catch(() => {});
+  return next;
 }
 
 
 async function toggleNormalizer(tab) {
   const checkbox = cached.normalizerCheckbox || document.querySelector("#normalizer-checkbox");
-  // Availability describes the *current audio route*, not whether a site
-  // preference can be saved. Let users switch normalization off or pre-enable
-  // it even when the current player is restricted or still loading.
+  // The preference is valid even if the player has not loaded yet.
   if (!tab || !checkbox || checkbox.disabled) return;
 
   const enabled = Boolean(checkbox.checked);
   const requestGeneration = ++normalizerRequestGeneration;
   cached.normalizerPending = true;
   applyNormalizerState({ normalizerEnabled: enabled });
-  try {
-    const defaultKey = normalizeSiteSettingsEntryInput(tab.url);
-    if (!defaultKey) throw new Error("Cannot save a normalization preference for this URL");
-    // Save before messaging the tab: a still-loading or restricted page may
-    // not have a content-script receiver, but its saved preference is valid.
-    const result = await mutateSiteNormalizerSettings({
-      type: "setForUrl",
-      url: tab.url,
-      defaultKey,
-      enabled
-    });
-    if (!result?.ok) throw new Error(result?.reason || "Could not save normalization setting");
-    // Persistence broadcasts storage.onChanged to every frame. The targeted
-    // message merely accelerates the active top frame and is best-effort.
-    await tabsSendMessage(tab.id, { command: "setNormalizer", enabled }, TOP_FRAME_OPTIONS).catch(() => {});
-  } catch (error) {
-    if (requestGeneration === normalizerRequestGeneration) {
-      cached.normalizerPending = false;
-      applyNormalizerState({ normalizerEnabled: !enabled });
-      handleError(error);
-    }
-    return;
-  }
-  if (requestGeneration === normalizerRequestGeneration) {
-    cached.normalizerPending = false;
-    await refreshAudioControlState(tab);
-  }
+
+  // Saving and delivering normalizer toggles concurrently can apply "on"
+  // AFTER the user has already chosen "off". Serialize the mutation and
+  // suppress stale operations that have not begun their storage write.
+  const deliver = async () => {
+      if (requestGeneration !== normalizerRequestGeneration) return;
+      try {
+          const url = await currentTabUrl(tab);
+          if (requestGeneration !== normalizerRequestGeneration) return;
+          const defaultKey = normalizeSiteSettingsEntryInput(url);
+          if (!defaultKey) throw new Error("Cannot save a normalization preference for this URL");
+          const result = await mutateSiteNormalizerSettings({
+              type: "setForUrl",
+              url,
+              defaultKey,
+              enabled
+          });
+          if (!result?.ok) throw new Error(result?.reason || "Could not save normalization setting");
+          if (requestGeneration !== normalizerRequestGeneration) return;
+          // Storage already broadcasts the preference to every frame; the
+          // direct message merely accelerates the top frame.
+          await tabsSendMessage(tab.id, { command: "setNormalizer", enabled }, TOP_FRAME_OPTIONS).catch(() => {});
+      } catch (error) {
+          if (requestGeneration === normalizerRequestGeneration) {
+              cached.normalizerPending = false;
+              applyNormalizerState({ normalizerEnabled: !enabled });
+              handleError(error);
+          }
+          return;
+      }
+      if (requestGeneration === normalizerRequestGeneration) {
+          cached.normalizerPending = false;
+          await refreshAudioControlState(tab, () => requestGeneration === normalizerRequestGeneration);
+      }
+  };
+
+  const next = normalizerDeliveryChain.then(deliver, deliver);
+  normalizerDeliveryChain = next.catch(() => {});
+  return next;
 }
 
 async function toggleMute(tab, muted) {
   if (!tab) return;
-  applyMuteButtonState(muted);
-  // Broadcast the mute toggle to every frame (embedded players must mute too);
-  // the racy first response is ignored.
-  await tabsSendMessage(tab.id, { command: "setMute", muted }).catch(handleError);
-  // Authoritative state (and the volume for the badge feedback) comes from the
-  // top frame only — see refreshAudioControlState.
-  const state = await refreshAudioControlState(tab);
-  const dB = state && state.volume !== undefined
-      ? Number(state.volume)
-      : (Number(cached.slider && cached.slider.value) || 0);
-  // Update the browser-action badge immediately so the icon reflects mute state.
-  runtimeSendMessage({
-      command: "showNativeVolumeFeedback",
-      tabId: tab.id,
-      dB,
-      muted
-  }).catch(() => {});
-  await saveSiteSettings(tab);
+  const requestedMute = Boolean(muted);
+  const requestGeneration = ++muteRequestGeneration;
+  applyMuteButtonState(requestedMute);
+  cached.mutePending = true;
+
+  // Deliver in order: Chrome/Firefox messages can complete out of order,
+  // and a stale mute reply must never repaint the newer user selection.
+  const deliver = async () => {
+      if (requestGeneration !== muteRequestGeneration) return;
+      await tabsSendMessage(tab.id, { command: "setMute", muted: requestedMute }).catch(handleError);
+      if (requestGeneration !== muteRequestGeneration) return;
+
+      const response = await tabsSendMessage(
+          tab.id, { command: "getAudioControlState" }, TOP_FRAME_OPTIONS
+      ).catch(handleError);
+      if (requestGeneration !== muteRequestGeneration) return;
+      const state = response && response.response ? response.response : null;
+      if (state) applyAudioControlState(state);
+      const appliedMuted = state && state.muted !== undefined
+          ? Boolean(state.muted) : requestedMute;
+      // Restore the confirmed state only if this is still the latest toggle.
+      cached.mutePending = false;
+      applyMuteButtonState(appliedMuted);
+      const dB = state && state.volume !== undefined
+          ? Number(state.volume)
+          : (Number(cached.slider && cached.slider.value) || 0);
+      runtimeSendMessage({
+          command: "showNativeVolumeFeedback",
+          tabId: tab.id,
+          dB,
+          muted: appliedMuted
+      }).catch(() => {});
+      await saveSiteSettings(tab);
+  };
+  const next = muteDeliveryChain.then(deliver, deliver);
+  muteDeliveryChain = next.catch(() => {});
+  return next;
 }
 
 async function toggleRemember(tab) {
-    try {
-        const rememberCheckbox = document.getElementById("remember-checkbox");
-        const defaultSettingsKey = normalizeSiteSettingsEntryInput(tab.url);
-        if (!defaultSettingsKey) return;
+    if (!tab) return;
+    const checkbox = document.getElementById("remember-checkbox");
+    if (!checkbox) return;
+    const rememberEnabled = Boolean(checkbox.checked);
+    const requestGeneration = ++rememberRequestGeneration;
 
-        if (rememberCheckbox && rememberCheckbox.checked) {
-            await saveSiteSettings(tab);
-        } else {
-            await mutateSiteSettings({ type: "removeForUrl", url: tab.url });
+    // An older in-flight save must not recreate a profile AFTER a later
+    // Remember-off request removes it. The last clicked state wins.
+    const deliver = async () => {
+        if (requestGeneration !== rememberRequestGeneration) return;
+        try {
+            const url = await currentTabUrl(tab);
+            if (requestGeneration !== rememberRequestGeneration) return;
+            if (cached.rememberUrl && url !== cached.rememberUrl) {
+                await syncRememberContext(tab);
+                return;
+            }
+            const defaultSettingsKey = normalizeSiteSettingsEntryInput(url);
+            if (!defaultSettingsKey) return;
+
+            // A volume/mute/mono save may already be resolving tabs.get().
+            // Let it finish before removing the remembered profile.
+            await siteSettingsSaveChain;
+            if (requestGeneration !== rememberRequestGeneration) return;
+            if (rememberEnabled) {
+                await saveSiteSettings(tab);
+            } else {
+                await mutateSiteSettings({ type: "removeForUrl", url });
+            }
+        } catch (e) {
+            if (requestGeneration === rememberRequestGeneration) handleError(e);
         }
-    } catch (e) {
-        handleError(e);
-    }
+    };
+    const next = rememberDeliveryChain.then(deliver, deliver);
+    rememberDeliveryChain = next.catch(() => {});
+    return next;
 }
 
 function showError(error) {
@@ -796,6 +991,11 @@ function showError(error) {
 
 async function initializeControls(tab) {
     if (!tab) return;
+    const initialVolumeGeneration = volumeRequestGeneration;
+    const initialEditGeneration = volumeEditGeneration;
+    const initialRememberGeneration = rememberRequestGeneration;
+    const initialMonoGeneration = monoRequestGeneration;
+    const initialMuteGeneration = muteRequestGeneration;
     cached.activeTab = tab;
 
     const volumeSlider = document.querySelector("#volume-slider");
@@ -810,6 +1010,7 @@ async function initializeControls(tab) {
     cached.limitNote = limitNote;
     cached.monoCheckbox = monoCheckbox;
     cached.rememberCheckbox = rememberCheckbox;
+    cached.rememberUrl = tab.url;
     cached.normalizerCheckbox = normalizerCheckbox;
     cached.normalizerGain = document.querySelector("#normalizer-gain");
     cached.peakMeter = document.querySelector(".peak-meter");
@@ -828,12 +1029,24 @@ async function initializeControls(tab) {
 
     applyAudioControlState({ maxDb: MAX_DB, boostLimited: false, limitation: "" });
 
+    // Pending edits from the other control must never arrive later and undo
+    // the user's most recent slider/text adjustment.
+    let volumeCommitTimer = null;
+    let textCommitTimer = null;
+    const cancelPendingVolumeCommit = () => {
+        if (volumeCommitTimer !== null) clearTimeout(volumeCommitTimer);
+        volumeCommitTimer = null;
+    };
+    const cancelPendingTextCommit = () => {
+        if (textCommitTimer !== null) clearTimeout(textCommitTimer);
+        textCommitTimer = null;
+    };
+
     if (volumeSlider) {
       // Debounce the storage write and background feedback so rapid slider
       // dragging doesn't flood the content script with messages and trigger
       // excessive storage.local.set calls. The UI updates immediately; only
       // the downstream side effects are debounced.
-      let volumeCommitTimer = null;
       let lastCommittedDb = null;
       const commitVolume = (dB) => {
           if (volumeCommitTimer) clearTimeout(volumeCommitTimer);
@@ -844,11 +1057,15 @@ async function initializeControls(tab) {
           }, 40);
       };
       volumeSlider.addEventListener("input", () => {
+          volumeEditGeneration++;
+          cancelPendingTextCommit();
           const normalizedDb = setDisplayedVolume(volumeSlider.value);
           commitVolume(normalizedDb);
       });
       // Commit immediately when the user releases the slider.
       volumeSlider.addEventListener("change", () => {
+          volumeEditGeneration++;
+          cancelPendingTextCommit();
           if (volumeCommitTimer) {
               clearTimeout(volumeCommitTimer);
               volumeCommitTimer = null;
@@ -861,11 +1078,14 @@ async function initializeControls(tab) {
       // Debounced live update as the user types -- no Enter required.
       // The debounce lets the user finish typing multi-digit values
       // (e.g. "-15") before we commit, avoiding partial-number jumps.
-      let textCommitTimer = null;
       volumeText.addEventListener("input", () => {
+            volumeEditGeneration++;
+            cancelPendingVolumeCommit();
+            // Even an invalid/empty edit cancels an earlier valid pending
+            // text value; otherwise clearing "-12" still commits -12 later.
+            cancelPendingTextCommit();
             const parsed = parseDbText(volumeText.value);
             if (parsed === null) return;
-            if (textCommitTimer) clearTimeout(textCommitTimer);
             textCommitTimer = setTimeout(() => {
                 textCommitTimer = null;
                 setVolume(parsed, tab);
@@ -874,6 +1094,8 @@ async function initializeControls(tab) {
       // Commit immediately on Enter so the user does not have to wait
       // for the debounce, and reformat the field on blur.
       volumeText.addEventListener("change", () => {
+           volumeEditGeneration++;
+           cancelPendingVolumeCommit();
            if (textCommitTimer) { clearTimeout(textCommitTimer); textCommitTimer = null; }
            const parsed = parseDbText(volumeText.value);
             if (parsed !== null) setVolume(parsed, tab);
@@ -905,32 +1127,64 @@ async function initializeControls(tab) {
 
     try {
         const audioState = await refreshAudioControlState(tab);
+        if (await currentTabUrl(tab) !== tab.url) {
+            await syncRememberContext(tab);
+            return;
+        }
         const data = await storageGet({ siteSettings: {} });
+        if (await currentTabUrl(tab) !== tab.url) {
+            await syncRememberContext(tab);
+            return;
+        }
         const settingsKey = getSiteSettingsKey(data.siteSettings || {}, tab.url);
         const saved = settingsKey ? data.siteSettings[settingsKey] : null;
         if (saved) {
-            if (rememberCheckbox) rememberCheckbox.checked = true;
+            if (rememberCheckbox && initialRememberGeneration === rememberRequestGeneration) {
+                rememberCheckbox.checked = true;
+            }
             // The content script already applies Remember on page initialization
             // and on storage changes. Replaying storage here overwrites newer
             // in-tab state (and may send a brief loud gain change) just because
             // the popup was opened. Only use storage for DISPLAY if this tab
             // has no reachable content-script state.
             if (!audioState) {
-                if (saved.volume !== undefined) setDisplayedVolume(saved.volume);
-                if (saved.mono !== undefined && monoCheckbox) monoCheckbox.checked = Boolean(saved.mono);
-                if (saved.muted !== undefined) applyMuteButtonState(saved.muted);
+                if (saved.volume !== undefined &&
+                    initialVolumeGeneration === volumeRequestGeneration &&
+                    initialEditGeneration === volumeEditGeneration) setDisplayedVolume(saved.volume);
+                if (saved.mono !== undefined && monoCheckbox &&
+                    initialMonoGeneration === monoRequestGeneration && !cached.monoPending) {
+                    monoCheckbox.checked = Boolean(saved.mono);
+                }
+                if (saved.muted !== undefined &&
+                    initialMuteGeneration === muteRequestGeneration && !cached.mutePending) {
+                    applyMuteButtonState(saved.muted);
+                }
             }
         } else if (!audioState) {
+            const volumeGeneration = volumeRequestGeneration;
+            const editGeneration = volumeEditGeneration;
             tabsSendMessage(tab.id, { command: "getVolume" }, TOP_FRAME_OPTIONS).then((response) => {
-                if (response && response.response !== undefined) setVolume(response.response, null);
-            }).catch(handleError);
-            tabsSendMessage(tab.id, { command: "getMono" }, TOP_FRAME_OPTIONS).then((response) => {
-                if (response && response.response !== undefined && monoCheckbox) {
-                    monoCheckbox.checked = response.response;
+                if (response && response.response !== undefined &&
+                    volumeGeneration === volumeRequestGeneration &&
+                    editGeneration === volumeEditGeneration) {
+                    // Display an initial value only; do not create a new
+                    // command generation or suppress a pending user request.
+                    setDisplayedVolume(response.response);
                 }
             }).catch(handleError);
+            const monoGeneration = monoRequestGeneration;
+            tabsSendMessage(tab.id, { command: "getMono" }, TOP_FRAME_OPTIONS).then((response) => {
+                if (response && response.response !== undefined && monoCheckbox &&
+                    monoGeneration === monoRequestGeneration && !cached.monoPending) {
+                    monoCheckbox.checked = Boolean(response.response);
+                }
+            }).catch(handleError);
+            const muteGeneration = muteRequestGeneration;
             tabsSendMessage(tab.id, { command: "getMute" }, TOP_FRAME_OPTIONS).then((response) => {
-                if (response && response.response !== undefined) applyMuteButtonState(response.response);
+                if (response && response.response !== undefined &&
+                    muteGeneration === muteRequestGeneration && !cached.mutePending) {
+                    applyMuteButtonState(response.response);
+                }
             }).catch(handleError);
         }
     } catch (e) {

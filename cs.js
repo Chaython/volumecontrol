@@ -37,7 +37,8 @@ const PAGE_BRIDGE_HEARTBEAT_MS = 3000;
 const BOOST_LIMIT_NOTES = {
     "cross-origin": "Limited by cross-origin media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
     "restricted": "Limited by DRM-protected or otherwise restricted media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.",
-    "route-failed": "Limited because the page blocked or already owns the audio route. Fallback volume control can still lower volume, but boosting and mono may be unavailable.",
+    "route-failed": "WebAudio routing failed or is unavailable. Native media may allow attenuation, but boosting and mono are unavailable; an already-captured element with a closed audio context may stay silent until reload.",
+    "native-route": "Force native fallback is selected. Native HTML media volume can attenuate or mute, but boosting, mono, and Normalize require WebAudio.",
     "fallback": BOOST_LIMIT_NOTE
 };
 let pageBridgeResyncInterval = null;
@@ -57,6 +58,9 @@ const tc = {
   },
   vars: {
     dB: 0,
+    // Preserve the requested gain separately when this source is temporarily
+    // limited to native audio (DRM/CORS/route failure).
+    requestedDb: 0,
     mono: false,
     muted: false,
     normalizerEnabled: false,
@@ -123,7 +127,8 @@ if (browserAPI) {
                 sendResponse({ status: "active" });
                 break;
             case "setVolume":
-                tc.vars.dB = normalizeDbForCurrentMedia(msg.dB);
+                tc.vars.requestedDb = normalizeDb(msg.dB);
+                tc.vars.dB = normalizeDbForCurrentMedia(tc.vars.requestedDb);
                 applyState();
                 sendResponse({ response: getAudioControlState() });
                 break;
@@ -269,11 +274,24 @@ const EME_AUDIO_SILENCED_WHEN_ROUTED = !isGeckoRuntime();
 function elementDrmEvidence(element) {
     if (!element) return false;
     try {
-        if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
-        if (element.mediaKeys) return true;
-        if (element.webkitKeys) return true;
+        // An encrypted event on the previous track must not permanently mark
+        // a reused <video> as DRM. Only clear evidence when a *different,
+        // nonempty* source is established and no MediaKeys remain attached.
+        const keys = element.mediaKeys || element.webkitKeys;
+        if (element.dataset && element.dataset.vcRestrictedMedia === "true") {
+            const previous = element.dataset.vcRestrictedMediaSource;
+            const current = getMediaSourceUrl(element);
+            if (previous && current && previous !== current && !keys) {
+                delete element.dataset.vcRestrictedMedia;
+                delete element.dataset.vcRestrictedMediaSource;
+            } else {
+                return true;
+            }
+        }
+        if (keys) return true;
     } catch (e) {
-        return false;
+        // An unreadable MediaKeys getter must not authorize unsafe capture.
+        return true;
     }
     return false;
 }
@@ -420,7 +438,7 @@ function getHookPageRestriction() {
 // outranks everything: routing such media is a one-way trip to silence.
 function reasonSeverity(reason) {
     if (reason === "restricted") return 3;
-    if (reason === "cross-origin" || reason === "route-failed") return 2;
+    if (reason === "cross-origin" || reason === "route-failed" || reason === "native-route") return 2;
     return reason ? 1 : 0;
 }
 
@@ -454,7 +472,17 @@ function getBoostLimitReason(element) {
     // than admitting boost is unavailable. Check protection FIRST.
     if (isProbablyProtectedMedia(element)) return "restricted";
 
-    if (element.dataset.vcHooked === "true") return "";
+    if (element.dataset.vcHooked === "true") {
+        // A successful MediaElementSource capture is irreversible. If its
+        // AudioContext closes or reconnection fails, the element is STILL
+        // marked hooked, but no longer has a functional output route.
+        // Honor that failure before claiming unrestricted +32 dB support.
+        if (element.dataset.vcFallbackReason === "route-failed" ||
+            !tc.vars.audioCtx || tc.vars.audioCtx.state === "closed") {
+            return "route-failed";
+        }
+        return "";
+    }
 
     const crossOrigin = isLikelyCrossOriginMedia(element);
     if (isPageAudioManaged(element)) return crossOrigin ? "cross-origin" : "";
@@ -472,6 +500,7 @@ function getBoostLimitReason(element) {
 // and by a TTL to catch async state changes (e.g., mediaKeys being set).
 let boostLimitCache = null;
 let boostLimitCacheTime = 0;
+let boostReconcileScheduled = false;
 let boostLimitObserver = null;
 let knownMediaSweepInterval = null;
 const BOOST_LIMIT_CACHE_TTL_MS = 1000;
@@ -480,6 +509,31 @@ const KNOWN_MEDIA_SWEEP_MS = 30000;
 function invalidateBoostLimitCache() {
     boostLimitCache = null;
     scheduleFrameBoostLimitReport();
+    // Merely invalidating the verdict left applied dB at its previously
+    // clamped value until the popup was reopened or another control changed.
+    // Reconcile once per event batch when media/DRM/CORS conditions change.
+    if (controlProfileReady && !tc.vars.isBlocked && !boostReconcileScheduled) {
+        boostReconcileScheduled = true;
+        queueMicrotask(() => {
+            boostReconcileScheduled = false;
+            if (!controlProfileReady || tc.vars.isBlocked) return;
+            const next = normalizeDbForCurrentMedia(tc.vars.requestedDb);
+            // Availability can change even while manual dB is already 0.
+            // Stop/restart the isolated sampling timer and release any stale
+            // automatic boost without waiting for a popup or slider event.
+            const unavailable = tc.vars.normalizerEnabled &&
+                !getNormalizerAvailability().available;
+            if (unavailable && tc.vars.normalizerGainDb !== 0) {
+                tc.vars.normalizerGainDb = 0;
+                tc.vars.normalizerPeakDb = -Infinity;
+                applyState();
+            } else if (next !== tc.vars.dB) {
+                applyState();
+            } else if (tc.vars.normalizerEnabled && tc.vars.gainNode) {
+                ensureIsolatedNormalizerTimer();
+            }
+        });
+    }
 }
 
 function getBoostLimitInfo() {
@@ -499,7 +553,7 @@ function getBoostLimitInfo() {
         // If nothing is playing, don't restrict — the user might be about to
         // play something, and we don't want to lock the slider based on stale state.
         for (const el of document.querySelectorAll('audio, video')) {
-            if (!isMediaPlaying(el) && !el.src && !el.currentSrc) continue;
+            if (!isMediaPlaying(el)) continue;
             const reason = getBoostLimitReason(el);
             if (reason) {
                 result = makeBoostLimitedResult(reason);
@@ -536,6 +590,14 @@ function getBoostLimitInfo() {
         result = makeBoostLimitedResult(effectiveFrameReason);
     }
 
+    // Force native is a route policy, not a decoded-audio capability. Clamp
+    // before playback too, otherwise the popup can advertise +32 dB while
+    // native HTMLMediaElement.volume is physically limited to 1. Preserve a
+    // more informative DRM/CORS/failed-route restriction if one is present.
+    if (tc.settings.debugRouteMode === "native" && !result.boostLimited) {
+        result = makeBoostLimitedResult("native-route");
+    }
+
     boostLimitCache = result;
     boostLimitCacheTime = now;
     return result;
@@ -564,9 +626,11 @@ function getAggregatedFrameLimit() {
     if (!isTopFrame() || frameLimitReports.size === 0) return null;
     const now = Date.now();
     let best = null;
+    let expired = false;
     for (const [frameId, entry] of Array.from(frameLimitReports)) {
         if (!Number.isInteger(frameId) || now - entry.ts > FRAME_REPORT_TTL_MS) {
             frameLimitReports.delete(frameId);
+            expired = true;
             continue;
         }
         if (!best || reasonSeverity(entry.reason) > reasonSeverity(best.reason)) best = entry;
@@ -575,6 +639,11 @@ function getAggregatedFrameLimit() {
         clearInterval(frameReportPurgeInterval);
         frameReportPurgeInterval = null;
     }
+    // A removed iframe can disappear without sending an unrestricted report.
+    // Expiring its stale restriction must also recheck requested volume and
+    // Normalize availability; dropping it from the Map alone left applied
+    // audio capped until the popup was reopened or another event occurred.
+    if (expired) invalidateBoostLimitCache();
     return best;
 }
 
@@ -669,14 +738,26 @@ function setupBoostLimitObserver() {
     if (boostLimitObserver || typeof MutationObserver === 'undefined') return;
     const observer = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
-            for (const node of mutation.addedNodes) {
+            if (mutation.type === 'attributes') {
+                const target = mutation.target;
+                // A reused <audio>/<video> can switch from clear to CDN/DRM
+                // content without DOM insertion. The MAIN hook also publishes
+                // restrictions on the root element's data attribute.
+                const media = target && (target.nodeName === 'AUDIO' || target.nodeName === 'VIDEO');
+                if (media || (target === document.documentElement &&
+                    mutation.attributeName === 'data-vc-page-media-restriction')) {
+                    invalidateBoostLimitCache();
+                    return;
+                }
+            }
+            for (const node of mutation.addedNodes || []) {
                 if (node.nodeName === 'AUDIO' || node.nodeName === 'VIDEO' ||
                     (node.querySelectorAll && node.querySelector('audio, video'))) {
                     invalidateBoostLimitCache();
                     return;
                 }
             }
-            for (const node of mutation.removedNodes) {
+            for (const node of mutation.removedNodes || []) {
                 if (node.nodeName === 'AUDIO' || node.nodeName === 'VIDEO' ||
                     (node.querySelectorAll && node.querySelector('audio, video'))) {
                     invalidateBoostLimitCache();
@@ -691,7 +772,12 @@ function setupBoostLimitObserver() {
     }
     const startObserving = () => {
         if (boostLimitObserver !== observer) return;
-        observer.observe(document.documentElement || document, { childList: true, subtree: true });
+        observer.observe(document.documentElement || document, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['src', 'crossorigin', 'data-vc-page-media-restriction']
+        });
     };
     if (document.documentElement) {
         startObserving();
@@ -739,12 +825,18 @@ function getNormalizerAvailability(limit = getBoostLimitInfo()) {
 }
 
 function getAudioControlState() {
-    enforceBoostLimit({ sync: true });
+    // A previously restricted track may become WebAudio-routable again.
+    // Apply the restored requested gain to both the page hook and isolated
+    // graph before reporting it to the popup.
+    if (enforceBoostLimit()) applyState();
     const limit = getBoostLimitInfo();
     const monoAvailability = getMonoAvailability(limit);
     const normalizerAvailability = getNormalizerAvailability(limit);
     return {
         volume: Math.min(normalizeDb(tc.vars.dB), limit.maxDb),
+        // Applied gain can be capped by DRM/CORS. Keep the intended dB
+        // distinct so Remember and hotkeys do not persist that temporary cap.
+        requestedVolume: normalizeDb(tc.vars.requestedDb),
         mono: tc.vars.mono,
         monoAvailable: monoAvailability.available,
         monoUnavailableReason: monoAvailability.reason,
@@ -762,7 +854,9 @@ function getAudioControlState() {
 }
 
 function enforceBoostLimit(options = {}) {
-    const clamped = normalizeDbForCurrentMedia(tc.vars.dB);
+    const requested = Number.isFinite(tc.vars.requestedDb)
+        ? tc.vars.requestedDb : tc.vars.dB;
+    const clamped = normalizeDbForCurrentMedia(requested);
     if (clamped === tc.vars.dB) return false;
 
     tc.vars.dB = clamped;
@@ -1074,6 +1168,7 @@ function applyState() {
             }
 
             if (el.dataset.vcHooked === "true") {
+                if (routeNeeded && isMediaPlaying(el)) reconnectIsolatedCapturedSource(el);
                 if (routeNeeded && isMediaPlaying(el) && tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
                     resumeAudioContext();
                 }
@@ -1221,7 +1316,9 @@ function ensureIsolatedNormalizerTimer() {
     // Even an empty 100ms interval keeps waking background tabs. Only sample
     // when an actual isolated route needs automatic gain control.
     const shouldRun = !tc.vars.isBlocked && tc.vars.normalizerEnabled &&
-        Boolean(tc.vars.gainNode && tc.vars.audioCtx);
+        Boolean(tc.vars.gainNode && tc.vars.audioCtx &&
+            tc.vars.audioCtx.state === 'running') &&
+        getNormalizerAvailability().available;
     if (!shouldRun) {
         if (tc.vars.normalizerTimer !== null) clearInterval(tc.vars.normalizerTimer);
         tc.vars.normalizerTimer = null;
@@ -1233,27 +1330,50 @@ function ensureIsolatedNormalizerTimer() {
 }
 
 function createGainNode() {
-    if (!tc.vars.audioCtx) return;
+    const ctx = tc.vars.audioCtx;
+    if (!ctx || ctx.state === 'closed') return false;
 
     if (!tc.vars.gainNode) {
-        tc.vars.gainNode = tc.vars.audioCtx.createGain();
-        tc.vars.gainNode.channelInterpretation = "speakers";
-        tc.vars.inputAnalyserNode = tc.vars.audioCtx.createAnalyser();
-        // 8192 input samples span ~171ms at 48kHz, overlapping successive
-        // 100ms checks to avoid peak detection gaps between timer ticks.
-        tc.vars.inputAnalyserNode.fftSize = 8192;
-        tc.vars.inputAnalyserNode.smoothingTimeConstant = 0.35;
-        tc.vars.inputAnalyserNode.connect(tc.vars.gainNode);
-        tc.vars.limiterNode = tc.vars.audioCtx.createDynamicsCompressor();
-        tc.vars.analyserNode = tc.vars.audioCtx.createAnalyser();
-        tc.vars.analyserNode.fftSize = 1024;
-        tc.vars.analyserNode.smoothingTimeConstant = 0.35;
+        // Construct the whole processing chain locally. Publishing gainNode
+        // before all the other nodes exist can leave a permanently incomplete
+        // graph if createAnalyser(), createDynamicsCompressor(), or connect()
+        // throws. A later call used to see gainNode != null and skip rebuilding.
+        let gain = null;
+        let input = null;
+        let limiter = null;
+        let analyser = null;
+        try {
+            gain = ctx.createGain();
+            gain.channelInterpretation = "speakers";
+            input = ctx.createAnalyser();
+            // 8192 input samples span ~171ms at 48kHz, overlapping the
+            // successive 100ms samples to reduce peak-detection gaps.
+            input.fftSize = 8192;
+            input.smoothingTimeConstant = 0.35;
+            limiter = ctx.createDynamicsCompressor();
+            analyser = ctx.createAnalyser();
+            analyser.fftSize = 1024;
+            analyser.smoothingTimeConstant = 0.35;
+            input.connect(gain);
+        } catch (e) {
+            // No media element has been captured yet. Release partial graph
+            // nodes and permit a future play/state event to retry safely.
+            for (const node of [input, gain, limiter, analyser]) {
+                if (node) { try { node.disconnect(); } catch (_) {} }
+            }
+            if (tc.settings.debugMode) log(`isolated graph setup failed: ${e && e.message}`, 2);
+            return false;
+        }
+        tc.vars.gainNode = gain;
+        tc.vars.inputAnalyserNode = input;
+        tc.vars.limiterNode = limiter;
+        tc.vars.analyserNode = analyser;
         tc.vars.isolatedOutputUsesLimiter = null;
-        // applyState() wires the correct output path; do not pre-connect a
-        // compressor when normalization and positive boost are both off.
+        // applyState() wires the output only once a complete graph exists.
         ensureIsolatedNormalizerTimer();
     }
     applyState();
+    return true;
 }
 
 function isMediaPlaying(element) {
@@ -1369,6 +1489,10 @@ function suspendAudioContextIfIdle() {
     promise = Promise.resolve()
         .then(() => context.suspend())
         .then(() => {
+            // A suspended context cannot provide new analyzer samples.
+            // Stop its 100ms sampling timer; resumeAudioContext() calls
+            // applyState(), which reinstates sampling once running again.
+            ensureIsolatedNormalizerTimer();
             if (tc.settings.debugMode) {
                 log(hasHooked
                     ? "audio context suspended (media paused) — device handle released"
@@ -1400,7 +1524,11 @@ function registerMediaElement(element) {
         if (element.dataset && element.dataset.vcEncryptedWatched !== "true") {
             element.dataset.vcEncryptedWatched = "true";
             element.addEventListener('encrypted', () => {
-                try { element.dataset.vcRestrictedMedia = "true"; } catch (e) {}
+                try {
+                    element.dataset.vcRestrictedMedia = "true";
+                    const source = getMediaSourceUrl(element);
+                    if (source) element.dataset.vcRestrictedMediaSource = source;
+                } catch (e) {}
                 // Invalidate boost limit cache since this element just became restricted.
                 invalidateBoostLimitCache();
             }, { passive: true });
@@ -1458,6 +1586,84 @@ function registerMediaElement(element) {
     hookIfPlaying();
 }
 
+function reconnectIsolatedCapturedSource(element) {
+    const captured = tc.vars.capturedMediaSources && tc.vars.capturedMediaSources.get(element);
+    if (!captured) return false;
+    // Even a previously successful source goes silent if its AudioContext
+    // was closed by the page. A second MediaElementSource is impossible.
+    // Report failure rather than treating its old "connected" bit as sound.
+    if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed') {
+        element.dataset.vcFallbackReason = 'route-failed';
+        invalidateBoostLimitCache();
+        return false;
+    }
+    if (captured.connected) return true;
+
+    // createMediaElementSource() irreversibly captures the element. If its
+    // first .connect() fails, NEVER attempt another createMediaElementSource:
+    // retain this exact node and retry a connection whenever playback/state
+    // changes. Prefer the normal upstream analyser route.
+    try {
+        captured.source.connect(tc.vars.inputAnalyserNode);
+        captured.connected = true;
+        captured.bypassInputAnalyser = false;
+    } catch (initialError) {
+        // A direct input-analyser connection may fail on some media engines.
+        // Route through our existing gain/limiter instead of pretending
+        // element.volume can restore its now-detached native audio path.
+        try {
+            const param = tc.vars.gainNode.gain;
+            const now = tc.vars.audioCtx.currentTime;
+            const safeGain = tc.vars.isBlocked ? 1 :
+                (tc.vars.muted ? 0 : Math.max(0, Math.min(1, getGainValue(tc.vars.dB))));
+            param.cancelScheduledValues(now);
+            param.setValueAtTime(safeGain, now);
+            captured.source.connect(tc.vars.gainNode);
+            captured.connected = true;
+            captured.bypassInputAnalyser = true;
+            if (tc.settings.debugMode) {
+                log(`isolated source recovered through gain-node bypass: ${initialError && initialError.message}`, 3);
+            }
+        } catch (recoveryError) {
+            if (tc.settings.debugMode) {
+                log(`isolated captured source pending reconnect: ${recoveryError && recoveryError.message}`, 2);
+            }
+            element.dataset.vcFallbackReason = 'route-failed';
+            invalidateBoostLimitCache();
+            return false;
+        }
+    }
+    // A native fallback installed before capture must not keep attenuating
+    // the page-managed WebAudio source after connection recovery.
+    clearFallbackVolume(element);
+    delete element.dataset.vcFallbackReason;
+    invalidateBoostLimitCache();
+    return true;
+}
+
+function scheduleIsolatedCapturedSourceRetry(element) {
+    const captured = tc.vars.capturedMediaSources && tc.vars.capturedMediaSources.get(element);
+    if (!captured || captured.connected || captured.retryTimer || captured.retryCount >= 6) return;
+    captured.retryTimer = setTimeout(() => {
+        captured.retryTimer = null;
+        if (!tc.vars.audioCtx || tc.vars.audioCtx.state === 'closed' || captured.connected) return;
+        captured.retryCount = (captured.retryCount || 0) + 1;
+        if (reconnectIsolatedCapturedSource(element)) {
+            // A player may already be playing; no new 'play' event is
+            // guaranteed after our first failed AudioNode.connect().
+            // A successful retry can finish after playback was paused.
+            // Leave the audio device suspended until the next real play,
+            // instead of reviving Bluetooth/OS audio handles for idle media.
+            if (isMediaPlaying(element) && tc.vars.audioCtx.state === 'suspended') {
+                resumeAudioContext();
+            }
+            applyState();
+        } else {
+            scheduleIsolatedCapturedSourceRetry(element);
+        }
+    }, 250);
+}
+
 function connectOutput(element) {
     if (isPageAudioManaged(element)) {
         if (element.dataset.vcFallback === "true") clearFallbackVolume(element);
@@ -1477,6 +1683,8 @@ function connectOutput(element) {
             return;
         }
         if (tc.vars.mediaElements) tc.vars.mediaElements.add(element);
+        // Retry the original node, never create a second MediaElementSource.
+        if (!reconnectIsolatedCapturedSource(element)) scheduleIsolatedCapturedSourceRetry(element);
         if (isMediaPlaying(element) && tc.vars.audioCtx.state === 'suspended') {
             resumeAudioContext();
         }
@@ -1540,16 +1748,26 @@ function connectOutput(element) {
         // return at the vcHooked check above means they cannot be re-hooked
         // here (createMediaElementSource throws on second call). Those
         // elements will fall back to native volume via applyFallbackVolume.
-        tc.vars.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        tc.vars.audioCtx.onstatechange = () => {
-            // Guard against null: the context may be suspended/closed and
-            // tc.vars.audioCtx may be reassigned before this handler fires.
-            if (!tc.vars.audioCtx) return;
-            if (tc.vars.audioCtx.state === 'running') applyState();
+        const context = new (window.AudioContext || window.webkitAudioContext)();
+        tc.vars.audioCtx = context;
+        context.onstatechange = () => {
+            // A closed/replaced context can deliver its final event after the
+            // replacement is already live; it must not alter its timer/graph.
+            if (tc.vars.audioCtx !== context) return;
+            // Browsers can suspend AudioContexts independently of our own
+            // idle suspend helper (power saving, device interruption). Stop
+            // the 100ms normalizer sampler on every non-running transition.
+            ensureIsolatedNormalizerTimer();
+            if (context.state === 'running') applyState();
         };
     }
 
-    if (!tc.vars.gainNode) createGainNode();
+    if (!tc.vars.gainNode && !createGainNode()) {
+        // Do not call createMediaElementSource() with an incomplete graph:
+        // native output would be detached with no usable path to speakers.
+        applyFallbackVolume(element, "route-failed");
+        return;
+    }
 
     // Ensure the tracking set exists
     if (!tc.vars.mediaElements) tc.vars.mediaElements = new Set();
@@ -1596,13 +1814,22 @@ function connectOutput(element) {
         }
 
         if (source) {
-            source.connect(tc.vars.inputAnalyserNode);
-
+            if (!tc.vars.capturedMediaSources) tc.vars.capturedMediaSources = new WeakMap();
+            tc.vars.capturedMediaSources.set(element, {
+                source,
+                connected: false,
+                bypassInputAnalyser: false
+            });
+            // Claim the element before the first fallible connection so
+            // repeated attempts cannot create another MediaElementSource.
             element.dataset.vcHooked = "true";
             tc.vars.mediaElements.add(element);
+            const sourceConnected = reconnectIsolatedCapturedSource(element);
+            if (!sourceConnected) scheduleIsolatedCapturedSourceRetry(element);
 
             // Wake up the AudioContext when media starts playing
             element.addEventListener('play', () => {
+                if (!reconnectIsolatedCapturedSource(element)) return;
                 if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
                     resumeAudioContext();
                 }
@@ -1614,8 +1841,9 @@ function connectOutput(element) {
                 element.addEventListener(evt, checkSuspend, { passive: true });
             }
 
-            // Remove any fallback adjustments we may have made earlier
-            clearFallbackVolume(element);
+            // Only release native fallback modifications after the
+            // captured source actually has a working WebAudio connection.
+            if (sourceConnected) clearFallbackVolume(element);
 
             applyState();
             checkSuspend();
@@ -1631,7 +1859,8 @@ function connectOutput(element) {
                 element.style.border = "";
                 delete element.dataset.vcDebugBorder;
             }
-            log("Hook Success!", 4);
+            if (sourceConnected) log("Hook Success!", 4);
+            else log("Captured isolated source retained for retry; initial audio connection failed", 2);
         } else {
             // Fallback: if we can't create an audio node, adjust element.volume directly so user notices changes
             applyFallbackVolume(element, "route-failed");
@@ -1846,7 +2075,10 @@ async function start() {
 
         if (siteSettingsKey) {
             const s = data.siteSettings[siteSettingsKey];
-            if (s.volume !== undefined) tc.vars.dB = normalizeDb(s.volume);
+            if (s.volume !== undefined) {
+                tc.vars.requestedDb = normalizeDb(s.volume);
+                tc.vars.dB = tc.vars.requestedDb;
+            }
             if (s.mono !== undefined) tc.vars.mono = s.mono;
             if (s.muted !== undefined) tc.vars.muted = Boolean(s.muted);
         }

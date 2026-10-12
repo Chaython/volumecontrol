@@ -104,16 +104,25 @@ function createMemoryEntry(domain, settings, onRemove, onUpdate, onRename) {
 
     // Keep numericValue up-to-date while typing
     volInput.addEventListener('input', () => {
-        const parsed = Number(volInput.value);
+        const raw = volInput.value.trim();
+        // Number('') and Number('   ') are 0: clearing a field must not
+        // silently erase the prior saved volume.
+        if (!raw) return;
+        const parsed = Number(raw);
         if (Number.isFinite(parsed)) volInput.dataset.numericValue = String(normalizeDb(parsed));
     });
 
-    // On blur/change, format back to '# dB' and commit
+    // Both 'change' and 'blur' can fire for the same edit. Commit once and
+    // preserve the last valid value if the field was emptied or incomplete.
+    let lastCommittedVol = initialVol;
     const commitVol = () => {
-        const v = Number(volInput.value);
-        const numeric = Number.isFinite(v) ? normalizeDb(v) : normalizeDb(volInput.dataset.numericValue);
+        const raw = volInput.value.trim();
+        const v = raw ? Number(raw) : NaN;
+        const numeric = Number.isFinite(v) ? normalizeDb(v) : lastCommittedVol;
         volInput.dataset.numericValue = String(numeric);
         volInput.value = formatDb(numeric);
+        if (numeric === lastCommittedVol) return;
+        lastCommittedVol = numeric;
         onUpdate(domain, { volume: numeric, mono: Boolean(monoCheckbox.checked), muted: Boolean(muteCheckbox.checked) });
     };
 
@@ -322,7 +331,7 @@ async function renderMemoryList() {
                 if (newVal.muted !== undefined) patch.muted = !!newVal.muted;
                 await mutateSiteSettings({ type: "merge", key: domain, patch });
             }, async (oldDomain, newDomain) => {
-                const nd = normalizeSiteSettingsEntryInput(newDomain);
+                const nd = normalizeSiteSettingsEntryInput(newDomain, { includeQuery: true });
                 if (!nd) {
                     alert('Site cannot be empty.');
                     return;

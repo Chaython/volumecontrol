@@ -4,8 +4,24 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - scripts/chromium-real-sites.mjs
-      - .github/workflows/real-sites.yml
+      - 'cs.js'
+      - 'page-audio-hook.js'
+      - 'shared.js'
+      - 'background.js'
+      - 'popup.js'
+      - 'options.js'
+      - 'scripts/chromium-real-sites.mjs'
+      - '.github/workflows/real-sites.yml'
+  pull_request:
+    paths:
+      - 'cs.js'
+      - 'page-audio-hook.js'
+      - 'shared.js'
+      - 'background.js'
+      - 'popup.js'
+      - 'options.js'
+      - 'scripts/chromium-real-sites.mjs'
+      - '.github/workflows/real-sites.yml'
 
 permissions:
   contents: read

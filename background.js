@@ -313,12 +313,20 @@ function mutateAccessLists(mutation = {}) {
     return accessListMutationChain;
 }
 
-function enqueueCommand(command, commandTab) {
-    const key = commandTab && Number.isInteger(commandTab.id) ? commandTab.id : "active";
+async function enqueueCommand(command, commandTab) {
+    // Some browsers omit the Tab argument from commands.onCommand. Resolve
+    // the active tab NOW, before joining an existing hotkey queue: looking it
+    // up only after earlier commands settle can affect a different tab if
+    // the user switches tabs during key-repeat.
+    const originTab = commandTab && Number.isInteger(commandTab.id)
+        ? commandTab : await getActiveTab(null);
+    if (!originTab || !Number.isInteger(originTab.id)) return;
+
+    const key = originTab.id;
     const previous = commandChains.get(key) || Promise.resolve();
     const next = previous.then(
-        () => handleCommand(command, commandTab),
-        () => handleCommand(command, commandTab)
+        () => handleCommand(command, originTab),
+        () => handleCommand(command, originTab)
     ).finally(() => {
         if (commandChains.get(key) === next) commandChains.delete(key);
     });
@@ -327,19 +335,22 @@ function enqueueCommand(command, commandTab) {
 }
 
 async function getActiveTab(commandTab) {
-    // Keep a queued hotkey bound to the tab that originated the command. If the
-    // user changes tabs while earlier key-repeat commands are still queued,
-    // re-querying "active" at execution time would retarget those later presses.
+    // A queued hotkey belongs to the tab it originated from. If that tab
+    // closes, discard the command rather than applying it to another tab.
     if (commandTab && Number.isInteger(commandTab.id)) {
         try {
-            const tab = await tabsGet(commandTab.id);
-            if (tab) return tab;
+            const current = await tabsGet(commandTab.id);
+            // Resolve the original tab's current status, but preserve the URL
+            // captured by enqueueCommand. A playlist/SPA may have navigated
+            // while a previous hotkey waited in the queue. A newer URL must
+            // not become the new target of the obsolete queued command.
+            if (!current || (commandTab.url && current.url !== commandTab.url)) return null;
+            return current;
         } catch (e) {
-            // The original tab may have closed; fall through to the active tab.
+            return null;
         }
     }
 
-    if (commandTab && commandTab.url && Number.isInteger(commandTab.id)) return commandTab;
     const tabs = await tabsQuery({ active: true, currentWindow: true });
     return tabs && tabs[0] ? tabs[0] : null;
 }
@@ -401,8 +412,21 @@ async function getContentState(tab) {
     };
 }
 
-async function saveRememberedSettings(domainState, updates) {
-    if (!domainState || !domainState.settingsKey) return;
+async function isOriginalTabPage(tab) {
+    if (!tab || !Number.isInteger(tab.id) || !tab.url) return false;
+    try {
+        const current = await tabsGet(tab.id);
+        // A queued command can span an SPA/playlist transition. A now-closed
+        // or navigated tab must not receive a retry or a remembered-setting
+        // update intended for the previous page profile.
+        return Boolean(current && current.url === tab.url);
+    } catch (e) {
+        return false;
+    }
+}
+
+async function saveRememberedSettings(tab, domainState, updates) {
+    if (!domainState || !domainState.settingsKey || !(await isOriginalTabPage(tab))) return;
     const patch = {};
     if (updates.volume !== undefined) patch.volume = normalizeDb(updates.volume);
     if (updates.mono !== undefined) patch.mono = Boolean(updates.mono);
@@ -429,6 +453,7 @@ async function sendHotkeyCommandAndConfirm(tab, message) {
     if (!tab || !Number.isInteger(tab.id)) return null;
 
     for (let attempt = 0; attempt < 2; attempt++) {
+        if (!(await isOriginalTabPage(tab))) return null;
         let delivered = false;
         try {
             // Broadcast the absolute requested state so embedded players receive
@@ -445,7 +470,10 @@ async function sendHotkeyCommandAndConfirm(tab, message) {
                 { command: "getAudioControlState" },
                 TOP_FRAME_OPTIONS
             ).catch(() => null);
-            if (response && response.response) return response.response;
+            if (response && response.response) {
+                if (!(await isOriginalTabPage(tab))) return null;
+                return response.response;
+            }
         }
 
         if (attempt === 0) await delay(HOTKEY_DELIVERY_RETRY_MS);
@@ -465,9 +493,12 @@ async function setVolume(tab, domainState, dB) {
     const appliedVolume = state.volume !== undefined
         ? normalizeDb(state.volume)
         : requestedVolume;
+    const rememberedVolume = state.requestedVolume !== undefined
+        ? normalizeDb(state.requestedVolume)
+        : requestedVolume;
     const muted = state.muted !== undefined ? Boolean(state.muted) : false;
     await showNativeVolumeFeedback(tab.id, appliedVolume, muted);
-    await saveRememberedSettings(domainState, { volume: appliedVolume });
+    await saveRememberedSettings(tab, domainState, { volume: rememberedVolume });
     return true;
 }
 
@@ -478,7 +509,7 @@ async function setMono(tab, domainState, mono) {
         mono: enabled
     });
     if (!state) return false;
-    await saveRememberedSettings(domainState, {
+    await saveRememberedSettings(tab, domainState, {
         mono: state.mono !== undefined ? Boolean(state.mono) : enabled
     });
     return true;
@@ -495,7 +526,7 @@ async function setMute(tab, domainState, muted) {
     const appliedMuted = state.muted !== undefined ? Boolean(state.muted) : enabled;
     const dB = state.volume !== undefined ? normalizeDb(state.volume) : 0;
     await showNativeVolumeFeedback(tab.id, dB, appliedMuted);
-    await saveRememberedSettings(domainState, { muted: appliedMuted });
+    await saveRememberedSettings(tab, domainState, { muted: appliedMuted });
     return true;
 }
 
@@ -514,6 +545,11 @@ async function handleCommand(command, commandTab) {
 
     switch (command) {
         case "volume-up":
+            // When DRM/CORS restricts playback to native volume, a press at
+            // the effective 0 dB ceiling cannot make audio louder. Do not
+            // replace a preserved +12 dB request with an invisible +1 dB
+            // setting that only takes effect on a later, routable song.
+            if (contentState.boostLimited && currentVolume >= contentState.maxDb) break;
             await setVolume(tab, domainState, currentVolume + HOTKEY_STEP_DB);
             break;
         case "volume-down":

@@ -50,7 +50,6 @@
 
     const graphs = new WeakMap();
     const contexts = new Set();
-    const selfSuspendedContexts = new WeakSet();
     const vcNodes = new WeakSet();
     const destinationConnections = new Set();
     const howlerRoutes = new WeakMap();
@@ -296,7 +295,9 @@
         const resumeNow = async () => {
             try {
                 if (context.state === "suspended") await context.resume();
-                selfSuspendedContexts.delete(context);
+                // A browser/user-gesture resume can occur without a new media
+                // play event or graph connection. Restart sampling on resume.
+                syncNormalizerMeterTimer();
             } catch (e) {
                 log(`context resume failed: ${e && e.message}`);
             }
@@ -305,7 +306,7 @@
         return pending ? pending.catch(() => {}).then(resumeNow) : resumeNow();
     }
 
-    function suspendContext(context, { trackSelf = false, label = "context" } = {}) {
+    function suspendContext(context, { label = "context" } = {}) {
         if (!context || typeof context.suspend !== "function") return Promise.resolve();
         const existing = pendingContextSuspends.get(context);
         if (existing) return existing;
@@ -314,9 +315,7 @@
         let promise;
         promise = Promise.resolve()
             .then(() => context.suspend())
-            .then(() => {
-                if (trackSelf && context.state === "suspended") selfSuspendedContexts.add(context);
-            })
+            .then(() => syncNormalizerMeterTimer())
             .catch((e) => {
                 log(`${label} suspend failed: ${e && e.message}`);
             })
@@ -466,9 +465,8 @@
     }
 
     function suspendMediaContextIfIdle() {
-        // Also suspend any idle page-level contexts we've routed through.
-        suspendIdleContexts();
-
+        // Page-created AudioContexts are owned by the site. Missing tracked
+        // connections does not prove they are silent; never suspend those.
         if (!mediaAudioContext || mediaAudioContext.state === "closed") return;
         if (mediaAudioContext.state !== "running") return;
 
@@ -529,51 +527,14 @@
         contexts.add(supportsWeakRef ? new WeakRef(context) : context);
     }
 
-    // Resume a context ONLY when the extension itself suspended it. Pages call
-    // suspend() deliberately (pause-on-blur, battery savers); those must stay
-    // suspended. A context WE suspended that receives a new destination
-    // connection (page playing its next sound) must be revived, or the new
-    // audio would silently play into a suspended context — "extension killed
-    // my game audio".
+    // Never resume page-created AudioContexts suspended by the site itself.
+    // Only an in-flight extension-owned suspension can be reversed here.
     function resumeIfSelfSuspended(context) {
         try {
-            if (context && (selfSuspendedContexts.has(context) || pendingContextSuspends.has(context))) {
+            if (context && pendingContextSuspends.has(context)) {
                 resumeContext(context);
             }
         } catch (e) {}
-    }
-
-    function suspendIdleContexts() {
-        // Suspend page-level AudioContexts that the extension has routed through
-        // but which no longer have any active audio sources. This is critical for
-        // Bluetooth devices: a running AudioContext keeps the OS audio output
-        // stream open, preventing the device from returning to idle.
-        eachTrackedContext((ctx) => {
-            if (ctx.state !== "running") return;
-            if (ctx === mediaAudioContext) return; // handled by suspendMediaContextIfIdle
-
-            // Check if any media route on this context is still playing.
-            if (hasActiveMediaRoute(ctx)) return;
-
-            // Check if any destination connection on this context is still
-            // tracked (routed OR native). Counting only routed connections
-            // meant a context whose connections we had restored to native
-            // (e.g. after the user set 0 dB) would be suspended while its
-            // audio was still playing — killing audio on sites whose graphs
-            // we had previously routed through.
-            let hasTrackedConnection = false;
-            for (const entry of destinationConnections) {
-                if (nodeFromRef(entry.contextRef) === ctx) {
-                    hasTrackedConnection = true;
-                    break;
-                }
-            }
-            if (hasTrackedConnection) return;
-
-            suspendContext(ctx, { trackSelf: true, label: "page context" }).then(() => {
-                log(`page context suspended (idle): state=${ctx.state}`);
-            });
-        });
     }
 
     function disconnectMediaRouteOutput(route) {
@@ -589,10 +550,17 @@
         route.outputConnected = false;
     }
 
+    function cancelMediaRouteRecovery(route) {
+        if (!route || !route.recoveryTimer) return;
+        clearTimeout(route.recoveryTimer);
+        route.recoveryTimer = null;
+    }
+
     function releaseMediaRoute(element) {
         const route = mediaRoutes.get(element);
         if (!route) return;
 
+        cancelMediaRouteRecovery(route);
         disconnectMediaRouteOutput(route);
 
         // Do NOT disconnect route.source from route.inputAnalyser, and do NOT delete the
@@ -872,7 +840,11 @@
     // verdict.
     function markElementRestricted(element) {
         try {
-            if (element && element.dataset) element.dataset.vcRestrictedMedia = "true";
+            if (element && element.dataset) {
+                element.dataset.vcRestrictedMedia = "true";
+                const source = getMediaSourceUrl(element);
+                if (source) element.dataset.vcRestrictedMediaSource = source;
+            }
         } catch (e) {}
         // The aggregate page restriction may have just appeared (this element
         // is now DRM-restricted even if it is detached or in shadow DOM).
@@ -927,11 +899,21 @@
     function elementDrmEvidence(element) {
         if (!element) return false;
         try {
-            if (element.dataset && element.dataset.vcRestrictedMedia === "true") return true;
-            if (element.mediaKeys) return true;
-            if (element.webkitKeys) return true;
+            const keys = element.mediaKeys || element.webkitKeys;
+            if (element.dataset && element.dataset.vcRestrictedMedia === "true") {
+                const previous = element.dataset.vcRestrictedMediaSource;
+                const current = getMediaSourceUrl(element);
+                if (previous && current && previous !== current && !keys) {
+                    delete element.dataset.vcRestrictedMedia;
+                    delete element.dataset.vcRestrictedMediaSource;
+                } else {
+                    return true;
+                }
+            }
+            if (keys) return true;
         } catch (e) {
-            return false;
+            // An uninspectable DRM state is not proof of a clear stream.
+            return true;
         }
         return false;
     }
@@ -1101,9 +1083,9 @@
     function updatePageMediaRestriction() {
         let restriction = "";
         for (const element of mediaElements) {
-            // Mirror the content script's verdict gate: an element that is
-            // neither playing nor holding a source cannot limit boost.
-            if (!isMediaPlaying(element) && !getMediaSourceUrl(element)) continue;
+            // A paused/ended DRM player must not cap a separate clear player;
+            // routing guards remain active when playback begins.
+            if (!isMediaPlaying(element)) continue;
             // VERDICT (the popup note + slider clamp) requires per-element
             // DRM evidence on engines that silence routed EME audio. The
             // pending window and page-level probes gate ROUTING only (see
@@ -1629,8 +1611,8 @@
 
     function setMediaGainValue(route) {
         const autoGain = state.normalizerEnabled ? dbToGain(route.normalizerGainDb || 0) : 1;
-        const targetGain = route.limiterFallbackActive
-            ? Math.min(1, effectiveGain()) : effectiveGain() * autoGain;
+        const targetGain = (route.limiterFallbackActive || route.fallbackDirectOnly)
+            ? Math.max(0, Math.min(1, effectiveGain())) : effectiveGain() * autoGain;
 
         try {
             const now = route.context.currentTime;
@@ -1675,6 +1657,40 @@
     }
 
     function wireMediaRoute(route) {
+        if (route.fallbackDirectOnly) {
+            // A captured MediaElementSource cannot go back to native audio.
+            // Retry a minimal source -> clamped gain -> destination chain
+            // without ever exposing positive gain outside a limiter.
+            if (route.sourceGainResetPending) {
+                if (!resetMediaBoundaryGain(route)) return;
+                route.sourceGainResetPending = false;
+            }
+            if (!clampUnprotectedOutput(route)) return;
+            if (!route.sourceConnected) {
+                try {
+                    connectNative(route.source, route.gain);
+                    route.sourceConnected = true;
+                } catch (e) {
+                    log(`media rescue source reconnect failed: ${e && e.message}`);
+                    return;
+                }
+            }
+            if (!route.outputConnected) {
+                try {
+                    connectNative(route.gain, route.context.destination);
+                    route.outputConnected = true;
+                    route.recoveryAttempts = 0;
+                } catch (e) {
+                    log(`media rescue output reconnect failed: ${e && e.message}`);
+                    return;
+                }
+            }
+            // The recovery path has no limiter: later gain updates must
+            // also remain <= unity, including when Normalize is on.
+            clampUnprotectedOutput(route);
+            if (route.outputConnected) route.recoveryAttempts = 0;
+            return;
+        }
         if (route.sourceGainResetPending) {
             if (!resetMediaBoundaryGain(route)) return;
             route.sourceGainResetPending = false;
@@ -1688,6 +1704,8 @@
         const wantMode = currentRoutingMode();
         if (route.currentMode === wantMode && route.outputConnected && !route.limiterFallbackActive) {
             setMediaGainValue(route);
+            syncNormalizerMeterTimer();
+            route.recoveryAttempts = 0;
             return;
         }
         if (!safetyLimiterRequired() && !clampDirectOutputGain(route)) return;
@@ -1708,6 +1726,7 @@
                 connectNative(route.analyser, route.context.destination);
             }
             route.outputConnected = true;
+            route.recoveryAttempts = 0;
             route.currentMode = wantMode;
             route.limiterFallbackActive = false;
         } catch (e) {
@@ -1724,37 +1743,74 @@
             log(`media graph wire failed: ${e && e.message}`);
         }
         setMediaGainValue(route);
+        // Playback often starts after the initial setState when no route
+        // existed. Start the 100ms meter as soon as a usable graph connects.
+        // Without this, a paused-on-load video never starts normalization.
+        if (route.outputConnected) syncNormalizerMeterTimer();
+    }
+
+    function scheduleMediaRouteRecovery(element, route) {
+        if (!route || route.outputConnected || route.recoveryTimer ||
+            (route.recoveryAttempts || 0) >= 6 ||
+            !route.context || route.context.state === "closed") return;
+
+        // No second createMediaElementSource is possible. A transient
+        // connect() failure must retry the SAME captured node even when the
+        // player is already playing and will not emit another play event.
+        route.recoveryTimer = setTimeout(() => {
+            route.recoveryTimer = null;
+            if (mediaRoutes.get(element) !== route ||
+                route.context.state === "closed" || route.outputConnected) return;
+            route.recoveryAttempts = (route.recoveryAttempts || 0) + 1;
+            wireMediaRoute(route);
+            if (route.outputConnected) {
+                route.recoveryAttempts = 0;
+                // A paused source may reconnect successfully while the
+                // context is suspended. Do not awaken the audio device until
+                // playback actually resumes.
+                if (isMediaPlaying(element)) resumeContext(route.context);
+            } else {
+                scheduleMediaRouteRecovery(element, route);
+            }
+        }, 250);
     }
 
     function ensureMediaRoute(element) {
         if (!mediaNeedsAudioRoute() || !isAudibleMediaElement(element)) return null;
-        // DRM-restricted media is never routed (see createMediaRouteSource).
         if (isLikelyDrmMedia(element)) return null;
         if (mediaRoutes.has(element)) {
             const existing = mediaRoutes.get(element);
-            // Defensive: if the route's context was closed out from under us
-            // (e.g. the page itself called .close() on it, or the tab was
-            // suspended by the OS and the context did not survive), we cannot
-            // recover via a new context -- createMediaElementSource() throws
-            // InvalidStateError when called twice on the same element. Log
-            // loudly so this is diagnosable; audio for this element will not
-            // play again until the page is reloaded.
             if (existing && existing.context && existing.context.state === "closed") {
-                log(`media route context is closed -- element audio is dead until page reload: ${getMediaSourceUrl(element) || element.tagName}`);
+                if (existing.sourceKind === "mediaStream") {
+                    // createMediaStreamSource(stream) is repeatable on another
+                    // AudioContext, unlike createMediaElementSource(element).
+                    // Only this kind can be discarded and safely rebuilt.
+                    resetDirectMediaStreamRoute(element);
+                } else {
+                    log(`media route context is closed -- element audio is dead until page reload: ${getMediaSourceUrl(element) || element.tagName}`);
+                    return existing;
+                }
+            } else {
+                return existing;
             }
-            return existing;
         }
+
+        // Cross-origin media without CORS cannot enter WebAudio at all.
+        // Check before constructing an AudioContext and eight graph nodes:
+        // a blocked route must not hold an unnecessary audio-device handle.
+        if (isLikelyCrossOriginMedia(element)) return null;
 
         const context = getMediaContext();
         if (!context) return null;
 
+        let routeSource = null;
+        let route = null;
         try {
-            const routeSource = createMediaRouteSource(context, element);
-            if (!routeSource) return null;
-
-            const source = routeSource.source;
+            // Build every fallible node and allocate the analyser buffers BEFORE
+            // createMediaElementSource(). Once that call succeeds, native output
+            // is permanently redirected; a later allocation failure must not
+            // strand the element without a usable WebAudio path.
             const gain = markNode(context.createGain());
-            // Measure source RMS before the slider and automatic gain.
             const inputAnalyser = markNode(context.createAnalyser());
             const splitter = markNode(context.createChannelSplitter(2));
             const leftGain = markNode(context.createGain());
@@ -1768,19 +1824,20 @@
             rightGain.gain.value = 0.5;
             analyser.fftSize = 1024;
             analyser.smoothingTimeConstant = 0.35;
-            // 8192 frames span ~171ms at 48kHz, overlapping adjacent
-            // 100ms AGC samples rather than leaving ~15ms peak blind spots.
             inputAnalyser.fftSize = 8192;
             inputAnalyser.smoothingTimeConstant = 0.35;
-            // Set the gain value BEFORE connecting the source so there is no
-            // brief moment of full-volume (gain=1.0) audio at route creation.
-            gain.gain.value = effectiveGain();
-            connectNative(source, inputAnalyser);
+            // No positive gain until the limiter is actually wired.
+            gain.gain.value = Math.max(0, Math.min(1, effectiveGain()));
+            const meterBuffer = new Float32Array(analyser.fftSize);
+            const inputBuffer = new Float32Array(inputAnalyser.fftSize);
             connectNative(inputAnalyser, gain);
 
-            const route = {
+            routeSource = createMediaRouteSource(context, element);
+            if (!routeSource) return null;
+
+            route = {
                 context,
-                source,
+                source: routeSource.source,
                 gain,
                 inputAnalyser,
                 splitter,
@@ -1791,8 +1848,8 @@
                 analyser,
                 normalizerGainDb: 0,
                 meterPeakDb: -Infinity,
-                meterBuffer: new Float32Array(analyser.fftSize),
-                inputBuffer: new Float32Array(inputAnalyser.fftSize),
+                meterBuffer,
+                inputBuffer,
                 sourceKind: routeSource.kind,
                 muteNative: Boolean(routeSource.muteNative),
                 stream: routeSource.stream || null,
@@ -1800,13 +1857,32 @@
                 currentMode: null,
                 limiterFallbackActive: false
             };
+            // Retain ownership BEFORE connecting the irreversible source, so
+            // a failed connection can be recovered without constructing a
+            // second MediaElementAudioSourceNode for this element.
             mediaRoutes.set(element, route);
-            // The caller restores base/native volume before exposing the route,
-            // avoiding fallback-volume × GainNode transition artifacts.
+            connectNative(route.source, inputAnalyser);
             log(`media route attached (${route.sourceKind}): ${element.currentSrc || element.src || element.tagName}`);
             return route;
         } catch (e) {
             log(`media route failed: ${e && e.message}`);
+            if (routeSource && route) {
+                // Source capture already happened. Retain the existing route
+                // and recover with a gain-clamped direct connection. If that
+                // also fails, keep it disconnected and retry at the next
+                // playback/state update rather than leaking unbounded gain.
+                route.fallbackDirectOnly = true;
+                route.currentMode = "rescue-direct";
+                route.outputConnected = false;
+                route.sourceConnected = false;
+                safeDisconnect(route.source);
+                safeDisconnect(route.inputAnalyser);
+                safeDisconnect(route.gain);
+                mediaRoutes.set(element, route);
+                wireMediaRoute(route);
+                if (!route.outputConnected) scheduleMediaRouteRecovery(element, route);
+                return route;
+            }
             return null;
         }
     }
@@ -1843,6 +1919,14 @@
 
         const entry = getMediaState(element);
         const gain = effectiveGain();
+        // Unlike MediaElementSource, a direct stream source can safely be
+        // constructed on a new context if the old one was closed. Clear the
+        // stale route before selecting the existingRoute fast-path below.
+        const previousRoute = mediaRoutes.get(element);
+        if (previousRoute && previousRoute.sourceKind === "mediaStream" &&
+            previousRoute.context && previousRoute.context.state === "closed") {
+            resetDirectMediaStreamRoute(element);
+        }
         const existingRoute = mediaRoutes.get(element);
         const playing = isMediaPlaying(element);
         const audible = isAudibleMediaElement(element);
@@ -1854,6 +1938,7 @@
             if (existingRoute) {
                 setNativeVolume(element, existingRoute.muteNative ? 0 : entry.baseVolume);
                 wireMediaRoute(existingRoute);
+                if (!existingRoute.outputConnected) scheduleMediaRouteRecovery(element, existingRoute);
                 return;
             }
 
@@ -1896,6 +1981,7 @@
             // causes an audible dip-then-snap spike.
             setNativeVolume(element, route.muteNative ? 0 : entry.baseVolume);
             wireMediaRoute(route);
+            if (!route.outputConnected) scheduleMediaRouteRecovery(element, route);
             // After wireMediaRoute, output should be reconnected. If the context
             // was suspended (e.g. after pause), resume it so audio flows again.
             if (route.outputConnected) resumeContext(route.context);
@@ -1940,7 +2026,26 @@
             entry.pendingFallbackVolume = null;
         }
         const route = mediaRoutes.get(element);
-        if (route) disconnectMediaRouteOutput(route);
+        if (route) {
+            cancelMediaRouteRecovery(route);
+            disconnectMediaRouteOutput(route);
+
+            // A detached paused element may later autoplay again without
+            // being reinserted in the DOM or calling the patched play().
+            // Retain a one-shot event wake-up on the ELEMENT, not a strong
+            // global Set entry. Otherwise its captured MediaElementSource
+            // remains disconnected forever after idle cleanup.
+            if (!element.isConnected && typeof element.addEventListener === "function" &&
+                entry && !entry.detachedPlayWake) {
+                const wake = () => {
+                    entry.detachedPlayWake = null;
+                    try { element.removeEventListener("play", wake); } catch (e) {}
+                    registerMediaElement(element, { immediateFallback: true, eagerRoute: true });
+                };
+                entry.detachedPlayWake = wake;
+                element.addEventListener("play", wake, { once: true, passive: true });
+            }
+        }
         mediaElements.delete(element);
     }
 
@@ -1974,6 +2079,7 @@
             applyMediaElementState(element);
         }
         updatePageMediaRestriction();
+        syncNormalizerMeterTimer();
     }
 
     function registerMediaElement(element, options = {}) {
@@ -1988,6 +2094,12 @@
         mediaElements.add(element);
         updatePageMediaRestriction();
         const entry = getMediaState(element);
+        // DOM reinsertion or patched play() can register an element before the
+        // detached wake fires. Remove that obsolete one-shot listener.
+        if (entry.detachedPlayWake) {
+            try { element.removeEventListener("play", entry.detachedPlayWake); } catch (e) {}
+            entry.detachedPlayWake = null;
+        }
         if (!entry.listenersInstalled && typeof element.addEventListener === "function") {
             const listenerCleanup = [];
             const listen = (type, handler, options) => {
@@ -2057,6 +2169,7 @@
                     route.sourceGainResetPending = true;
                     setNativeVolume(element, route.muteNative ? 0 : getMediaState(element).baseVolume);
                     wireMediaRoute(route);
+                    if (!route.outputConnected) scheduleMediaRouteRecovery(element, route);
                 } else {
                     applyMediaElementState(element, { immediateFallback: true, eagerRoute: true });
                 }
@@ -2148,6 +2261,7 @@
                     const entry = trackDestinationConnection(this, destination, outputIndex, inputIndex, true);
                     try {
                         connectNative(this, graph.inputAnalyser, outputIndex, 0);
+                        syncNormalizerMeterTimer();
                         return destination;
                     } catch (e) {
                         entry.routed = false;
@@ -2280,6 +2394,7 @@
     function resetDirectMediaStreamRoute(element) {
         const route = mediaRoutes.get(element);
         if (!route || route.sourceKind !== "mediaStream") return;
+        cancelMediaRouteRecovery(route);
         disconnectMediaRouteOutput(route);
         safeDisconnect(route.source);
         mediaRoutes.delete(element);
@@ -2320,10 +2435,13 @@
                     return nativeSrcObjectDescriptor.get.call(this);
                 },
                 set: function patchedSrcObjectSetter(value) {
-                    // A direct MediaStream route is tied to the old stream, so
-                    // tear only that route down before replacing srcObject.
-                    resetDirectMediaStreamRoute(this);
+                    // The native setter can throw (invalid srcObject type).
+                    // Never destroy the EXISTING audible route until the
+                    // replacement is accepted; otherwise a rejected update
+                    // leaves the old stream attached with its output severed.
+                    const previous = readMediaSrcObject(this);
                     nativeSrcObjectDescriptor.set.call(this, value);
+                    if (previous !== value) resetDirectMediaStreamRoute(this);
                     bindMediaStreamLifecycle(this, value);
                     registerMediaElement(this, { immediateFallback: true, eagerRoute: true });
                     log(`srcObject assigned (${isMediaStreamLike(value) ? "MediaStream" : typeof value})`);
@@ -2598,9 +2716,20 @@
 
         if (data.command !== "setState") return;
 
-        // Version check — log a warning on mismatch but continue processing.
-        if (data.version !== undefined && data.version !== BRIDGE_VERSION) {
-            log(`Bridge version mismatch: page hook v${BRIDGE_VERSION}, content script v${data.version}. Some features may not work correctly.`);
+        // An old content script must not overwrite a newer page hook state.
+        // This validates protocol compatibility, not page-script authenticity:
+        // MAIN-world scripts can still observe window.postMessage traffic.
+        if (data.version !== undefined && data.version !== BRIDGE_VERSION &&
+            data.version !== BRIDGE_VERSION - 1) {
+            log(`Ignoring incompatible bridge state v${data.version}; expected v${BRIDGE_VERSION}`);
+            return;
+        }
+        if (typeof data.dB !== "number" || !Number.isFinite(data.dB) ||
+            typeof data.enabled !== "boolean" || typeof data.mono !== "boolean" ||
+            typeof data.muted !== "boolean" ||
+            (data.normalizerEnabled !== undefined && typeof data.normalizerEnabled !== "boolean")) {
+            log("Ignoring malformed bridge control state");
+            return;
         }
 
         lastHeartbeat = Date.now();
@@ -2702,7 +2831,6 @@
         }
 
         suspendMediaContextIfIdle();
-        suspendIdleContexts();
         restorePatchedPageApis();
         bridgeToken = null;
     }
@@ -2831,7 +2959,10 @@
     }
 
     function updateNormalizerAndMeter() {
-        if (!state.normalizerEnabled) return;
+        if (!state.normalizerEnabled || !hasAnalyzableAudioRoute()) {
+            syncNormalizerMeterTimer();
+            return;
+        }
         let peakDb = -Infinity;
         let gainDb = 0;
         let gainCount = 0;
@@ -2864,8 +2995,26 @@
         });
     }
 
+    function hasAnalyzableAudioRoute() {
+        // A saved preference is not evidence of routable decoded samples.
+        if (state.debugRouteMode === "native") return false;
+        for (const element of mediaElements) {
+            const route = mediaRoutes.get(element);
+            if (route && route.outputConnected &&
+                route.context && route.context.state === "running" &&
+                isMediaPlaying(element)) return true;
+        }
+        for (const entry of destinationConnections) {
+            if (!entry.routed) continue;
+            const context = nodeFromRef(entry.contextRef);
+            if (context && context.state === "running" && graphs.has(context)) return true;
+        }
+        return false;
+    }
+
     function syncNormalizerMeterTimer() {
-        const shouldRun = state.extensionActive && state.enabled && state.normalizerEnabled;
+        const shouldRun = state.extensionActive && state.enabled && state.normalizerEnabled &&
+            hasAnalyzableAudioRoute();
         if (!shouldRun) {
             if (normalizerMeterTimerId !== null) clearInterval(normalizerMeterTimerId);
             normalizerMeterTimerId = null;
