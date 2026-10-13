@@ -1210,7 +1210,12 @@ function configureIsolatedLimiter() {
     if (!limiter) return;
     const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
     try {
-        limiter.threshold.value = config.ceilingDb;
+        // Avoid unnecessary compression of already-unboosted music.
+        // A fixed compressor route prevents clicks from frequent rewiring.
+        const transparentMusic = tc.vars.normalizerEnabled && config.mode === "music" &&
+            tc.vars.dB <= 0 && (!Number.isFinite(tc.vars.normalizerGainDb) ||
+                tc.vars.normalizerGainDb <= 0);
+        limiter.threshold.value = transparentMusic ? 0 : config.ceilingDb;
         limiter.knee.value = 0;
         limiter.ratio.value = 20;
         limiter.attack.value = 0.003;
@@ -1346,6 +1351,7 @@ function sampleIsolatedNormalizer() {
         let sourcePeak = 0;
         for (let i = 0; i < tc.vars.inputAnalyserBuffer.length; i++) {
             const sample = tc.vars.inputAnalyserBuffer[i];
+            if (!Number.isFinite(sample)) throw new Error("invalid source sample");
             sourceSum += sample * sample;
             sourcePeak = Math.max(sourcePeak, Math.abs(sample));
         }
