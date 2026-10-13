@@ -117,7 +117,7 @@
             return Number.isFinite(n) ? n : fallback;
         };
         return {
-            mode: value.mode === "adaptive" ? "adaptive" : "music",
+            mode: value.mode === "music" ? "music" : "adaptive",
             targetDb: Math.max(-30, Math.min(-6, finiteOr(value.targetDb, -16))),
             maxBoostDb: Math.max(0, Math.min(24, finiteOr(value.maxBoostDb, 12))),
             ceilingDb: Math.max(-6, Math.min(-0.1, finiteOr(value.ceilingDb, -1))),
@@ -2737,6 +2737,7 @@
 
         lastHeartbeat = Date.now();
         const wasNormalizing = state.extensionActive && state.enabled && state.normalizerEnabled;
+        const previousNormalizerMode = state.normalizerConfig && state.normalizerConfig.mode;
         state.extensionActive = true;
         state.enabled = data.enabled !== false;
         state.dB = normalizeDb(data.dB);
@@ -2745,7 +2746,8 @@
         state.normalizerEnabled = Boolean(data.normalizerEnabled);
         state.normalizerConfig = normalizeNormalizerConfig(data.normalizerConfig);
         const nowNormalizing = state.enabled && state.normalizerEnabled;
-        if (wasNormalizing !== nowNormalizing) {
+        if (wasNormalizing !== nowNormalizing ||
+            (nowNormalizing && previousNormalizerMode !== state.normalizerConfig.mode)) {
             // Re-enable at unity gain rather than replaying stale auto gain.
             // Do this before reconnecting graphs/MediaElementSource nodes.
             eachTrackedContext((context) => {
