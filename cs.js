@@ -68,6 +68,10 @@ const tc = {
     normalizerGainDb: 0,
     musicLevelState: null,
     isolatedOutputUsesLimiter: null,
+    isolatedOutputRouteKind: null,
+    truePeakStatus: 'idle',
+    truePeakNode: undefined,
+    truePeakLoadPromise: null,
     audioCtx: undefined,
     gainNode: undefined,
     inputAnalyserNode: undefined,
@@ -1029,17 +1033,83 @@ function sendPageAudioHeartbeat() {
     }
 }
 
+function disableIsolatedTruePeak(reason) {
+    const vars = tc.vars;
+    vars.truePeakStatus = 'failed';
+    const node = vars.truePeakNode;
+    vars.truePeakNode = undefined;
+    try { if (node) node.disconnect(); } catch (e) {}
+    if (tc.settings.debugMode) log(`experimental true-peak fallback: ${reason}`, 3);
+    if (vars.isolatedOutputRouteKind === 'worklet') {
+        // Recover an existing captured media route through the compressor;
+        // never create a second MediaElementAudioSourceNode.
+        vars.isolatedOutputRouteKind = null;
+        routeIsolatedOutput();
+        applyState();
+    }
+}
+
+function prepareIsolatedTruePeak() {
+    const vars = tc.vars;
+    const ctx = vars.audioCtx;
+    const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
+    if (!config.experimentalTruePeak || vars.isBlocked || !ctx || !vars.limiterNode) return;
+    if (vars.truePeakStatus === 'ready') {
+        try { vars.truePeakNode.port.postMessage({ type: 'set-ceiling', ceilingDb: config.ceilingDb }); }
+        catch (e) { disableIsolatedTruePeak(e && e.message); }
+        return;
+    }
+    if (vars.truePeakStatus === 'failed' || vars.truePeakStatus === 'loading') return;
+    if (!ctx.audioWorklet || typeof AudioWorkletNode !== 'function' ||
+        !browserAPI || !browserAPI.runtime || typeof browserAPI.runtime.getURL !== 'function') {
+        vars.truePeakStatus = 'failed';
+        return;
+    }
+    let moduleUrl;
+    try { moduleUrl = browserAPI.runtime.getURL('true-peak-worklet.js'); }
+    catch (e) { vars.truePeakStatus = 'failed'; return; }
+    vars.truePeakStatus = 'loading';
+    vars.truePeakLoadPromise = Promise.resolve().then(() => ctx.audioWorklet.addModule(moduleUrl))
+        .then(() => {
+            if (vars.audioCtx !== ctx || ctx.state === 'closed') return;
+            const node = new AudioWorkletNode(ctx, 'volume-control-true-peak', {
+                numberOfInputs: 1,
+                numberOfOutputs: 1,
+                outputChannelCount: [2],
+                channelCount: 2,
+                channelCountMode: 'explicit',
+                processorOptions: { channels: 2, ceilingDb: config.ceilingDb }
+            });
+            node.onprocessorerror = () => disableIsolatedTruePeak('processorerror');
+            node.port.onmessage = event => {
+                if (event.data && event.data.type === 'limiter-error') {
+                    disableIsolatedTruePeak(event.data.message || 'DSP error');
+                }
+            };
+            vars.truePeakNode = node;
+            vars.truePeakStatus = 'ready';
+            applyState();
+        }).catch(e => {
+            if (vars.audioCtx === ctx) disableIsolatedTruePeak(e && e.message || 'module unavailable');
+        }).finally(() => {
+            if (vars.audioCtx === ctx) vars.truePeakLoadPromise = null;
+        });
+}
+
 function routeIsolatedOutput() {
-    const { audioCtx, gainNode, limiterNode, analyserNode } = tc.vars;
+    const { audioCtx, gainNode, limiterNode, analyserNode, truePeakNode } = tc.vars;
     if (!audioCtx || !gainNode || !limiterNode || !analyserNode) return;
     const useLimiter = !tc.vars.isBlocked &&
         (tc.vars.normalizerEnabled || (!tc.vars.muted && tc.vars.dB > 0));
-    if (tc.vars.isolatedOutputUsesLimiter === useLimiter) return;
+    const configured = normalizeNormalizerConfig(tc.settings.normalizerConfig);
+    const truePeakReady = configured.experimentalTruePeak &&
+        tc.vars.truePeakStatus === 'ready' && Boolean(truePeakNode);
+    const routeKind = !useLimiter ? 'direct' : truePeakReady ? 'worklet' : 'compressor';
+    if (tc.vars.isolatedOutputUsesLimiter === useLimiter &&
+        tc.vars.isolatedOutputRouteKind === routeKind) return;
 
     if (!useLimiter) {
-        // Disabling Normalize or positive boost can remove the compressor.
-        // Clamp the active (possibly boosted) AudioParam BEFORE connecting
-        // directly to the destination; the later 15ms UI ramp is too late.
+        // Clamp the boosted AudioParam BEFORE any direct connection.
         try {
             const param = gainNode.gain;
             const now = audioCtx.currentTime;
@@ -1048,50 +1118,69 @@ function routeIsolatedOutput() {
             param.cancelScheduledValues(now);
             param.setValueAtTime(safeGain, now);
         } catch (e) {
-            if (tc.settings.debugMode) log(`isolated direct route safety clamp failed: ${e && e.message}`, 3);
-            // Keep existing limited audio connected rather than allowing an
-            // uncontrolled gain burst through an unprotected direct path.
+            if (tc.settings.debugMode) log(`isolated direct route clamp failed: ${e && e.message}`, 3);
             return;
         }
     }
-
-    // Disconnect only outgoing edges: media element source -> gain remains
-    // intact, even while a player is actively playing.
-    for (const node of [gainNode, limiterNode, analyserNode]) {
-        try { node.disconnect(); } catch (e) {}
+    // Preserve the captured MediaElementSource -> inputAnalyser -> gain.
+    // Only disconnect output edges; never re-create irreversible sources.
+    for (const node of [gainNode, limiterNode, truePeakNode, analyserNode]) {
+        try { if (node) node.disconnect(); } catch (e) {}
     }
     try {
         if (useLimiter) {
-            configureIsolatedLimiter();
-            gainNode.connect(limiterNode);
-            limiterNode.connect(analyserNode);
+            const processor = routeKind === 'worklet' ? truePeakNode : limiterNode;
+            if (routeKind === 'worklet') {
+                processor.port.postMessage({ type: 'reset' });
+                processor.port.postMessage({ type: 'set-ceiling', ceilingDb: configured.ceilingDb });
+            } else {
+                configureIsolatedLimiter();
+            }
+            gainNode.connect(processor);
+            processor.connect(analyserNode);
             analyserNode.connect(audioCtx.destination);
         } else {
             gainNode.connect(audioCtx.destination);
         }
         tc.vars.isolatedOutputUsesLimiter = useLimiter;
+        tc.vars.isolatedOutputRouteKind = routeKind;
     } catch (e) {
-        // A partial rebuild must not leave captured media permanently silent.
-        // Discard partial edges and attempt a direct, gain-limited fallback.
+        // If the experimental node fails to connect, keep the existing
+        // compressor as the *first* fallback. Direct output comes last.
         tc.vars.isolatedOutputUsesLimiter = null;
+        tc.vars.isolatedOutputRouteKind = null;
+        for (const node of [gainNode, limiterNode, truePeakNode, analyserNode]) {
+            try { if (node) node.disconnect(); } catch (_) {}
+        }
+        if (routeKind === 'worklet' && useLimiter) {
+            tc.vars.truePeakStatus = 'failed';
+            tc.vars.truePeakNode = undefined;
+            try {
+                configureIsolatedLimiter();
+                gainNode.connect(limiterNode);
+                limiterNode.connect(analyserNode);
+                analyserNode.connect(audioCtx.destination);
+                tc.vars.isolatedOutputUsesLimiter = true;
+                tc.vars.isolatedOutputRouteKind = 'compressor';
+                if (tc.settings.debugMode) log('True-peak route failed; compressor restored', 3);
+                return;
+            } catch (compressorError) {
+                for (const node of [gainNode, limiterNode, analyserNode]) {
+                    try { if (node) node.disconnect(); } catch (_) {}
+                }
+            }
+        }
         tc.vars.normalizerGainDb = 0;
         tc.vars.musicLevelState = null;
         tc.vars.normalizerPeakDb = -Infinity;
-        for (const node of [gainNode, limiterNode, analyserNode]) {
-            try { node.disconnect(); } catch (_) {}
-        }
         try {
-            // Clamp the existing AudioParam BEFORE reconnecting directly.
-            // A 15ms ramp in applyState() is too late: a previously boosted
-            // gain could otherwise play briefly without limiter protection.
-            const gainParam = gainNode.gain;
+            const param = gainNode.gain;
             const now = audioCtx.currentTime;
-            gainParam.cancelScheduledValues(now);
-            gainParam.setValueAtTime(
-                Math.max(0, Math.min(1, gainParam.value)), now
-            );
+            param.cancelScheduledValues(now);
+            param.setValueAtTime(Math.max(0, Math.min(1, param.value)), now);
             gainNode.connect(audioCtx.destination);
             tc.vars.isolatedOutputUsesLimiter = false;
+            tc.vars.isolatedOutputRouteKind = 'direct';
         } catch (fallbackError) {
             if (tc.settings.debugMode) log(`isolated output fallback failed: ${fallbackError && fallbackError.message}`, 3);
         }
@@ -1117,6 +1206,7 @@ function applyState() {
         // The limiter may remain routed during manual boost while Normalize
         // is off. Changes from Options must still update its parameters.
         if (tc.vars.isolatedOutputUsesLimiter) configureIsolatedLimiter();
+        prepareIsolatedTruePeak();
         routeIsolatedOutput();
         // If the limiter failed and audio was restored directly, do not
         // expose automatic gain or positive manual boost without protection.
@@ -1503,6 +1593,7 @@ function createGainNode() {
         tc.vars.limiterNode = limiter;
         tc.vars.analyserNode = analyser;
         tc.vars.isolatedOutputUsesLimiter = null;
+        tc.vars.isolatedOutputRouteKind = null;
         // applyState() wires the output only once a complete graph exists.
         ensureIsolatedNormalizerTimer();
     }
@@ -1872,6 +1963,10 @@ function connectOutput(element) {
         tc.vars.inputAnalyserNode = undefined;
         tc.vars.inputAnalyserBuffer = undefined;
         tc.vars.limiterNode = undefined;
+        tc.vars.truePeakNode = undefined;
+        tc.vars.truePeakStatus = 'idle';
+        tc.vars.truePeakLoadPromise = null;
+        tc.vars.isolatedOutputRouteKind = null;
         tc.vars.analyserNode = undefined;
         tc.vars.analyserBuffer = undefined;
         if (tc.vars.normalizerTimer !== null) {
