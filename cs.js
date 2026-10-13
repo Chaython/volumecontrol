@@ -1229,6 +1229,7 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
         history.mode = config.mode;
         history.rmsDb = null;
         history.peakDb = -Infinity;
+        history.peakHoldSamples = 0;
         history.audibleSamples = 0;
         history.silentSamples = 0;
     }
@@ -1236,6 +1237,7 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
         if (history) {
             history.rmsDb = null;
             history.peakDb = -Infinity;
+            history.peakHoldSamples = 0;
             history.audibleSamples = 0;
             history.silentSamples = 0;
         }
@@ -1249,6 +1251,7 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
         if (history) {
             history.rmsDb = null;
             history.peakDb = -Infinity;
+            history.peakHoldSamples = 0;
             history.audibleSamples = 0;
             history.silentSamples = 0;
         }
@@ -1264,20 +1267,29 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
         const rmsTimeMs = sourceRmsDb > history.rmsDb ? 3500 : 11000;
         history.rmsDb += (sourceRmsDb - history.rmsDb) *
             (1 - Math.exp(-100 / rmsTimeMs));
-        // Keep the loudest observed sample peak for this track/route so the
-        // limiter headroom does not expand and contract on every drum hit.
-        history.peakDb = Math.max(
-            Number.isFinite(history.peakDb) ? history.peakDb : -Infinity, sourcePeakDb);
-        const peakHeadroom = config.ceilingDb - 2 - history.peakDb;
-        // No positive automatic boost before ~2.5s of valid samples. This
-        // reduces the danger of amplifying a quiet intro before the first beat.
+        // Peak envelope: hold for four seconds, then release by 1.5 dB/s.
+        // A permanent sample-peak maximum made one transient suppress a full song.
+        if (!Number.isFinite(history.peakDb) || sourcePeakDb >= history.peakDb) {
+            history.peakDb = sourcePeakDb;
+            history.peakHoldSamples = 40;
+        } else if (history.peakHoldSamples > 0) {
+            history.peakHoldSamples--;
+        } else {
+            history.peakDb = Math.max(sourcePeakDb, history.peakDb - 0.15);
+        }
+        // Excess peaks must prevent extra automatic boost, not make otherwise
+        // unamplified music quieter merely for having a full-scale sample.
+        const safeBoostDb = Math.max(0, Math.min(
+            config.maxBoostDb, config.ceilingDb - 2 - history.peakDb));
         const desired = Math.max(-32, Math.min(
-            config.maxBoostDb, config.targetDb - history.rmsDb, peakHeadroom,
+            config.targetDb - history.rmsDb, safeBoostDb,
             history.audibleSamples < 25 ? 0 : Infinity));
-        // Immediately reduce an *unsafe* existing boost after a new peak;
-        // otherwise adjust slowly in both directions to preserve dynamics.
-        const instantaneousPeakLimit = config.ceilingDb - 2 - sourcePeakDb;
-        if (instantaneousPeakLimit < previous) return Math.max(-32, Math.min(desired, instantaneousPeakLimit));
+        // Immediately shed unsafe positive automatic boost after a fresh peak.
+        // The existing compressor protects residual input peaks, with its documented limits.
+        const instantaneousBoostLimit = Math.max(0, config.ceilingDb - 2 - sourcePeakDb);
+        if (previous > 0 && instantaneousBoostLimit < previous) {
+            return Math.max(-32, Math.min(desired, instantaneousBoostLimit));
+        }
         const timeMs = desired < previous ? 1600 : 6000;
         return previous + (desired - previous) * (1 - Math.exp(-100 / timeMs));
     }
