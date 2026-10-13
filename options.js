@@ -646,6 +646,14 @@ async function initOptions() {
     const normalizerMaxBoostDb = document.getElementById('normalizerMaxBoostDb');
     const normalizerCeilingDb = document.getElementById('normalizerCeilingDb');
     const normalizerResponseMs = document.getElementById('normalizerResponseMs');
+    const updateResponseField = () => {
+        if (!normalizerResponseMs) return;
+        const adaptive = normalizerMode && normalizerMode.value === 'adaptive';
+        normalizerResponseMs.disabled = !adaptive;
+        normalizerResponseMs.title = adaptive
+            ? 'Adaptive automatic gain response time'
+            : 'Music uses slower, dedicated loudness response times';
+    };
     const addBtn = document.getElementById('addFqdn');
     const newFqdnInput = document.getElementById('newFqdn');
     const listTitle = document.getElementById('listTitle');
@@ -696,6 +704,7 @@ async function initOptions() {
         if (normalizerMaxBoostDb) normalizerMaxBoostDb.value = String(config.maxBoostDb);
         if (normalizerCeilingDb) normalizerCeilingDb.value = String(config.ceilingDb);
         if (normalizerResponseMs) normalizerResponseMs.value = String(config.responseMs);
+        updateResponseField();
     };
     const saveNormalizerConfig = async () => {
         const config = normalizeNormalizerConfig({
