@@ -350,6 +350,10 @@ function setDisplayedVolume(dB) {
 
   if (slider) slider.value = String(normalizedDb);
   if (text) text.value = (normalizedDb >= 0 ? "+" : "") + normalizedDb;
+  // This caution must not depend on Normalize, since manually boosted
+  // playback still uses a compressor rather than true-peak brick-wall DSP.
+  const boostWarning = document.querySelector("#volume-boost-warning");
+  if (boostWarning) boostWarning.classList.toggle("hidden", normalizedDb < 6);
 
   return normalizedDb;
 }
@@ -537,6 +541,13 @@ function applyNormalizerState(state = {}) {
   const percent = ((clampedPeak + 60) / 60) * 100;
   if (fill) fill.style.width = `${percent.toFixed(2)}%`;
   if (text) text.textContent = formatMeterDb(peakDb);
+  // Output sample peaks are not inter-sample true peaks. Warn if the meter
+  // approaches full scale, without pretending the compressor is a hard cap.
+  const peakWarning = document.getElementById("peak-safety-warning");
+  if (peakWarning) {
+    peakWarning.classList.toggle("hidden",
+      !enabled || !available || !Number.isFinite(peakDb) || peakDb < -0.3);
+  }
   if (meter) {
     meter.setAttribute("aria-valuenow", String(clampedPeak.toFixed(1)));
     meter.setAttribute("aria-valuetext", formatMeterDb(peakDb));

@@ -5,6 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { runInNewContext, Script } from 'node:vm';
+import { estimateInterSamplePeaks } from './audio-peak-lab.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = join(root, 'dist');
@@ -331,6 +332,40 @@ test('moving volume slider cannot cause the isolated-world normalizer to compens
     assert.ok(Math.abs(controls.lastGain / settledOutput - 0.1) < 0.005);
 });
 
+
+test('offline 4x FIR peak lab catches inter-sample overs and stereo cancellation', () => {
+    const frames = 2048;
+    // A quarter-sample-shifted Nyquist/2 tone measures ~-1.4 dBFS at
+    // discrete sample locations even when its reconstructed peaks exceed 0.
+    const signal = Float64Array.from({ length: frames },
+        (_, n) => 1.2 * Math.sin(n * Math.PI / 2 + Math.PI / 4));
+    const inverted = Float64Array.from(signal, x => -x);
+    const result = estimateInterSamplePeaks([signal, inverted]);
+    assert.equal(result.oversamplingFactor, 4);
+    assert.equal(result.compliantTruePeakMeter, false,
+        'the offline diagnostic is not certified to BS.1770');
+    assert.ok(result.samplePeak < 1, 'all actual PCM samples are below full scale');
+    assert.ok(result.interpolatedPeak > 1.1,
+        'reconstructed waveform peaks above full-scale between samples');
+    assert.ok(result.interSampleOvershootDb > 2,
+        'the per-channel estimate should expose multi-dB inter-sample overs');
+    assert.ok(Math.abs(result.channels[0].interpolatedPeak -
+        result.channels[1].interpolatedPeak) < 1e-10,
+        'opposite-phase channels must not cancel in the peak detector');
+    const silent = estimateInterSamplePeaks([new Float32Array(128)]);
+    assert.equal(silent.samplePeak, 0);
+    assert.equal(silent.interpolatedPeak, 0);
+    assert.equal(silent.samplePeakDb, -Infinity);
+    assert.throws(() => estimateInterSamplePeaks([
+        new Float32Array([0, 1]), new Float32Array([0])
+    ]), /same non-zero frame length/);
+    assert.throws(() => estimateInterSamplePeaks([new Float32Array([NaN, 1])]),
+        /Non-finite PCM sample/);
+    const pcm = Float32Array.from([0.2, -0.7, 0.5, -0.2]);
+    const before = Array.from(pcm);
+    estimateInterSamplePeaks([pcm]);
+    assert.deepEqual(Array.from(pcm), before, 'analysis must not modify audio');
+});
 
 test('automatic normalization gains are bounded by source peaks and silence gate in both worlds', () => {
     for (const file of ['page-audio-hook.js', 'cs.js']) {
@@ -1495,6 +1530,10 @@ test('normalizer popup preserves saved preference while disabling unsupported DR
     const checkbox = { checked: true, disabled: false,
         closest: () => panel, setAttribute: (name, val) => { attributes[name] = val; } };
     const details = { hidden: false };
+    const warningTransitions = [];
+    const peakWarning = { classList: { toggle(name, hidden) {
+        warningTransitions.push({ name, hidden });
+    } } };
     const note = { textContent: '', classList };
     const cached = {
         normalizerCheckbox: checkbox, normalizerNote: note,
@@ -1502,7 +1541,9 @@ test('normalizer popup preserves saved preference while disabling unsupported DR
     };
     const apply = runInNewContext('(' + source.slice(start, end).trim() + ')', {
         cached,
-        document: { querySelector: () => null, getElementById: () => details },
+        document: { querySelector: () => null,
+            getElementById: id => id === 'normalizer-details' ? details
+                : id === 'peak-safety-warning' ? peakWarning : null },
         formatMeterDb: () => '−∞ dBFS'
     });
 
@@ -1541,6 +1582,64 @@ test('normalizer popup preserves saved preference while disabling unsupported DR
     assert.equal(attributes['aria-disabled'], 'false');
     assert.equal(details.hidden, false, 'saved enabled preference resumes with the meter');
     assert.ok(toggles.some(x => x.name === 'hidden' && x.enabled === true));
+    apply({ peakDb: -0.2 });
+    assert.deepEqual(warningTransitions.at(-1), { name: 'hidden', hidden: false },
+        'warn about near-full-scale observed sample peaks');
+    apply({ peakDb: -1.2 });
+    assert.deepEqual(warningTransitions.at(-1), { name: 'hidden', hidden: true },
+        'hide warning with output headroom');
+    apply({ peakDb: -0.1, normalizerAvailable: false });
+    assert.deepEqual(warningTransitions.at(-1), { name: 'hidden', hidden: true },
+        'unroutable audio must not imply clipping');
+    apply({ peakDb: null, normalizerAvailable: true });
+    assert.deepEqual(warningTransitions.at(-1), { name: 'hidden', hidden: true },
+        'unknown peaks cannot imply clipping');
+});
+
+test('positive manual boost warning works independently of Normalize', () => {
+    const src = readFileSync(join(root, 'popup.js'), 'utf8');
+    const html = readFileSync(join(root, 'popup.html'), 'utf8');
+    const start = src.indexOf('function setDisplayedVolume(dB) {');
+    const end = src.indexOf('function shortcutToAria(shortcut) {', start);
+    assert.ok(start > 0 && end > start);
+    const slider = { value: '0' };
+    const text = { value: '0' };
+    let warningHidden = true;
+    const warning = { classList: { toggle(key, hide) {
+        assert.equal(key, 'hidden'); warningHidden = hide;
+    } } };
+    const cached = { slider, volumeText: text, maxDb: 32 };
+    const setDisplayed = runInNewContext('(' + src.slice(start, end).trim() + ')', {
+        cached,
+        normalizeControlDb: v => Math.max(-32, Math.min(32, Math.round(v))),
+        document: { querySelector: id => id === '#volume-boost-warning' ? warning : null }
+    });
+    setDisplayed(0);
+    assert.equal(warningHidden, true);
+    setDisplayed(5);
+    assert.equal(warningHidden, true);
+    setDisplayed(6);
+    assert.equal(warningHidden, false);
+    setDisplayed(24);
+    assert.equal(warningHidden, false);
+    assert.equal(slider.value, '24');
+    setDisplayed(-6);
+    assert.equal(warningHidden, true);
+    assert.match(html, /id="volume-boost-warning"/);
+    assert.match(html, /volume-limit-note volume-boost-warning/);
+});
+
+test('peak safety labels do not promise a hard compressor ceiling', () => {
+    const html = readFileSync(join(root, 'popup.html'), 'utf8');
+    const options = readFileSync(join(root, 'options.html'), 'utf8');
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const docs = readFileSync(join(root, 'README.md'), 'utf8');
+    assert.match(html, /id="peak-safety-warning"/);
+    assert.match(html, /reference mark, not a hard ceiling/);
+    assert.match(options, /Compressor threshold/);
+    assert.doesNotMatch(options, /<span>Limiter ceiling<\/span>/);
+    assert.match(popup, /peakDb < -0\.3/);
+    assert.match(docs, /not\*\* a certified BS\.1770 true-peak meter/);
 });
 
 test('Normalize warning stays outside the folded meter and DRM fallback note mentions it', () => {
