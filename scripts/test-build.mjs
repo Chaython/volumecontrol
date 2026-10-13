@@ -1366,7 +1366,9 @@ test('Firefox audio hook smoke uses an HTTP origin for bridge messages', () => {
 
 test('experimental true-peak is off by default and runs only after explicit opt-in', () => {
     const source = readFileSync(join(root, 'shared.js'), 'utf8');
-    const shared = runInNewContext(source + ';VolumeControlShared');
+    const context = { URL };
+    runInNewContext(source, context);
+    const shared = context.VolumeControlShared;
     assert.equal(shared.DEFAULT_NORMALIZER_CONFIG.experimentalTruePeak, false);
     assert.equal(shared.normalizeNormalizerConfig({}).experimentalTruePeak, false);
     assert.equal(shared.normalizeNormalizerConfig({ experimentalTruePeak: 'true' }).experimentalTruePeak, false);
