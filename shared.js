@@ -30,6 +30,7 @@
 
     const BRIDGE_VERSION = 3;
     const DEFAULT_NORMALIZER_CONFIG = Object.freeze({
+        mode: "music",
         targetDb: -16,
         maxBoostDb: 12,
         ceilingDb: -1,
@@ -49,6 +50,7 @@
             return Number.isFinite(n) ? n : fallback;
         };
         return {
+            mode: value.mode === "adaptive" ? "adaptive" : "music",
             targetDb: Math.max(-30, Math.min(-6, numberOr(value.targetDb, DEFAULT_NORMALIZER_CONFIG.targetDb))),
             maxBoostDb: Math.max(0, Math.min(24, numberOr(value.maxBoostDb, DEFAULT_NORMALIZER_CONFIG.maxBoostDb))),
             ceilingDb: Math.max(-6, Math.min(-0.1, numberOr(value.ceilingDb, DEFAULT_NORMALIZER_CONFIG.ceilingDb))),
