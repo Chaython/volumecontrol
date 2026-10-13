@@ -21,6 +21,8 @@ after(() => {
 mkdirSync(join(fixtureRoot, 'scripts'));
 copyFileSync(join(root, 'scripts/build.ps1'), join(fixtureRoot, 'scripts/build.ps1'));
 copyFileSync(join(root, 'scripts/minify.mjs'), join(fixtureRoot, 'scripts/minify.mjs'));
+copyFileSync(join(root, 'scripts/bundle-true-peak.mjs'), join(fixtureRoot, 'scripts/bundle-true-peak.mjs'));
+copyFileSync(join(root, 'scripts/true-peak-lookahead.mjs'), join(fixtureRoot, 'scripts/true-peak-lookahead.mjs'));
 const assets = readdirSync(root).filter(name => /\.(js|html|css)$/.test(name) || name === 'LICENSE');
 for (const name of [...assets, 'manifest.json', 'ico.svg', 'chrome.png']) {
     copyFileSync(join(root, name), join(fixtureRoot, name));
@@ -62,12 +64,18 @@ for (const browser of ['chrome', 'firefox']) {
             assert.equal('scripts' in packageManifest.background, false);
             assert.equal('browser_specific_settings' in packageManifest, false);
             assert.deepEqual(packageManifest.icons, { '128': 'chrome.png' });
+            assert.deepEqual(packageManifest.web_accessible_resources, [{
+                resources: ['true-peak-worklet.js'], matches: ['<all_urls>']
+            }]);
         } else {
             assert.equal('minimum_chrome_version' in packageManifest, false);
             assert.equal('service_worker' in packageManifest.background, false);
             assert.deepEqual(packageManifest.background.scripts, ['shared.js', 'background.js']);
             assert.ok(packageManifest.browser_specific_settings?.gecko);
             assert.deepEqual(packageManifest.icons, { '96': 'ico.svg' });
+            assert.deepEqual(packageManifest.web_accessible_resources, [{
+                resources: ['true-peak-worklet.js'], matches: ['<all_urls>']
+            }]);
         }
     });
 
@@ -78,7 +86,7 @@ for (const browser of ['chrome', 'firefox']) {
             'dist',
             `volume-control-${browser}-v${baseManifest.version}.zip`
         );
-        const expected = [...assets, 'build-regression.js', 'manifest.json', icon].sort();
+        const expected = [...assets, 'true-peak-worklet.js', 'build-regression.js', 'manifest.json', icon].sort();
         assert.deepEqual(listZipEntries(zipPath), expected);
     });
 
@@ -91,6 +99,15 @@ for (const browser of ['chrome', 'firefox']) {
         assert.equal(context.buildRegression.template, 'outer inner https://example.com');
         assert.equal(context.buildRegression.multiline, 'first\n\nlast');
         assert.equal(context.buildRegression.unicode, '× − → café 🎵');
+    });
+
+    test(`${browser}: packaged experimental worklet is self-contained`, () => {
+        const code = readFileSync(join(packageDir, 'true-peak-worklet.js'), 'utf8');
+        assert.match(code, /volume-control-true-peak/);
+        assert.match(code, /LookaheadTruePeakLimiter/);
+        assert.doesNotMatch(code, /\bimport\s*\{/);
+        assert.doesNotMatch(code, /\bexport\s+class/);
+        assert.match(code, /limiter-error/);
     });
 
     test(`${browser}: JavaScript is minified without changing source files`, () => {

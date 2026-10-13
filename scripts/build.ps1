@@ -108,6 +108,18 @@ function Copy-ExtensionFiles {
         Copy-Item -LiteralPath $file.FullName -Destination $destPath
     }
 
+    # Package a self-contained AudioWorklet for capability testing. No
+    # default playback route references this module yet.
+    $dsp = Join-Path $RootPath 'scripts/true-peak-lookahead.mjs'
+    $bundler = Join-Path $RootPath 'scripts/bundle-true-peak.mjs'
+    if (-not (Test-Path -LiteralPath $dsp) -or -not (Test-Path -LiteralPath $bundler)) {
+        throw "Missing true-peak DSP or worklet bundle script"
+    }
+    $worklet = Join-Path $PackageDir 'true-peak-worklet.js'
+    & $NodePath $bundler $dsp $worklet
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $worklet)) {
+        throw "Could not bundle the true-peak AudioWorklet"
+    }
     Copy-Item -LiteralPath (Join-Path $RootPath $IconFile) -Destination $PackageDir
 }
 
