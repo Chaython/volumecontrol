@@ -336,9 +336,9 @@ test('automatic normalization gains are bounded by source peaks and silence gate
     for (const file of ['page-audio-hook.js', 'cs.js']) {
         const src = readFileSync(join(root, file), 'utf8');
         const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
-        const end = src.indexOf(file === 'cs.js' ? 'function sampleIsolatedNormalizer() {' : 'function sampleProcessor(processor) {', start);
+        const end = src.indexOf(file === 'cs.js' ? 'function activeIsolatedMediaCount(pendingElement = null) {' : 'function sampleProcessor(processor) {', start);
         assert.ok(start >= 0 && end > start, file + ': missing gain guard');
-        const update = runInNewContext('(' + src.slice(start, end).trim() + ')');
+        const update = runInNewContext('(' + src.slice(start, end).trim() + '\n)');
         const cfg = { targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
 
         assert.equal(update(12, -65, -50, cfg), 0, 'no boost of quiet background/noise');
@@ -369,8 +369,8 @@ test('music leveling preserves dynamics and resets safely while adaptive remains
     for (const file of ['page-audio-hook.js', 'cs.js']) {
         const src = readFileSync(join(root, file), 'utf8');
         const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
-        const end = src.indexOf(file === 'cs.js' ? 'function sampleIsolatedNormalizer() {' : 'function sampleProcessor(processor) {', start);
-        const gainFor = runInNewContext('(' + src.slice(start, end).trim() + ')');
+        const end = src.indexOf(file === 'cs.js' ? 'function activeIsolatedMediaCount(pendingElement = null) {' : 'function sampleProcessor(processor) {', start);
+        const gainFor = runInNewContext('(' + src.slice(start, end).trim() + '\n)');
         const config = { mode: 'music', targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
         const memory = {};
         let gain = 0;
@@ -537,6 +537,76 @@ test('seeking clears stale automatic boost immediately on captured audio routes'
     assert.match(isolated,
         /element.addEventListener\('seeking', resetIsolatedSongGain, \{ passive: true \}\)/,
         'isolated captured media seeks reset gain before next 100ms sample');
+});
+
+test('isolated fallback stops unsafe automatic boost when two captured sources play', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function activeIsolatedMediaCount(pendingElement = null) {');
+    const end = source.indexOf('function sampleIsolatedNormalizer() {', start);
+    assert.ok(start >= 0 && end > start, 'concurrent isolated guard must exist');
+    const first = { paused: false, ended: false, muted: false, volume: 1 };
+    const second = { paused: false, ended: false, muted: false, volume: 1 };
+    const captured = new WeakMap([[first, { connected: true }], [second, { connected: false }]]);
+    const param = { value: 3, history: [],
+        cancelScheduledValues(t) { this.history.push(['cancel', t]); },
+        setValueAtTime(value, t) { this.value = value; this.history.push(['set', value, t]); }
+    };
+    const tc = { vars: {
+        mediaElements: new Set([first, second]), capturedMediaSources: captured,
+        normalizerEnabled: true, normalizerGainDb: 12,
+        musicLevelState: { rmsDb: -32 }, audioCtx: { currentTime: 2 },
+        gainNode: { gain: param }, isolatedOutputUsesLimiter: true,
+        dB: 0, muted: false, isBlocked: false
+    }, settings: { debugMode: false } };
+    let limiterUpdates = 0;
+    const fn = runInNewContext('(() => { ' + source.slice(start, end) +
+        '; return { activeIsolatedMediaCount, guardConcurrentIsolatedNormalizer }; })()', {
+        tc, isMediaPlaying: element => !element.paused && !element.ended,
+        isAudibleMediaElement: element => !element.muted && element.volume > 0,
+        getGainValue: db => 10 ** (db / 20),
+        configureIsolatedLimiter: () => { limiterUpdates++; }, log: () => {}
+    });
+    assert.equal(fn.activeIsolatedMediaCount(), 1);
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(), false);
+    assert.equal(tc.vars.normalizerGainDb, 12, 'single playing source is not affected');
+    // Count a freshly captured (but not yet connected) second source before
+    // the first audio block can escape through the shared gain.
+    assert.equal(fn.activeIsolatedMediaCount(second), 2);
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(second), true);
+    assert.equal(tc.vars.normalizerGainDb, 0, 'pending second source must shed AGC before connection');
+    assert.equal(param.value, 1, 'pending source is clamped synchronously');
+    tc.vars.normalizerGainDb = 12;
+    tc.vars.musicLevelState = { rmsDb: -32 };
+    captured.get(second).connected = true;
+    assert.equal(fn.activeIsolatedMediaCount(), 2);
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(), true);
+    assert.equal(tc.vars.normalizerGainDb, 0, 'second source immediately sheds positive AGC');
+    assert.equal(tc.vars.musicLevelState, null, 'mixed audio never reuses track loudness history');
+    assert.equal(param.value, 1, 'AudioParam clamps before next 100ms sampler');
+    assert.equal(limiterUpdates, 2, 'both preconnection and active second-source clamps refresh limiter safety');
+    tc.vars.normalizerGainDb = -9;
+    param.value = 10 ** (-9 / 20);
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(), true);
+    assert.equal(tc.vars.normalizerGainDb, -9, 'existing negative gain remains protective');
+    assert.ok(Math.abs(param.value - 10 ** (-9 / 20)) < 0.00001);
+    tc.vars.normalizerGainDb = 8;
+    tc.vars.dB = 6;
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(), true);
+    assert.ok(Math.abs(param.value - 10 ** (6 / 20)) < 0.00001,
+        'manual boost remains user-controlled under the compressor');
+    second.paused = true;
+    assert.equal(fn.activeIsolatedMediaCount(), 1);
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(), false);
+    const content = source;
+    assert.match(content, /const concurrent = guardConcurrentIsolatedNormalizer\(\)/,
+        'the sampler must not calculate AGC from the combined waveform');
+    assert.match(content, /if \(concurrent\) \{\s*gainDb = Math.min\(0, gainDb\)/);
+    assert.match(content, /guardConcurrentIsolatedNormalizer\(\);[\s\S]*?applyState\(\);/,
+        'newly captured audio must shed old boost before state routing');
+    assert.match(content, /element.addEventListener\('play', \(\) => \{[\s\S]*?guardConcurrentIsolatedNormalizer\(element\);[\s\S]*?reconnectIsolatedCapturedSource\(element\)/,
+        'a returning captured source must clamp before reconnecting, not after it plays');
+    assert.match(content, /tc\.vars\.mediaElements\.add\(element\);\s*\/\/ This captured node[\s\S]*?guardConcurrentIsolatedNormalizer\(element\);\s*const sourceConnected = reconnectIsolatedCapturedSource\(element\)/,
+        'initial MediaElementSource connection must not happen before concurrent AGC clamp');
 });
 
 test('music mode avoids needless compressor reduction at unity while protecting boosted output', () => {
@@ -2395,7 +2465,7 @@ test('isolated captured source retries original node after both initial connect 
     assert.equal(captured.connected, true);
     assert.equal(element.dataset.vcFallbackReason, undefined);
     assert.match(content, /capturedMediaSources\.set\(element,\s*\{/);
-    assert.match(content, /element\.dataset\.vcHooked = "true";\s*tc\.vars\.mediaElements\.add\(element\);\s*const sourceConnected = reconnectIsolatedCapturedSource\(element\)/);
+    assert.match(content, /element\.dataset\.vcHooked = "true";\s*tc\.vars\.mediaElements\.add\(element\);[\s\S]*?guardConcurrentIsolatedNormalizer\(element\);\s*const sourceConnected = reconnectIsolatedCapturedSource\(element\)/);
 });
 
 
