@@ -336,7 +336,7 @@ test('automatic normalization gains are bounded by source peaks and silence gate
     for (const file of ['page-audio-hook.js', 'cs.js']) {
         const src = readFileSync(join(root, file), 'utf8');
         const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
-        const end = src.indexOf(file === 'cs.js' ? 'function sampleIsolatedNormalizer() {' : 'function sampleProcessor(processor) {', start);
+        const end = src.indexOf(file === 'cs.js' ? 'function activeIsolatedMediaCount() {' : 'function sampleProcessor(processor) {', start);
         assert.ok(start >= 0 && end > start, file + ': missing gain guard');
         const update = runInNewContext('(' + src.slice(start, end).trim() + ')');
         const cfg = { targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
@@ -369,7 +369,7 @@ test('music leveling preserves dynamics and resets safely while adaptive remains
     for (const file of ['page-audio-hook.js', 'cs.js']) {
         const src = readFileSync(join(root, file), 'utf8');
         const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
-        const end = src.indexOf(file === 'cs.js' ? 'function sampleIsolatedNormalizer() {' : 'function sampleProcessor(processor) {', start);
+        const end = src.indexOf(file === 'cs.js' ? 'function activeIsolatedMediaCount() {' : 'function sampleProcessor(processor) {', start);
         const gainFor = runInNewContext('(' + src.slice(start, end).trim() + ')');
         const config = { mode: 'music', targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
         const memory = {};
