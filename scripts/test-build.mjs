@@ -1530,6 +1530,10 @@ test('normalizer popup preserves saved preference while disabling unsupported DR
     const checkbox = { checked: true, disabled: false,
         closest: () => panel, setAttribute: (name, val) => { attributes[name] = val; } };
     const details = { hidden: false };
+    const warningTransitions = [];
+    const peakWarning = { classList: { toggle(name, hidden) {
+        warningTransitions.push({ name, hidden });
+    } } };
     const note = { textContent: '', classList };
     const cached = {
         normalizerCheckbox: checkbox, normalizerNote: note,
@@ -1537,7 +1541,9 @@ test('normalizer popup preserves saved preference while disabling unsupported DR
     };
     const apply = runInNewContext('(' + source.slice(start, end).trim() + ')', {
         cached,
-        document: { querySelector: () => null, getElementById: () => details },
+        document: { querySelector: () => null,
+            getElementById: id => id === 'normalizer-details' ? details
+                : id === 'peak-safety-warning' ? peakWarning : null },
         formatMeterDb: () => '−∞ dBFS'
     });
 
@@ -1576,6 +1582,31 @@ test('normalizer popup preserves saved preference while disabling unsupported DR
     assert.equal(attributes['aria-disabled'], 'false');
     assert.equal(details.hidden, false, 'saved enabled preference resumes with the meter');
     assert.ok(toggles.some(x => x.name === 'hidden' && x.enabled === true));
+    apply({ peakDb: -0.2 });
+    assert.deepEqual(warningTransitions.at(-1), { name: 'hidden', hidden: false },
+        'warn about near-full-scale observed sample peaks');
+    apply({ peakDb: -1.2 });
+    assert.deepEqual(warningTransitions.at(-1), { name: 'hidden', hidden: true },
+        'hide warning with output headroom');
+    apply({ peakDb: -0.1, normalizerAvailable: false });
+    assert.deepEqual(warningTransitions.at(-1), { name: 'hidden', hidden: true },
+        'unroutable audio must not imply clipping');
+    apply({ peakDb: null, normalizerAvailable: true });
+    assert.deepEqual(warningTransitions.at(-1), { name: 'hidden', hidden: true },
+        'unknown peaks cannot imply clipping');
+});
+
+test('peak safety labels do not promise a hard compressor ceiling', () => {
+    const html = readFileSync(join(root, 'popup.html'), 'utf8');
+    const options = readFileSync(join(root, 'options.html'), 'utf8');
+    const popup = readFileSync(join(root, 'popup.js'), 'utf8');
+    const docs = readFileSync(join(root, 'README.md'), 'utf8');
+    assert.match(html, /id="peak-safety-warning"/);
+    assert.match(html, /reference mark, not a hard ceiling/);
+    assert.match(options, /Compressor threshold/);
+    assert.doesNotMatch(options, /<span>Limiter ceiling<\\/span>/);
+    assert.match(popup, /peakDb < -0\\.3/);
+    assert.match(docs, /not a certified BS\\.1770 true-peak meter/);
 });
 
 test('Normalize warning stays outside the folded meter and DRM fallback note mentions it', () => {
