@@ -464,6 +464,45 @@ test('isolated track boundaries reset stale gain without interrupting another pl
     assert.equal(param.value, 1, 'AudioParam is reset immediately, not after a 100ms tick');
 });
 
+test('music mode avoids needless compressor reduction at unity while protecting boosted output', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
+    for (const [file, source, startText, endText, scope] of [
+        ['MAIN', page, '    function configureLimiter(processor) {', '    function markNode(node) {', 'main'],
+        ['isolated', isolated, 'function configureIsolatedLimiter() {', 'function computeSafeNormalizerGainDb(', 'isolated']
+    ]) {
+        const start = source.indexOf(startText);
+        const end = source.indexOf(endText, start);
+        assert.ok(start >= 0 && end > start, file + ': compressor configuration block not found');
+        const config = { mode: 'music', targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
+        const limiter = Object.fromEntries(['threshold', 'knee', 'ratio', 'attack', 'release'].map(k => [k, { value: null }]));
+        const state = { normalizerEnabled: true, dB: 0, normalizerConfig: config };
+        const tc = { vars: { limiterNode: limiter, normalizerGainDb: 0, normalizerEnabled: true, dB: 0 },
+            settings: { normalizerConfig: config, debugMode: false } };
+        const fn = runInNewContext('(() => {\n' + source.slice(start, end) +
+            '\nreturn ' + (scope === 'main' ? 'configureLimiter' : 'configureIsolatedLimiter') + ';})()', {
+                state, tc, normalizeNormalizerConfig: () => config, log: () => {}
+            });
+        const configure = (gainDb) => {
+            if (scope === 'main') fn({ limiter, normalizerGainDb: gainDb });
+            else { tc.vars.normalizerGainDb = gainDb; fn(); }
+            return limiter.threshold.value;
+        };
+        assert.equal(configure(0), 0, file + ': unboosted music must not compress near-fullscale peaks');
+        assert.equal(configure(-6), 0, file + ': attenuated music must preserve peak dynamics');
+        assert.equal(configure(3), -1, file + ': automatic boost restores conservative limiter threshold');
+        if (scope === 'main') state.dB = 8;
+        else tc.vars.dB = 8;
+        assert.equal(configure(0), -1, file + ': positive manual boost retains limiter protection');
+        if (scope === 'main') state.dB = 0;
+        else tc.vars.dB = 0;
+        config.mode = 'adaptive';
+        assert.equal(configure(0), -1, file + ': adaptive mode keeps original limiter behavior');
+    }
+    assert.match(page, /if \(!Number.isFinite\(sample\)\) throw new Error\("invalid source sample"\)/);
+    assert.match(isolated, /if \(!Number.isFinite\(sample\)\) throw new Error\("invalid source sample"\)/);
+});
+
 test('MAIN-world graph failures restore clamped direct output, then retry limiting', () => {
     const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const start = source.indexOf('    function clampUnprotectedOutput(processor) {');
