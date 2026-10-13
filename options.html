@@ -70,7 +70,7 @@
     </div>
     <div id="normalizer-options-details" hidden>
     <div class="hint remembered-hint">
-        Configure the real-time automatic gain controller and safety limiter. The popup's Normalize toggle is remembered separately per site/path from volume, mono, and mute.
+        Configure the real-time automatic gain controller and its WebAudio compressor (not a hard true-peak limiter). The popup's Normalize toggle is remembered separately per site/path from volume, mono, and mute.
     </div>
     <div class="toggle-box normalizer-settings">
         <div class="normalizer-setting-grid">
@@ -85,7 +85,7 @@
                 <span class="setting-unit">dB</span>
             </label>
             <label for="normalizerCeilingDb">
-                <span>Limiter ceiling</span>
+                <span>Compressor threshold</span>
                 <input type="number" id="normalizerCeilingDb" min="-6" max="-0.1" step="0.1" inputmode="decimal">
                 <span class="setting-unit">dBFS</span>
             </label>
