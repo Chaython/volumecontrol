@@ -212,6 +212,22 @@ try {
         '(async()=> (await vcTest.get("normalizerDefaultEnabled")).normalizerDefaultEnabled === false && ' +
         'document.getElementById("normalizer-options-details").hidden)()'));
     check('Options global normalize toggle folds when off', true);
+    check('Experimental true-peak is off on fresh options',
+        await cdp.eval(settingsSession,
+        'document.getElementById("normalizerTruePeakExperimental")?.checked === false'));
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("normalizerTruePeakExperimental");e.checked=true;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => await cdp.eval(settingsSession,
+        '(async()=> (await vcTest.get("normalizerConfig")).normalizerConfig?.experimentalTruePeak === true)()'));
+    check('Experimental true-peak setting persists without changing audio route', true);
+    await cdp.eval(settingsSession,
+        '(()=>{const e=document.getElementById("normalizerTruePeakExperimental");e.checked=false;' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+    await waitFor(async () => await cdp.eval(settingsSession,
+        '(async()=> (await vcTest.get("normalizerConfig")).normalizerConfig?.experimentalTruePeak === false)()'));
+    check('Experimental true-peak opt-out restores saved default', true);
+
     const commands = await cdp.eval(settingsSession,
         'new Promise((ok,fail)=>chrome.commands.getAll(v=>chrome.runtime.lastError?' +
         'fail(Error(chrome.runtime.lastError.message)):ok(v.map(x=>x.name))))');
