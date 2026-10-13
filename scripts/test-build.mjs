@@ -395,6 +395,18 @@ test('music leveling preserves dynamics and resets safely while adaptive remains
         assert.equal(gain, 0, file + ': extended silence resets gain and history');
         gain = gainFor(0, -30, -20, config, memory);
         assert.ok(gain <= 0, file + ': new song starts without stale boost');
+        const quietHistory = {};
+        let heldAttenuation = -15;
+        heldAttenuation = gainFor(heldAttenuation, -24, -22, config, quietHistory);
+        for (let n = 0; n < 42; n++) heldAttenuation = gainFor(heldAttenuation, -120, -Infinity, config, quietHistory);
+        assert.ok(heldAttenuation <= -14 && heldAttenuation >= -15,
+            file + ': dramatic pause must not undo protective attenuation');
+        let boostedBeforeSilence = 12;
+        const boostedHistory = {};
+        boostedBeforeSilence = gainFor(boostedBeforeSilence, -28, -25, config, boostedHistory);
+        for (let n = 0; n < 42; n++) boostedBeforeSilence = gainFor(boostedBeforeSilence, -120, -Infinity, config, boostedHistory);
+        assert.equal(boostedBeforeSilence, 0,
+            file + ': digital silence must discard positive boost before a new loud segment');
         gain = gainFor(10, -25, -0.1, config, memory);
         assert.equal(gain, 0, file + ': loud new peak removes positive boost without permanent extra attenuation');
         const peakHistory = {};
