@@ -1322,19 +1322,19 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
 // not a per-player measurement. When multiple captured sources play, disable
 // automatic positive boost rather than letting a quiet video amplify a loud
 // one. Full independent per-source leveling requires separately owned graphs.
-function activeIsolatedMediaCount() {
+function activeIsolatedMediaCount(pendingElement = null) {
     let count = 0;
     for (const element of tc.vars.mediaElements || []) {
         const captured = tc.vars.capturedMediaSources && tc.vars.capturedMediaSources.get(element);
-        if (!captured || !captured.connected ||
+        if (!captured || (!captured.connected && element !== pendingElement) ||
             !isMediaPlaying(element) || !isAudibleMediaElement(element)) continue;
         if (++count >= 2) break;
     }
     return count;
 }
 
-function guardConcurrentIsolatedNormalizer() {
-    if (!tc.vars.normalizerEnabled || activeIsolatedMediaCount() < 2) return false;
+function guardConcurrentIsolatedNormalizer(pendingElement = null) {
+    if (!tc.vars.normalizerEnabled || activeIsolatedMediaCount(pendingElement) < 2) return false;
     const previous = Number(tc.vars.normalizerGainDb) || 0;
     // Keep existing attenuation; removing it could expose a previously
     // quieted track at full volume. No new gain history from a mixed signal.
@@ -1817,9 +1817,11 @@ function connectOutput(element) {
             return;
         }
         if (tc.vars.mediaElements) tc.vars.mediaElements.add(element);
+        // Clamp before a previously captured route reconnects; otherwise its
+        // first block can play at another source's old positive gain.
+        guardConcurrentIsolatedNormalizer(element);
         // Retry the original node, never create a second MediaElementSource.
         if (!reconnectIsolatedCapturedSource(element)) scheduleIsolatedCapturedSourceRetry(element);
-        guardConcurrentIsolatedNormalizer();
         if (isMediaPlaying(element) && tc.vars.audioCtx.state === 'suspended') {
             resumeAudioContext();
         }
@@ -1959,13 +1961,17 @@ function connectOutput(element) {
             // repeated attempts cannot create another MediaElementSource.
             element.dataset.vcHooked = "true";
             tc.vars.mediaElements.add(element);
+            // This captured node is not connected yet. Count it provisionally
+            // so a second playing source cannot leak the first source's boost
+            // on its very first decoded audio block.
+            guardConcurrentIsolatedNormalizer(element);
             const sourceConnected = reconnectIsolatedCapturedSource(element);
             if (!sourceConnected) scheduleIsolatedCapturedSourceRetry(element);
 
             // Wake up the AudioContext when media starts playing
             element.addEventListener('play', () => {
+                guardConcurrentIsolatedNormalizer(element);
                 if (!reconnectIsolatedCapturedSource(element)) return;
-                guardConcurrentIsolatedNormalizer();
                 if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
                     resumeAudioContext();
                 }
