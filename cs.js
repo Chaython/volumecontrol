@@ -1901,6 +1901,31 @@ function connectOutput(element) {
                 }
             });
 
+            // Isolated world has one gain for all captured media. A song
+            // boundary must clear stale boost before the next track plays,
+            // but never disrupt another concurrently playing captured source.
+            const resetIsolatedSongGain = () => {
+                if (!tc.vars.normalizerEnabled) return;
+                for (const other of tc.vars.mediaElements) {
+                    if (other !== element && isMediaPlaying(other) && isAudibleMediaElement(other)) return;
+                }
+                tc.vars.normalizerGainDb = 0;
+                tc.vars.musicLevelState = null;
+                tc.vars.normalizerPeakDb = -Infinity;
+                if (!tc.vars.gainNode || !tc.vars.audioCtx) return;
+                try {
+                    const manual = tc.vars.isBlocked ? 1 : tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
+                    const safeGain = tc.vars.isolatedOutputUsesLimiter === true
+                        ? manual : Math.min(1, manual);
+                    const now = tc.vars.audioCtx.currentTime;
+                    tc.vars.gainNode.gain.cancelScheduledValues(now);
+                    tc.vars.gainNode.gain.setValueAtTime(safeGain, now);
+                } catch (e) {
+                    if (tc.settings.debugMode) log(`song-boundary gain reset failed: ${e && e.message}`, 3);
+                }
+            };
+            element.addEventListener('ended', resetIsolatedSongGain, { passive: true });
+            element.addEventListener('emptied', resetIsolatedSongGain, { passive: true });
             // Suspend the AudioContext when media stops to release the Bluetooth lock
             const checkSuspend = () => setTimeout(suspendAudioContextIfIdle, 250);
             for (const evt of ['volumechange', 'pause', 'ended', 'emptied']) {
@@ -2077,7 +2102,15 @@ async function start() {
         if (!isTopFrame() && controlUrl) profileControlUrl = controlUrl;
         const currentDomain = extractRootDomain(controlUrl);
         const siteSettingsKey = applyEffectiveDebugSettings(data, controlUrl);
+        const previousNormalizerMode = tc.settings.normalizerConfig && tc.settings.normalizerConfig.mode;
         tc.settings.normalizerConfig = normalizeNormalizerConfig(data.normalizerConfig);
+        // Applying new loudness rules must not reuse automatic boost earned
+        // under the old mode, even until the next 100 ms meter tick.
+        if (previousNormalizerMode !== tc.settings.normalizerConfig.mode) {
+            tc.vars.normalizerGainDb = 0;
+            tc.vars.musicLevelState = null;
+            tc.vars.normalizerPeakDb = -Infinity;
+        }
         const normalizerSettingsKey = getSiteSettingsKey(data.siteNormalizerSettings || {}, controlUrl);
         const resolvedNormalizerEnabled = normalizerSettingsKey
             ? Boolean(data.siteNormalizerSettings[normalizerSettingsKey]?.enabled)
