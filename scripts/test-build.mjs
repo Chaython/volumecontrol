@@ -427,6 +427,8 @@ test('legacy normalizer configurations stay Adaptive while fresh installs defaul
     assert.match(content, /previousNormalizerMode !== tc.settings.normalizerConfig.mode/, 'isolated mode switches reset gain');
     assert.match(content, /element.addEventListener\('emptied', resetIsolatedSongGain/, 'captured media source swap resets stale gain');
     assert.match(content, /element.addEventListener\('ended', resetIsolatedSongGain/, 'captured media end resets stale gain');
+    const options = readFileSync(join(root, 'options.js'), 'utf8');
+    assert.match(options, /normalizerResponseMs.disabled = !adaptive/, 'response speed disabled while Music is selected');
 });
 
 test('isolated track boundaries reset stale gain without interrupting another playing media element', () => {
