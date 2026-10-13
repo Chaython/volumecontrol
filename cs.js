@@ -66,6 +66,7 @@ const tc = {
     normalizerEnabled: false,
     normalizerPeakDb: -Infinity,
     normalizerGainDb: 0,
+    musicLevelState: null,
     isolatedOutputUsesLimiter: null,
     audioCtx: undefined,
     gainNode: undefined,
@@ -148,6 +149,7 @@ if (browserAPI) {
                     // A previous song may have accumulated +12 dB auto gain.
                     // Never replay it immediately when normalization resumes.
                     tc.vars.normalizerGainDb = 0;
+                    tc.vars.musicLevelState = null;
                     tc.vars.normalizerPeakDb = -Infinity;
                 }
                 tc.vars.normalizerEnabled = Boolean(msg.enabled);
@@ -525,6 +527,7 @@ function invalidateBoostLimitCache() {
                 !getNormalizerAvailability().available;
             if (unavailable && tc.vars.normalizerGainDb !== 0) {
                 tc.vars.normalizerGainDb = 0;
+                tc.vars.musicLevelState = null;
                 tc.vars.normalizerPeakDb = -Infinity;
                 applyState();
             } else if (next !== tc.vars.dB) {
@@ -1072,6 +1075,7 @@ function routeIsolatedOutput() {
         // Discard partial edges and attempt a direct, gain-limited fallback.
         tc.vars.isolatedOutputUsesLimiter = null;
         tc.vars.normalizerGainDb = 0;
+        tc.vars.musicLevelState = null;
         tc.vars.normalizerPeakDb = -Infinity;
         for (const node of [gainNode, limiterNode, analyserNode]) {
             try { node.disconnect(); } catch (_) {}
@@ -1217,26 +1221,75 @@ function configureIsolatedLimiter() {
 }
 
 function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {
-        // Never amplify the noise floor or reuse stale gain if the analyser
-        // reports silence/errors. This is intentionally independent of the
-        // volume slider so users retain control of the final output level.
-        if (!Number.isFinite(sourceRmsDb) || sourceRmsDb <= -55 ||
-            !Number.isFinite(sourcePeakDb)) return 0;
-
-        const previous = Number.isFinite(previousDb) ? previousDb : 0;
-        // Leave a 2 dB sample-peak margin below the requested compressor
-        // threshold. This reduces sudden overshoot; it is NOT a hard or
-        // inter-sample true-peak guarantee (WebAudio compressors aren't).
-        const rmsTarget = config.targetDb - sourceRmsDb;
-        const peakHeadroom = config.ceilingDb - 2 - sourcePeakDb;
-        const desired = Math.max(-32, Math.min(config.maxBoostDb, rmsTarget, peakHeadroom));
-
-        // Loudness jumps must shed existing boost immediately. Raising gain
-        // is deliberately much slower to avoid pumping from brief quiet gaps.
-        if (desired <= previous) return desired;
-        const alpha = 1 - Math.exp(-100 / Math.max(100, config.responseMs));
-        return previous + (desired - previous) * alpha;
+    // The detector is upstream of the manual slider, in both audio worlds.
+    // Fifth argument: per-route history; without it retain legacy adaptive behavior.
+    const history = arguments[4];
+    const previous = Number.isFinite(previousDb) ? previousDb : 0;
+    if (history && history.mode !== config.mode) {
+        history.mode = config.mode;
+        history.rmsDb = null;
+        history.peakDb = -Infinity;
+        history.audibleSamples = 0;
+        history.silentSamples = 0;
     }
+    if (!Number.isFinite(sourceRmsDb) || !Number.isFinite(sourcePeakDb)) {
+        if (history) {
+            history.rmsDb = null;
+            history.peakDb = -Infinity;
+            history.audibleSamples = 0;
+            history.silentSamples = 0;
+        }
+        return 0;
+    }
+    if (sourceRmsDb <= -55) {
+        // Don't pump up a music fade or gap between phrases. After 3 seconds
+        // of silence, forget the track instead of carrying gain into the next.
+        if (config.mode === "music" && history && history.audibleSamples > 0 &&
+            ++history.silentSamples < 30) return previous;
+        if (history) {
+            history.rmsDb = null;
+            history.peakDb = -Infinity;
+            history.audibleSamples = 0;
+            history.silentSamples = 0;
+        }
+        return 0;
+    }
+
+    if (config.mode === "music" && history) {
+        history.silentSamples = 0;
+        history.audibleSamples = Math.min(1000, (history.audibleSamples || 0) + 1);
+        if (!Number.isFinite(history.rmsDb)) history.rmsDb = sourceRmsDb;
+        // A slow, asymmetrical envelope follows the overall program, not the
+        // 100 ms kick/snare cycle. Do not count pauses/silence as quiet music.
+        const rmsTimeMs = sourceRmsDb > history.rmsDb ? 3500 : 11000;
+        history.rmsDb += (sourceRmsDb - history.rmsDb) *
+            (1 - Math.exp(-100 / rmsTimeMs));
+        // Keep the loudest observed sample peak for this track/route so the
+        // limiter headroom does not expand and contract on every drum hit.
+        history.peakDb = Math.max(
+            Number.isFinite(history.peakDb) ? history.peakDb : -Infinity, sourcePeakDb);
+        const peakHeadroom = config.ceilingDb - 2 - history.peakDb;
+        // No positive automatic boost before ~2.5s of valid samples. This
+        // reduces the danger of amplifying a quiet intro before the first beat.
+        const desired = Math.max(-32, Math.min(
+            config.maxBoostDb, config.targetDb - history.rmsDb, peakHeadroom,
+            history.audibleSamples < 25 ? 0 : Infinity));
+        // Immediately reduce an *unsafe* existing boost after a new peak;
+        // otherwise adjust slowly in both directions to preserve dynamics.
+        const instantaneousPeakLimit = config.ceilingDb - 2 - sourcePeakDb;
+        if (instantaneousPeakLimit < previous) return Math.max(-32, Math.min(desired, instantaneousPeakLimit));
+        const timeMs = desired < previous ? 1600 : 6000;
+        return previous + (desired - previous) * (1 - Math.exp(-100 / timeMs));
+    }
+
+    // Adaptive mode retains the original fast voice/video leveling behavior.
+    const rmsTarget = config.targetDb - sourceRmsDb;
+    const peakHeadroom = config.ceilingDb - 2 - sourcePeakDb;
+    const desired = Math.max(-32, Math.min(config.maxBoostDb, rmsTarget, peakHeadroom));
+    if (desired <= previous) return desired;
+    const alpha = 1 - Math.exp(-100 / Math.max(100, config.responseMs));
+    return previous + (desired - previous) * alpha;
+}
 
 function sampleIsolatedNormalizer() {
     if (!tc.vars.normalizerEnabled) return;
@@ -1290,7 +1343,8 @@ function sampleIsolatedNormalizer() {
     const previousGainDb = gainDb;
     if (tc.vars.normalizerEnabled && !tc.vars.muted && !tc.vars.isBlocked &&
         tc.vars.isolatedOutputUsesLimiter === true) {
-        gainDb = computeSafeNormalizerGainDb(gainDb, sourceRmsDb, sourcePeakDb, config);
+        gainDb = computeSafeNormalizerGainDb(gainDb, sourceRmsDb, sourcePeakDb, config,
+            tc.vars.musicLevelState || (tc.vars.musicLevelState = {}));
     } else {
         gainDb = 0;
     }
@@ -2018,6 +2072,7 @@ async function start() {
             : Boolean(data.normalizerDefaultEnabled);
         if (tc.vars.normalizerEnabled !== resolvedNormalizerEnabled) {
             tc.vars.normalizerGainDb = 0;
+            tc.vars.musicLevelState = null;
             tc.vars.normalizerPeakDb = -Infinity;
         }
         tc.vars.normalizerEnabled = resolvedNormalizerEnabled;
@@ -2052,6 +2107,7 @@ async function start() {
         // 100ms normalizer sampler clears its previous +dB gain.
         if (tc.vars.isBlocked !== blocked) {
             tc.vars.normalizerGainDb = 0;
+            tc.vars.musicLevelState = null;
             tc.vars.normalizerPeakDb = -Infinity;
             lastSyncedPageAudioState = null;
         }
