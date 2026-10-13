@@ -641,10 +641,19 @@ async function initOptions() {
         }
         if (normalizerOptionsDetails) normalizerOptionsDetails.hidden = !active;
     };
+    const normalizerMode = document.getElementById('normalizerMode');
     const normalizerTargetDb = document.getElementById('normalizerTargetDb');
     const normalizerMaxBoostDb = document.getElementById('normalizerMaxBoostDb');
     const normalizerCeilingDb = document.getElementById('normalizerCeilingDb');
     const normalizerResponseMs = document.getElementById('normalizerResponseMs');
+    const updateResponseField = () => {
+        if (!normalizerResponseMs) return;
+        const adaptive = normalizerMode && normalizerMode.value === 'adaptive';
+        normalizerResponseMs.disabled = !adaptive;
+        normalizerResponseMs.title = adaptive
+            ? 'Adaptive automatic gain response time'
+            : 'Music uses slower, dedicated loudness response times';
+    };
     const addBtn = document.getElementById('addFqdn');
     const newFqdnInput = document.getElementById('newFqdn');
     const listTitle = document.getElementById('listTitle');
@@ -687,16 +696,19 @@ async function initOptions() {
             }
         });
     }
-    const normalizerInputs = [normalizerTargetDb, normalizerMaxBoostDb, normalizerCeilingDb, normalizerResponseMs];
+    const normalizerInputs = [normalizerMode, normalizerTargetDb, normalizerMaxBoostDb, normalizerCeilingDb, normalizerResponseMs];
     const applyNormalizerConfigToInputs = (rawConfig) => {
         const config = normalizeNormalizerConfig(rawConfig || DEFAULT_NORMALIZER_CONFIG);
+        if (normalizerMode) normalizerMode.value = config.mode;
         if (normalizerTargetDb) normalizerTargetDb.value = String(config.targetDb);
         if (normalizerMaxBoostDb) normalizerMaxBoostDb.value = String(config.maxBoostDb);
         if (normalizerCeilingDb) normalizerCeilingDb.value = String(config.ceilingDb);
         if (normalizerResponseMs) normalizerResponseMs.value = String(config.responseMs);
+        updateResponseField();
     };
     const saveNormalizerConfig = async () => {
         const config = normalizeNormalizerConfig({
+            mode: normalizerMode && normalizerMode.value,
             targetDb: normalizerTargetDb && normalizerTargetDb.value,
             maxBoostDb: normalizerMaxBoostDb && normalizerMaxBoostDb.value,
             ceilingDb: normalizerCeilingDb && normalizerCeilingDb.value,

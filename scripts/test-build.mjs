@@ -364,6 +364,147 @@ test('automatic normalization gains are bounded by source peaks and silence gate
 });
 
 
+
+test('music leveling preserves dynamics and resets safely while adaptive remains fast', () => {
+    for (const file of ['page-audio-hook.js', 'cs.js']) {
+        const src = readFileSync(join(root, file), 'utf8');
+        const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
+        const end = src.indexOf(file === 'cs.js' ? 'function sampleIsolatedNormalizer() {' : 'function sampleProcessor(processor) {', start);
+        const gainFor = runInNewContext('(' + src.slice(start, end).trim() + ')');
+        const config = { mode: 'music', targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
+        const memory = {};
+        let gain = 0;
+        for (let n = 0; n < 24; n++) gain = gainFor(gain, -30, -20, config, memory);
+        assert.ok(gain <= 0, file + ': no early intro boost');
+        for (let n = 0; n < 90; n++) gain = gainFor(gain, -30, -20, config, memory);
+        assert.ok(gain > 1 && gain <= 12, file + ': steady quiet music should rise slowly');
+        const beforeTransient = gain;
+        gain = gainFor(gain, -12, -13, config, memory);
+        assert.ok(gain >= beforeTransient - 1, file + ': transient should not force an audible volume plunge');
+        const actualDigitalSilence = gain;
+        gain = gainFor(gain, -120, -Infinity, config, memory);
+        assert.equal(gain, actualDigitalSilence, file + ': digital silence must hold gain instead of instantly resetting');
+        // The sampled output reports real digital silence as -Infinity peak,
+        // but malformed live analyser data must still fail to unity.
+        assert.equal(gainFor(8, NaN, NaN, config, {}), 0,
+            file + ': invalid analyser samples never retain stale boost');
+        const beforeSilence = gain;
+        for (let n = 0; n < 10; n++) gain = gainFor(gain, -120, -120, config, memory);
+        assert.equal(gain, beforeSilence, file + ': fade does not pump the gain');
+        for (let n = 0; n < 21; n++) gain = gainFor(gain, -120, -120, config, memory);
+        assert.equal(gain, 0, file + ': extended silence resets gain and history');
+        gain = gainFor(0, -30, -20, config, memory);
+        assert.ok(gain <= 0, file + ': new song starts without stale boost');
+        gain = gainFor(10, -25, -0.1, config, memory);
+        assert.equal(gain, 0, file + ': loud new peak removes positive boost without permanent extra attenuation');
+        const peakHistory = {};
+        let peakLimitedGain = gainFor(0, -35, -0.1, config, peakHistory);
+        assert.equal(peakLimitedGain, 0, file + ': full-scale music without boost must not be attenuated solely for headroom');
+        for (let n = 0; n < 200; n++) peakLimitedGain = gainFor(peakLimitedGain, -35, -25, config, peakHistory);
+        assert.ok(peakLimitedGain > 0, file + ': a lone transient eventually releases its peak hold');
+        assert.ok(peakHistory.peakDb < -16, file + ': stale peak must decay instead of persisting all song');
+        const fast = gainFor(0, -30, -20, { ...config, mode: 'adaptive' }, {});
+        assert.ok(fast > 0, file + ': adaptive responds immediately');
+    }
+});
+
+test('legacy normalizer configurations stay Adaptive while fresh installs default to Music', () => {
+    const context = { URL };
+    runInNewContext(readFileSync(join(root, 'shared.js'), 'utf8'), context);
+    const shared = context.VolumeControlShared;
+    assert.equal(shared.DEFAULT_NORMALIZER_CONFIG.mode, 'music');
+    assert.equal(shared.normalizeNormalizerConfig(shared.DEFAULT_NORMALIZER_CONFIG).mode, 'music');
+    assert.equal(shared.normalizeNormalizerConfig({ targetDb: -16, responseMs: 600 }).mode, 'adaptive');
+    assert.equal(shared.normalizeNormalizerConfig({ mode: 'adaptive' }).mode, 'adaptive');
+    assert.equal(shared.normalizeNormalizerConfig({ mode: 'music' }).mode, 'music');
+    for (const file of ['page-audio-hook.js', 'cs.js']) {
+        const src = readFileSync(join(root, file), 'utf8');
+        assert.match(src, /musicLevelState = null/, file + ': resetting history is required');
+    }
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(page, /previousNormalizerMode !== state.normalizerConfig.mode/, 'page-mode switches reset graph gain');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(content, /previousNormalizerMode !== tc.settings.normalizerConfig.mode/, 'isolated mode switches reset gain');
+    assert.match(content, /element.addEventListener\('emptied', resetIsolatedSongGain/, 'captured media source swap resets stale gain');
+    assert.match(content, /element.addEventListener\('ended', resetIsolatedSongGain/, 'captured media end resets stale gain');
+    const options = readFileSync(join(root, 'options.js'), 'utf8');
+    assert.match(options, /normalizerResponseMs.disabled = !adaptive/, 'response speed disabled while Music is selected');
+});
+
+test('isolated track boundaries reset stale gain without interrupting another playing media element', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('const resetIsolatedSongGain = () => {');
+    const end = source.indexOf("element.addEventListener('ended', resetIsolatedSongGain", start);
+    assert.ok(start > 0 && end > start, 'isolated source-boundary reset must be wired');
+    const current = { paused: true, ended: true, muted: false, volume: 1 };
+    const other = { paused: false, ended: false, muted: false, volume: 1 };
+    const param = {
+        value: 5, cancelScheduledValues() {},
+        setValueAtTime(value) { this.value = value; }
+    };
+    const tc = { vars: {
+        mediaElements: new Set([current, other]),
+        normalizerEnabled: true, normalizerGainDb: 12,
+        musicLevelState: { peakDb: -2 }, normalizerPeakDb: -4,
+        gainNode: { gain: param }, audioCtx: { currentTime: 2 },
+        isolatedOutputUsesLimiter: true, dB: 0, muted: false, isBlocked: false
+    }, settings: { debugMode: false } };
+    const reset = runInNewContext('(() => { ' + source.slice(start, end) +
+        '; return resetIsolatedSongGain; })()', {
+        tc, element: current,
+        isMediaPlaying: el => !el.paused && !el.ended,
+        isAudibleMediaElement: el => !el.muted && el.volume > 0,
+        getGainValue: db => 10 ** (db / 20), log: () => {}
+    });
+    reset();
+    assert.equal(tc.vars.normalizerGainDb, 12, 'playing secondary source keeps its gain');
+    assert.equal(param.value, 5, 'do not cut over the active second source');
+    other.paused = true;
+    reset();
+    assert.equal(tc.vars.normalizerGainDb, 0, 'single-source playlist clears auto gain');
+    assert.equal(tc.vars.musicLevelState, null, 'new song requires fresh loudness history');
+    assert.equal(param.value, 1, 'AudioParam is reset immediately, not after a 100ms tick');
+});
+
+test('music mode avoids needless compressor reduction at unity while protecting boosted output', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
+    for (const [file, source, startText, endText, scope] of [
+        ['MAIN', page, '    function configureLimiter(processor) {', '    function markNode(node) {', 'main'],
+        ['isolated', isolated, 'function configureIsolatedLimiter() {', 'function computeSafeNormalizerGainDb(', 'isolated']
+    ]) {
+        const start = source.indexOf(startText);
+        const end = source.indexOf(endText, start);
+        assert.ok(start >= 0 && end > start, file + ': compressor configuration block not found');
+        const config = { mode: 'music', targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
+        const limiter = Object.fromEntries(['threshold', 'knee', 'ratio', 'attack', 'release'].map(k => [k, { value: null }]));
+        const state = { normalizerEnabled: true, dB: 0, normalizerConfig: config };
+        const tc = { vars: { limiterNode: limiter, normalizerGainDb: 0, normalizerEnabled: true, dB: 0 },
+            settings: { normalizerConfig: config, debugMode: false } };
+        const fn = runInNewContext('(() => {\n' + source.slice(start, end) +
+            '\nreturn ' + (scope === 'main' ? 'configureLimiter' : 'configureIsolatedLimiter') + ';})()', {
+                state, tc, normalizeNormalizerConfig: () => config, log: () => {}
+            });
+        const configure = (gainDb) => {
+            if (scope === 'main') fn({ limiter, normalizerGainDb: gainDb });
+            else { tc.vars.normalizerGainDb = gainDb; fn(); }
+            return limiter.threshold.value;
+        };
+        assert.equal(configure(0), 0, file + ': unboosted music must not compress near-fullscale peaks');
+        assert.equal(configure(-6), 0, file + ': attenuated music must preserve peak dynamics');
+        assert.equal(configure(3), -1, file + ': automatic boost restores conservative limiter threshold');
+        if (scope === 'main') state.dB = 8;
+        else tc.vars.dB = 8;
+        assert.equal(configure(0), -1, file + ': positive manual boost retains limiter protection');
+        if (scope === 'main') state.dB = 0;
+        else tc.vars.dB = 0;
+        config.mode = 'adaptive';
+        assert.equal(configure(0), -1, file + ': adaptive mode keeps original limiter behavior');
+    }
+    assert.match(page, /if \(!Number.isFinite\(sample\)\) throw new Error\("invalid source sample"\)/);
+    assert.match(isolated, /if \(!Number.isFinite\(sample\)\) throw new Error\("invalid source sample"\)/);
+});
+
 test('MAIN-world graph failures restore clamped direct output, then retry limiting', () => {
     const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const start = source.indexOf('    function clampUnprotectedOutput(processor) {');

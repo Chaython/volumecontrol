@@ -577,3 +577,18 @@ button#openShortcutsPage:hover {
 #normalizer-options-details[hidden] { display: none !important; }
 .normalizer-master-switch { margin-bottom: 10px; }
 .normalizer-master-switch label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
+
+.normalizer-mode-setting {
+    display: grid;
+    gap: 7px;
+}
+.normalizer-mode-setting label { font-weight: 600; }
+.normalizer-mode-setting select {
+    max-width: 100%;
+    padding: 6px 8px;
+    color: inherit;
+    background: transparent;
+    border: 1px solid #888;
+    border-radius: 4px;
+}
