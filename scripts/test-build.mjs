@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { runInNewContext, Script } from 'node:vm';
 import { estimateInterSamplePeaks } from './audio-peak-lab.mjs';
+import { LookaheadTruePeakLimiter } from './true-peak-lookahead.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = join(root, 'dist');
@@ -365,6 +366,69 @@ test('offline 4x FIR peak lab catches inter-sample overs and stereo cancellation
     const before = Array.from(pcm);
     estimateInterSamplePeaks([pcm]);
     assert.deepEqual(Array.from(pcm), before, 'analysis must not modify audio');
+});
+
+test('lookahead prototype bounds inter-sample over without flattening channel balance', () => {
+    for (const sampleRate of [44100, 48000, 96000]) {
+        const frames = 4096;
+        const testInput = Float32Array.from({ length: frames },
+            (_, n) => 1.2 * Math.sin(n * Math.PI / 2 + Math.PI / 4));
+        const first = new Float32Array(frames + 2048);
+        first.set(testInput);
+        const second = Float32Array.from(first, value => -value);
+        const before = estimateInterSamplePeaks([first, second]);
+        assert.ok(before.samplePeak < 1 && before.interpolatedPeak > 1.1);
+        const limiter = new LookaheadTruePeakLimiter({ sampleRate, channels: 2 });
+        const out = limiter.process([first, second]);
+        const after = estimateInterSamplePeaks(out);
+        assert.ok(after.interpolatedPeakDb < -0.9,
+            `lookahead should keep reconstructed musical peaks beneath -0.9 dBFS at ${sampleRate} Hz: ${after.interpolatedPeakDb}`);
+        assert.ok(limiter.maximumDetectedPeak > 1.1);
+        assert.equal(limiter.maximumInputSample < 1, true);
+        for (let i = 0; i < 100; i++) {
+            assert.equal(out[0][i], 0, 'output begins with lookahead silence');
+        }
+        for (let i = limiter.delaySamples; i < out[0].length; i++) {
+            assert.ok(Math.abs(out[0][i] + out[1][i]) < 1e-6,
+                'linked gain must preserve anti-phase stereo balance');
+        }
+    }
+});
+
+test('lookahead prototype remains bit-identical across audio quantum boundaries', () => {
+    const frames = 8192;
+    const input = Float32Array.from({ length: frames }, (_, n) => {
+        const envelope = n < 1000 ? 0 : n < 2500 ? 2.4 : n < 3400 ? 0.03 : 1.1;
+        return envelope * Math.sin(n * 0.04 + 0.7);
+    });
+    const opts = { channels: 1, sampleRate: 48000, ceilingDb: -1 };
+    const allAtOnce = new LookaheadTruePeakLimiter(opts).process([input])[0];
+    const streaming = new LookaheadTruePeakLimiter(opts);
+    const streamed = new Float32Array(frames);
+    for (let start = 0; start < frames; start += 128) {
+        streamed.set(streaming.process([input.subarray(start, Math.min(start + 128, frames))])[0], start);
+    }
+    assert.deepEqual(streamed, allAtOnce, 'state must survive AudioWorklet 128-frame blocks');
+    const truePeak = estimateInterSamplePeaks([streamed]);
+    assert.ok(truePeak.interpolatedPeakDb < -0.7,
+        `crest-factor changes should remain under the safety reference: ${truePeak.interpolatedPeakDb}`);
+    streaming.reset();
+    assert.equal(streaming.position, 0);
+    assert.equal(streaming.gain, 1);
+    const afterReset = streaming.process([new Float32Array(512)])[0];
+    assert.ok(afterReset.every(x => x === 0), 'stream reset cannot replay stale audio');
+});
+
+test('lookahead prototype rejects malformed frames before they leak into future blocks', () => {
+    const limiter = new LookaheadTruePeakLimiter({ sampleRate: 48000, channels: 2 });
+    assert.throws(() => limiter.process([new Float32Array(10)]), /configured number/);
+    assert.throws(() => limiter.process([new Float32Array(5), new Float32Array(4)]),
+        /equal, non-zero lengths/);
+    assert.throws(() => limiter.process([new Float32Array([NaN]), new Float32Array([0])]),
+        /Non-finite PCM/);
+    assert.equal(limiter.position, 0, 'invalid PCM resets any buffered output');
+    assert.throws(() => new LookaheadTruePeakLimiter({ sampleRate: 1000 }), /sampleRate/);
+    assert.throws(() => new LookaheadTruePeakLimiter({ channels: 9 }), /channels/);
 });
 
 test('automatic normalization gains are bounded by source peaks and silence gate in both worlds', () => {
