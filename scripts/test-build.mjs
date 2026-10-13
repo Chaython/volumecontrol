@@ -338,7 +338,7 @@ test('automatic normalization gains are bounded by source peaks and silence gate
         const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
         const end = src.indexOf(file === 'cs.js' ? 'function activeIsolatedMediaCount() {' : 'function sampleProcessor(processor) {', start);
         assert.ok(start >= 0 && end > start, file + ': missing gain guard');
-        const update = runInNewContext('(' + src.slice(start, end).trim() + ')');
+        const update = runInNewContext('(' + src.slice(start, end).trim() + '\n)');
         const cfg = { targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
 
         assert.equal(update(12, -65, -50, cfg), 0, 'no boost of quiet background/noise');
@@ -370,7 +370,7 @@ test('music leveling preserves dynamics and resets safely while adaptive remains
         const src = readFileSync(join(root, file), 'utf8');
         const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
         const end = src.indexOf(file === 'cs.js' ? 'function activeIsolatedMediaCount() {' : 'function sampleProcessor(processor) {', start);
-        const gainFor = runInNewContext('(' + src.slice(start, end).trim() + ')');
+        const gainFor = runInNewContext('(' + src.slice(start, end).trim() + '\n)');
         const config = { mode: 'music', targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
         const memory = {};
         let gain = 0;
