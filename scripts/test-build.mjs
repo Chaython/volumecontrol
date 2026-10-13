@@ -364,6 +364,37 @@ test('automatic normalization gains are bounded by source peaks and silence gate
 });
 
 
+
+test('music leveling preserves dynamics and resets safely while adaptive remains fast', () => {
+    for (const file of ['page-audio-hook.js', 'cs.js']) {
+        const src = readFileSync(join(root, file), 'utf8');
+        const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
+        const end = src.indexOf(file === 'cs.js' ? 'function sampleIsolatedNormalizer() {' : 'function sampleProcessor(processor) {', start);
+        const gainFor = runInNewContext('(' + src.slice(start, end).trim() + ')');
+        const config = { mode: 'music', targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
+        const memory = {};
+        let gain = 0;
+        for (let n = 0; n < 24; n++) gain = gainFor(gain, -30, -20, config, memory);
+        assert.ok(gain <= 0, file + ': no early intro boost');
+        for (let n = 0; n < 90; n++) gain = gainFor(gain, -30, -20, config, memory);
+        assert.ok(gain > 1 && gain <= 12, file + ': steady quiet music should rise slowly');
+        const beforeTransient = gain;
+        gain = gainFor(gain, -12, -7, config, memory);
+        assert.ok(gain >= beforeTransient - 1, file + ': transient should not force an audible volume plunge');
+        const beforeSilence = gain;
+        for (let n = 0; n < 10; n++) gain = gainFor(gain, -120, -120, config, memory);
+        assert.equal(gain, beforeSilence, file + ': fade does not pump the gain');
+        for (let n = 0; n < 21; n++) gain = gainFor(gain, -120, -120, config, memory);
+        assert.equal(gain, 0, file + ': extended silence resets gain and history');
+        gain = gainFor(0, -30, -20, config, memory);
+        assert.ok(gain <= 0, file + ': new song starts without stale boost');
+        gain = gainFor(10, -25, -0.1, config, memory);
+        assert.ok(gain <= -2.9, file + ': fresh peak still caps unsafe gain');
+        const fast = gainFor(0, -30, -20, { ...config, mode: 'adaptive' }, {});
+        assert.ok(fast > 0, file + ': adaptive responds immediately');
+    }
+});
+
 test('MAIN-world graph failures restore clamped direct output, then retry limiting', () => {
     const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const start = source.indexOf('    function clampUnprotectedOutput(processor) {');
