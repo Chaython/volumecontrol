@@ -84,10 +84,22 @@ export class LookaheadTruePeakLimiter {
 
     /**
      * Process a contiguous block of 1..8 channels, each Float32Array.
-     * Frame count and array identity can vary between calls. Call reset()
-     * on a discontinuity, not at each audio quantum.
+     * Frame count and array identity can vary between calls. process() is
+     * convenient for offline tests; processInto() avoids PCM allocations
+     * for realtime processing. Call reset() on discontinuities.
      */
     process(input) {
+        if (!Array.isArray(input) || input.length !== this.channels ||
+            !input.every(data => data instanceof Float32Array || data instanceof Float64Array)) {
+            throw new TypeError('Expected configured number of typed PCM channels');
+        }
+        const output = Array.from({ length: this.channels }, () => new Float32Array(input[0].length));
+        return this.processInto(input, output);
+    }
+
+    // Intended future AudioWorklet entrypoint: write into browser-supplied
+    // PCM buffers without allocating new arrays on the realtime audio thread.
+    processInto(input, output) {
         if (!Array.isArray(input) || input.length !== this.channels ||
             !input.every(data => data instanceof Float32Array || data instanceof Float64Array)) {
             throw new TypeError('Expected configured number of typed PCM channels');
@@ -96,7 +108,12 @@ export class LookaheadTruePeakLimiter {
         if (frames < 1 || input.some(data => data.length !== frames)) {
             throw new RangeError('Channels need equal, non-zero lengths');
         }
-        const output = Array.from({ length: this.channels }, () => new Float32Array(frames));
+        if (!Array.isArray(output) || output.length !== this.channels ||
+            !output.every(data => (data instanceof Float32Array || data instanceof Float64Array) &&
+                data.length === frames) ||
+            output.some(data => input.includes(data))) {
+            throw new TypeError('Provide separate output PCM buffers matching all input channels');
+        }
         for (let frame = 0; frame < frames; frame++) {
             const time = this.position;
             const writeIndex = time % this.bufferLength;
