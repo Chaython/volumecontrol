@@ -44,6 +44,14 @@ A **prototype** `scripts/true-peak-lookahead.mjs` now implements continuous ster
 
 The Chromium functional smoke harness also loads the candidate via a **same-origin OfflineAudioContext AudioWorklet module** and checks real audio output, channel balance and attenuation. This verifies worklet execution in that browser, not cross-origin extension module loading. The DSP still needs harsher audio fixtures, CPU/runtime-budget testing, extension-origin module-loading/CSP verification, channel-layout handling, latency alignment and fail-safe route recovery before live use. **It is not connected to playback and does not limit music in the extension.**
 
+### Experimental isolated true-peak playback (opt-in)
+
+Options → Normalize → **Experimental true-peak limiter (isolated fallback only)** is **off by default**. On an isolated compatibility WebAudio route, after positive manual boost or Normalize activates the protection path, the extension attempts to load its own packaged `true-peak-worklet.js` module into that AudioContext. Until it loads, the existing compressor continues to protect the output. Once loaded, a 4× FIR lookahead AudioWorklet replaces the compressor on that isolated route only, adding approximately 5 ms of delay and a 0.75 dB internal safety margin below the configured ceiling.
+
+If the module fails to load/connect or the processor reports an error, the captured media source is **not recreated**: output edges reconnect through the existing compressor first. Direct-output recovery is still clamped to at most unity when both protection paths fail. The worklet resets its buffered audio when selected, and its threshold follows the saved compressor-threshold field.
+
+**Scope limitations:** Most supported media and WebAudio streams may be controlled by the MAIN-world hook, which **still uses the original compressor**. DRM/CORS/native-only streams remain outside the normalizer and experimental limiter. The setting is a narrow engineering preview, not a guaranteed true-peak ceiling, and has not yet been subjected to complete multi-browser acoustic/latency testing. Disabling it returns the isolated route to its previous compressor. Do not enable for time-critical audio.
+
 When Normalize's live meter is active, the popup warns when the *measured post-compressor sample peak* is within 0.3 dB of full-scale. The popup also shows a separate caution whenever the manual slider is set to +6 dB or above, even when Normalize is off (this is a boost warning, not a detected clipping event). This is a warning, not a true-peak reading or automatic gain clamp. The thin −1 dBFS marker is a fixed visual **reference**, not the configured compressor threshold or a guaranteed ceiling. In Options, “Compressor threshold” replaces the misleading “Limiter ceiling” label without changing saved settings.
 
 ### Signal flow
