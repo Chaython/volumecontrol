@@ -1106,7 +1106,9 @@ function routeIsolatedOutput() {
     if (!audioCtx || !gainNode || !limiterNode || !analyserNode) return;
     const useLimiter = !tc.vars.isBlocked &&
         (tc.vars.normalizerEnabled || (!tc.vars.muted && tc.vars.dB > 0));
-    const configured = normalizeNormalizerConfig(tc.settings.normalizerConfig);
+    // Configuration was normalized on storage load. Keep disabled-by-default
+    // behavior even if a test or legacy startup has not populated it yet.
+    const configured = tc.settings.normalizerConfig || {};
     const truePeakReady = configured.experimentalTruePeak &&
         tc.vars.truePeakStatus === 'ready' && Boolean(truePeakNode);
     const routeKind = !useLimiter ? 'direct' : truePeakReady ? 'worklet' : 'compressor';
