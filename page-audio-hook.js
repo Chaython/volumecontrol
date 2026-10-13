@@ -2186,6 +2186,23 @@
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
 
+            const resetGainOnSeek = () => {
+                if (!state.normalizerEnabled || !state.extensionActive || !state.enabled) return;
+                const route = mediaRoutes.get(element);
+                if (!route) return;
+                // A seek within the same URL can jump straight from quiet
+                // material into a full-volume chorus. Do not carry positive
+                // automatic gain through the discontinuity; the next 100 ms
+                // detector tick cannot protect the very first audio block.
+                // Seeking is NOT a media source/DRM boundary.
+                route.normalizerGainDb = 0;
+                route.musicLevelState = null;
+                route.meterPeakDb = -Infinity;
+                route.sourceGainResetPending = true;
+                wireMediaRoute(route);
+                if (!route.outputConnected) scheduleMediaRouteRecovery(element, route);
+            };
+            listen("seeking", resetGainOnSeek, { passive: true });
             listen("play", applyOnPlay, { passive: true });
             listen("playing", applyOnPlay, { passive: true });
             listen("volumechange", applyOnVolumeChange, { passive: true });
