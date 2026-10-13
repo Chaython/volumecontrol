@@ -1102,6 +1102,9 @@ function routeIsolatedOutput() {
 function applyState() {
     enforceBoostLimit();
     syncPageAudioHook();
+    // A newly playing second captured source must not inherit auto boost
+    // even if this state sync precedes the next normalizer sample.
+    guardConcurrentIsolatedNormalizer();
 
     const audioCtx = tc.vars.audioCtx;
     const gainNode = tc.vars.gainNode;
@@ -1314,6 +1317,51 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
     return previous + (desired - previous) * alpha;
 }
 
+// Unlike MAIN-world MediaElement routes, the isolated fallback mixes all
+// captured elements BEFORE one input analyser and gain. Its RMS is therefore
+// not a per-player measurement. When multiple captured sources play, disable
+// automatic positive boost rather than letting a quiet video amplify a loud
+// one. Full independent per-source leveling requires separately owned graphs.
+function activeIsolatedMediaCount() {
+    let count = 0;
+    for (const element of tc.vars.mediaElements || []) {
+        const captured = tc.vars.capturedMediaSources && tc.vars.capturedMediaSources.get(element);
+        if (!captured || !captured.connected ||
+            !isMediaPlaying(element) || !isAudibleMediaElement(element)) continue;
+        if (++count >= 2) break;
+    }
+    return count;
+}
+
+function guardConcurrentIsolatedNormalizer() {
+    if (!tc.vars.normalizerEnabled || activeIsolatedMediaCount() < 2) return false;
+    const previous = Number(tc.vars.normalizerGainDb) || 0;
+    // Keep existing attenuation; removing it could expose a previously
+    // quieted track at full volume. No new gain history from a mixed signal.
+    tc.vars.normalizerGainDb = Math.min(0, previous);
+    tc.vars.musicLevelState = null;
+    if (previous > 0 && tc.vars.gainNode && tc.vars.audioCtx) {
+        try {
+            // Clamp synchronously at the second play event. Waiting for the
+            // 100ms sampler lets boosted audio leak for an audible fragment.
+            const manual = tc.vars.isBlocked ? 1 :
+                tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
+            const safe = tc.vars.isolatedOutputUsesLimiter === true
+                ? manual : Math.min(1, manual);
+            const param = tc.vars.gainNode.gain;
+            const now = tc.vars.audioCtx.currentTime;
+            param.cancelScheduledValues(now);
+            param.setValueAtTime(Math.max(0, safe), now);
+            configureIsolatedLimiter();
+        } catch (e) {
+            if (tc.settings.debugMode) log(`concurrent media gain clamp failed: ${e && e.message}`, 2);
+            // Preserve the attempted zero-auto-gain control state; applyState()
+            // retries restoring the clamped output when the graph recovers.
+        }
+    }
+    return true;
+}
+
 function sampleIsolatedNormalizer() {
     if (!tc.vars.normalizerEnabled) return;
     const ctx = tc.vars.audioCtx;
@@ -1365,9 +1413,14 @@ function sampleIsolatedNormalizer() {
     } catch (e) {}
 
     const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
+    // This fallback measures a mixed source. Never normalize two active
+    // captured elements as though they were one song.
+    const concurrent = guardConcurrentIsolatedNormalizer();
     let gainDb = Number(tc.vars.normalizerGainDb) || 0;
     const previousGainDb = gainDb;
-    if (tc.vars.normalizerEnabled && !tc.vars.muted && !tc.vars.isBlocked &&
+    if (concurrent) {
+        gainDb = Math.min(0, gainDb);
+    } else if (tc.vars.normalizerEnabled && !tc.vars.muted && !tc.vars.isBlocked &&
         tc.vars.isolatedOutputUsesLimiter === true) {
         gainDb = computeSafeNormalizerGainDb(gainDb, sourceReadValid ? sourceRmsDb : NaN,
             sourceReadValid ? sourcePeakDb : NaN, config,
@@ -1766,6 +1819,7 @@ function connectOutput(element) {
         if (tc.vars.mediaElements) tc.vars.mediaElements.add(element);
         // Retry the original node, never create a second MediaElementSource.
         if (!reconnectIsolatedCapturedSource(element)) scheduleIsolatedCapturedSourceRetry(element);
+        guardConcurrentIsolatedNormalizer();
         if (isMediaPlaying(element) && tc.vars.audioCtx.state === 'suspended') {
             resumeAudioContext();
         }
@@ -1911,6 +1965,7 @@ function connectOutput(element) {
             // Wake up the AudioContext when media starts playing
             element.addEventListener('play', () => {
                 if (!reconnectIsolatedCapturedSource(element)) return;
+                guardConcurrentIsolatedNormalizer();
                 if (tc.vars.audioCtx && tc.vars.audioCtx.state === 'suspended') {
                     resumeAudioContext();
                 }
@@ -1961,6 +2016,7 @@ function connectOutput(element) {
             // captured source actually has a working WebAudio connection.
             if (sourceConnected) clearFallbackVolume(element);
 
+            guardConcurrentIsolatedNormalizer();
             applyState();
             checkSuspend();
 
