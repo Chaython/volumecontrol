@@ -5,6 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { runInNewContext, Script } from 'node:vm';
+import { estimateInterSamplePeaks } from './audio-peak-lab.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = join(root, 'dist');
@@ -331,6 +332,40 @@ test('moving volume slider cannot cause the isolated-world normalizer to compens
     assert.ok(Math.abs(controls.lastGain / settledOutput - 0.1) < 0.005);
 });
 
+
+test('offline 4x FIR peak lab catches inter-sample overs and stereo cancellation', () => {
+    const frames = 2048;
+    // A quarter-sample-shifted Nyquist/2 tone measures ~-1.4 dBFS at
+    // discrete sample locations even when its reconstructed peaks exceed 0.
+    const signal = Float64Array.from({ length: frames },
+        (_, n) => 1.2 * Math.sin(n * Math.PI / 2 + Math.PI / 4));
+    const inverted = Float64Array.from(signal, x => -x);
+    const result = estimateInterSamplePeaks([signal, inverted]);
+    assert.equal(result.oversamplingFactor, 4);
+    assert.equal(result.compliantTruePeakMeter, false,
+        'the offline diagnostic is not certified to BS.1770');
+    assert.ok(result.samplePeak < 1, 'all actual PCM samples are below full scale');
+    assert.ok(result.interpolatedPeak > 1.1,
+        'reconstructed waveform peaks above full-scale between samples');
+    assert.ok(result.interSampleOvershootDb > 2,
+        'the per-channel estimate should expose multi-dB inter-sample overs');
+    assert.ok(Math.abs(result.channels[0].interpolatedPeak -
+        result.channels[1].interpolatedPeak) < 1e-10,
+        'opposite-phase channels must not cancel in the peak detector');
+    const silent = estimateInterSamplePeaks([new Float32Array(128)]);
+    assert.equal(silent.samplePeak, 0);
+    assert.equal(silent.interpolatedPeak, 0);
+    assert.equal(silent.samplePeakDb, -Infinity);
+    assert.throws(() => estimateInterSamplePeaks([
+        new Float32Array([0, 1]), new Float32Array([0])
+    ]), /same non-zero frame length/);
+    assert.throws(() => estimateInterSamplePeaks([new Float32Array([NaN, 1])]),
+        /Non-finite PCM sample/);
+    const pcm = Float32Array.from([0.2, -0.7, 0.5, -0.2]);
+    const before = Array.from(pcm);
+    estimateInterSamplePeaks([pcm]);
+    assert.deepEqual(Array.from(pcm), before, 'analysis must not modify audio');
+});
 
 test('automatic normalization gains are bounded by source peaks and silence gate in both worlds', () => {
     for (const file of ['page-audio-hook.js', 'cs.js']) {
