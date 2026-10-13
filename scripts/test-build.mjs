@@ -464,6 +464,16 @@ test('isolated track boundaries reset stale gain without interrupting another pl
     assert.equal(tc.vars.normalizerGainDb, 0, 'single-source playlist clears auto gain');
     assert.equal(tc.vars.musicLevelState, null, 'new song requires fresh loudness history');
     assert.equal(param.value, 1, 'AudioParam is reset immediately, not after a 100ms tick');
+    tc.vars.normalizerGainDb = -14;
+    tc.vars.musicLevelState = { rmsDb: -4 };
+    reset({ type: 'seeking' });
+    assert.equal(tc.vars.normalizerGainDb, -14, 'seek must keep protective negative gain');
+    assert.ok(Math.abs(param.value - 10 ** (-14 / 20)) < 0.00001,
+        'seek must not briefly jump from negative auto gain to full-scale audio');
+    tc.vars.normalizerGainDb = 12;
+    reset({ type: 'seeking' });
+    assert.equal(tc.vars.normalizerGainDb, 0, 'seek must discard positive automatic boost');
+    assert.equal(param.value, 1);
 });
 
 test('seeking clears stale automatic boost immediately on captured audio routes', () => {
@@ -503,6 +513,11 @@ test('seeking clears stale automatic boost immediately on captured audio routes'
     assert.equal(route.meterPeakDb, -Infinity);
     assert.equal(route.sourceGainResetPending, false, 'route resets gain immediately');
     assert.deepEqual(events.filter(e => typeof e === 'string'), ['wire', 'reset']);
+    route.normalizerGainDb = -12;
+    route.musicLevelState = { peakDb: -8 };
+    seek();
+    assert.equal(route.normalizerGainDb, -12, 'MAIN seek must keep protective attenuation');
+    assert.equal(route.musicLevelState, null, 'MAIN seek starts a fresh history');
     route.normalizerGainDb = 8;
     state.normalizerEnabled = false;
     seek();
