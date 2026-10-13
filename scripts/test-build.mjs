@@ -583,7 +583,7 @@ test('isolated fallback stops unsafe automatic boost when two captured sources p
     assert.equal(tc.vars.normalizerGainDb, 0, 'second source immediately sheds positive AGC');
     assert.equal(tc.vars.musicLevelState, null, 'mixed audio never reuses track loudness history');
     assert.equal(param.value, 1, 'AudioParam clamps before next 100ms sampler');
-    assert.equal(limiterUpdates, 1);
+    assert.equal(limiterUpdates, 2, 'both preconnection and active second-source clamps refresh limiter safety');
     tc.vars.normalizerGainDb = -9;
     param.value = 10 ** (-9 / 20);
     assert.equal(fn.guardConcurrentIsolatedNormalizer(), true);
