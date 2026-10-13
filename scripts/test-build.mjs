@@ -1596,6 +1596,39 @@ test('normalizer popup preserves saved preference while disabling unsupported DR
         'unknown peaks cannot imply clipping');
 });
 
+test('positive manual boost warning works independently of Normalize', () => {
+    const src = readFileSync(join(root, 'popup.js'), 'utf8');
+    const html = readFileSync(join(root, 'popup.html'), 'utf8');
+    const start = src.indexOf('function setDisplayedVolume(dB) {');
+    const end = src.indexOf('function shortcutToAria(shortcut) {', start);
+    assert.ok(start > 0 && end > start);
+    const slider = { value: '0' };
+    const text = { value: '0' };
+    let warningHidden = true;
+    const warning = { classList: { toggle(key, hide) {
+        assert.equal(key, 'hidden'); warningHidden = hide;
+    } } };
+    const cached = { slider, volumeText: text, maxDb: 32 };
+    const setDisplayed = runInNewContext('(' + src.slice(start, end).trim() + ')', {
+        cached,
+        normalizeControlDb: v => Math.max(-32, Math.min(32, Math.round(v))),
+        document: { querySelector: id => id === '#volume-boost-warning' ? warning : null }
+    });
+    setDisplayed(0);
+    assert.equal(warningHidden, true);
+    setDisplayed(5);
+    assert.equal(warningHidden, true);
+    setDisplayed(6);
+    assert.equal(warningHidden, false);
+    setDisplayed(24);
+    assert.equal(warningHidden, false);
+    assert.equal(slider.value, '24');
+    setDisplayed(-6);
+    assert.equal(warningHidden, true);
+    assert.match(html, /id="volume-boost-warning"/);
+    assert.match(html, /volume-limit-note volume-boost-warning/);
+});
+
 test('peak safety labels do not promise a hard compressor ceiling', () => {
     const html = readFileSync(join(root, 'popup.html'), 'utf8');
     const options = readFileSync(join(root, 'options.html'), 'utf8');
