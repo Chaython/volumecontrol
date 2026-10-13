@@ -466,6 +466,52 @@ test('isolated track boundaries reset stale gain without interrupting another pl
     assert.equal(param.value, 1, 'AudioParam is reset immediately, not after a 100ms tick');
 });
 
+test('seeking clears stale automatic boost immediately on captured audio routes', () => {
+    const main = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = main.indexOf('const resetGainOnSeek = () => {');
+    const end = main.indexOf('            listen("play", applyOnPlay,', start);
+    assert.ok(start >= 0 && end > start, 'MAIN seek handler and event must exist');
+    const el = { paused: false, ended: false };
+    const route = {
+        normalizerGainDb: 12,
+        musicLevelState: { rmsDb: -31, peakDb: -20 },
+        meterPeakDb: -8,
+        sourceGainResetPending: false,
+        outputConnected: true
+    };
+    const state = { normalizerEnabled: true, extensionActive: true, enabled: true };
+    const events = [];
+    const mediaRoutes = new Map([[el, route]]);
+    const wireMediaRoute = r => {
+        events.push('wire');
+        if (r.sourceGainResetPending) {
+            events.push('reset');
+            r.sourceGainResetPending = false;
+        }
+    };
+    const listen = (evt, fn) => { if (evt === 'seeking') events.push(fn); };
+    runInNewContext('(() => { ' + main.slice(start, end) + ' })()', {
+        element: el, state, mediaRoutes, wireMediaRoute, listen,
+        scheduleMediaRouteRecovery: () => events.push('retry')
+    });
+    const seek = events.find(e => typeof e === 'function');
+    assert.equal(typeof seek, 'function');
+    seek();
+    assert.equal(route.normalizerGainDb, 0, 'previous positive music boost cleared on seek');
+    assert.equal(route.musicLevelState, null, 'seek starts new loudness history');
+    assert.equal(route.meterPeakDb, -Infinity);
+    assert.equal(route.sourceGainResetPending, false, 'route resets gain immediately');
+    assert.deepEqual(events.filter(e => typeof e === 'string'), ['wire', 'reset']);
+    route.normalizerGainDb = 8;
+    state.normalizerEnabled = false;
+    seek();
+    assert.equal(route.normalizerGainDb, 8, 'Normalize-off playback remains untouched');
+    assert.match(isolated,
+        /element.addEventListener\('seeking', resetIsolatedSongGain, \{ passive: true \}\)/,
+        'isolated captured media seeks reset gain before next 100ms sample');
+});
+
 test('music mode avoids needless compressor reduction at unity while protecting boosted output', () => {
     const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
