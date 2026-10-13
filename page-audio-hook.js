@@ -2882,7 +2882,10 @@
             history.audibleSamples = 0;
             history.silentSamples = 0;
         }
-        if (!Number.isFinite(sourceRmsDb) || !Number.isFinite(sourcePeakDb)) {
+        // Digital silence is reported as RMS=-120, peak=-Infinity: valid silence,
+    // NOT an analyser failure. Still fail closed on NaN or non-silent bad peaks.
+    if (!Number.isFinite(sourceRmsDb) || Number.isNaN(sourcePeakDb) ||
+        sourcePeakDb === Infinity || (sourceRmsDb > -55 && !Number.isFinite(sourcePeakDb))) {
             if (history) {
                 history.rmsDb = null;
                 history.peakDb = -Infinity;
@@ -2981,6 +2984,7 @@
         // the normalizer gradually cancels their requested gain adjustment.
         let sourceRmsDb = -120;
         let sourcePeakDb = -Infinity;
+        let sourceReadValid = false;
         const sourceAnalyser = processor.inputAnalyser;
         if (sourceAnalyser) {
             if (!processor.inputBuffer || processor.inputBuffer.length !== sourceAnalyser.fftSize) {
@@ -2998,6 +3002,7 @@
                 const sourceRms = Math.sqrt(sourceSum / Math.max(1, processor.inputBuffer.length));
                 sourceRmsDb = sourceRms > 0.000001 ? 20 * Math.log10(sourceRms) : -120;
                 sourcePeakDb = sourcePeak > 0.000001 ? 20 * Math.log10(sourcePeak) : -Infinity;
+                sourceReadValid = true;
             } catch (e) {}
         }
         const config = normalizeNormalizerConfig(state.normalizerConfig);
@@ -3005,7 +3010,8 @@
         const previousGainDb = gainDb;
         if (state.normalizerEnabled && state.extensionActive && state.enabled && !state.muted &&
             !processor.limiterFallbackActive) {
-            gainDb = computeSafeNormalizerGainDb(gainDb, sourceRmsDb, sourcePeakDb, config,
+            gainDb = computeSafeNormalizerGainDb(gainDb, sourceReadValid ? sourceRmsDb : NaN,
+                sourceReadValid ? sourcePeakDb : NaN, config,
                 processor.musicLevelState || (processor.musicLevelState = {}));
         } else {
             gainDb = 0;
