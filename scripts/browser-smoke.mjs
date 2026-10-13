@@ -189,16 +189,33 @@ window.__vcNativeVolume = Object.getOwnPropertyDescriptor(HTMLMediaElement.proto
         '--dump-dom',
         new URL('file:///' + page.replace(/\\/g, '/')).href
     ];
-    const run = spawnSync(browser, args, {
-        encoding: 'utf8',
-        timeout: 30000,
-        windowsHide: true
-    });
-    if (run.error) throw run.error;
-    const output = (run.stdout || '') + '\n' + (run.stderr || '');
-    if (run.status !== 0 || !output.includes('VC_BROWSER_SMOKE_PASS')) {
-        throw new Error('Browser smoke failed.\n' + output.slice(-8000));
+    // Windows CI occasionally leaves headless Chrome in startup even when
+    // the extension/hook build is valid. Retry *only* an OS-level launch
+    // timeout, using a fresh profile. Never retry an actual failed assertion.
+    let passed = false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const attemptArgs = [
+            '--user-data-dir=' + join(work, 'chrome-profile-' + attempt),
+            ...args
+        ];
+        const run = spawnSync(browser, attemptArgs, {
+            encoding: 'utf8',
+            timeout: 30000,
+            windowsHide: true
+        });
+        if (run.error && run.error.code === 'ETIMEDOUT' && attempt === 1) {
+            console.warn('Chromium smoke launch timed out; retrying once with a clean profile.');
+            continue;
+        }
+        if (run.error) throw run.error;
+        const output = (run.stdout || '') + '\n' + (run.stderr || '');
+        if (run.status !== 0 || !output.includes('VC_BROWSER_SMOKE_PASS')) {
+            throw new Error('Browser smoke failed.\n' + output.slice(-8000));
+        }
+        passed = true;
+        break;
     }
+    if (!passed) throw new Error('Browser smoke did not complete successfully.');
     console.log('Browser smoke passed: preflight mute, exclusion teardown, re-enable, token rejection, and page-wrapper ownership.');
 } finally {
     rmSync(work, { recursive: true, force: true });
