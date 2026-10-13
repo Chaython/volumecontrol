@@ -434,7 +434,7 @@ test('legacy normalizer configurations stay Adaptive while fresh installs defaul
 test('isolated track boundaries reset stale gain without interrupting another playing media element', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
     const start = source.indexOf('const resetIsolatedSongGain = () => {');
-    const end = source.indexOf("element.addEventListener('ended', resetIsolatedSongGain", start);
+    const end = source.indexOf("element.addEventListener('seeking', resetIsolatedSongGain", start);
     assert.ok(start > 0 && end > start, 'isolated source-boundary reset must be wired');
     const current = { paused: true, ended: true, muted: false, volume: 1 };
     const other = { paused: false, ended: false, muted: false, volume: 1 };
