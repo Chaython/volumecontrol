@@ -1921,14 +1921,21 @@ function connectOutput(element) {
                 for (const other of tc.vars.mediaElements) {
                     if (other !== element && isMediaPlaying(other) && isAudibleMediaElement(other)) return;
                 }
-                tc.vars.normalizerGainDb = 0;
+                // A seek within the same song should retain existing
+                // attenuation but must NEVER carry positive automatic gain
+                // into a suddenly loud section.
+                const previousDb = Number(tc.vars.normalizerGainDb) || 0;
+                const retainedDb = event && event.type === 'seeking'
+                    ? Math.min(0, previousDb) : 0;
+                tc.vars.normalizerGainDb = retainedDb;
                 tc.vars.musicLevelState = null;
                 tc.vars.normalizerPeakDb = -Infinity;
                 if (!tc.vars.gainNode || !tc.vars.audioCtx) return;
                 try {
                     const manual = tc.vars.isBlocked ? 1 : tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
+                    const combined = manual * Math.pow(10, retainedDb / 20);
                     const safeGain = tc.vars.isolatedOutputUsesLimiter === true
-                        ? manual : Math.min(1, manual);
+                        ? combined : Math.min(1, combined);
                     const now = tc.vars.audioCtx.currentTime;
                     tc.vars.gainNode.gain.cancelScheduledValues(now);
                     tc.vars.gainNode.gain.setValueAtTime(safeGain, now);
