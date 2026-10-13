@@ -1916,7 +1916,7 @@ function connectOutput(element) {
             // Isolated world has one gain for all captured media. A song
             // boundary must clear stale boost before the next track plays,
             // but never disrupt another concurrently playing captured source.
-            const resetIsolatedSongGain = () => {
+            const resetIsolatedSongGain = (event) => {
                 if (!tc.vars.normalizerEnabled) return;
                 for (const other of tc.vars.mediaElements) {
                     if (other !== element && isMediaPlaying(other) && isAudibleMediaElement(other)) return;
