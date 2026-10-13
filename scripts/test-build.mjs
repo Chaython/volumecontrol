@@ -105,8 +105,8 @@ for (const browser of ['chrome', 'firefox']) {
         const code = readFileSync(join(packageDir, 'true-peak-worklet.js'), 'utf8');
         assert.match(code, /volume-control-true-peak/);
         assert.match(code, /LookaheadTruePeakLimiter/);
-        assert.doesNotMatch(code, /\\bimport\\s*\\{/);
-        assert.doesNotMatch(code, /\\bexport\\s+class/);
+        assert.doesNotMatch(code, /\bimport\s*\{/);
+        assert.doesNotMatch(code, /\bexport\s+class/);
         assert.match(code, /limiter-error/);
     });
 
