@@ -350,6 +350,10 @@ function setDisplayedVolume(dB) {
 
   if (slider) slider.value = String(normalizedDb);
   if (text) text.value = (normalizedDb >= 0 ? "+" : "") + normalizedDb;
+  // This caution must not depend on Normalize, since manually boosted
+  // playback still uses a compressor rather than true-peak brick-wall DSP.
+  const boostWarning = document.querySelector("#volume-boost-warning");
+  if (boostWarning) boostWarning.classList.toggle("hidden", normalizedDb < 6);
 
   return normalizedDb;
 }
