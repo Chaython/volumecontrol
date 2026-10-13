@@ -23,6 +23,18 @@ class VolumeControlTruePeakProcessor extends AudioWorkletProcessor {
             ceilingDb: Number.isFinite(config.ceilingDb) ? config.ceilingDb : -1
         });
         this.failed = false;
+        this.port.onmessage = event => {
+            const data = event && event.data || {};
+            if (data.type === 'reset') {
+                this.limiter.reset();
+            } else if (data.type === 'set-ceiling') {
+                const ceiling = Number(data.ceilingDb);
+                if (Number.isFinite(ceiling) && ceiling >= -12 && ceiling <= -0.1) {
+                    this.limiter.ceilingDb = ceiling;
+                    this.limiter.limit = Math.pow(10, (ceiling - 0.75) / 20);
+                }
+            }
+        };
     }
     process(inputs, outputs) {
         const input = inputs[0], output = outputs[0];
