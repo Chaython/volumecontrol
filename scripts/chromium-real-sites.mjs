@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -266,6 +266,10 @@ try {
                 'probe.send(' + tabId + ',' + JSON.stringify(cmd) + ')');
             for (const s of downloaded) {
                 const kind = s.path === '/video.mp4' ? 'video' : 'audio';
+                // Start analysis BEFORE the short MP3 begins. Previously
+                // enabling Normalize after ~850ms often missed the entire
+                // 1-second sample even though decoded playback was healthy.
+                await send({ command: 'setNormalizer', enabled: true });
                 const started = await cdp.evaluate(fixtureSession,
                     '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');' +
                     'm.muted=false;m.preload="auto";const p=m.play();p?.catch?.(()=>{});' +
@@ -284,14 +288,20 @@ try {
                     const progressed = after.t > before.t + 0.2;
                     await send({ command: 'setVolume', dB: -12 });
                     const down = (await send({ command: 'getAudioControlState' }))?.response?.volume === -12;
-                    await send({ command: 'setNormalizer', enabled: true });
-                    await sleep(300);
-                    const meter = (await send({ command: 'getMeterState' }))?.response;
+                    // A playback pass without an actual decoded peak is not
+                    // evidence that normalization worked. Poll briefly to
+                    // account for analyser/100ms timer startup jitter.
+                    const meter = await waitFor(async () => {
+                        const value = (await send({ command: 'getMeterState' }))?.response;
+                        return Number.isFinite(value?.peakDb) ? value : null;
+                    }, 1200).catch(() => null);
                     await send({ command: 'setNormalizer', enabled: false });
                     await send({ command: 'setVolume', dB: 0 });
+                    const measured = Number.isFinite(meter?.peakDb);
                     const entry = { site: 'Downloaded real ' + kind, source: s.url,
-                        status: progressed && down ? 'passed' : 'failed', playback: { before, after, progressed },
-                        attenuation: down, meter };
+                        status: progressed && down && measured ? 'passed' : 'failed',
+                        playback: { before, after, progressed },
+                        attenuation: down, finitePeak: measured, meter };
                     results.push(entry);
                     console.log('RECORDED_MEDIA_RESULT=' + JSON.stringify(entry));
                 } catch (error) {
@@ -300,6 +310,10 @@ try {
                     results.push(entry);
                     console.log('RECORDED_MEDIA_RESULT=' + JSON.stringify(entry));
                 }
+                // Restore state even if an assertion or browser command above
+                // fails, so the next source is not contaminated by old gain.
+                await send({ command: 'setNormalizer', enabled: false }).catch(() => {});
+                await send({ command: 'setVolume', dB: 0 }).catch(() => {});
                 await cdp.evaluate(fixtureSession,
                     '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');m.pause();return true})()');
             }
@@ -642,8 +656,39 @@ try {
     console.log('REAL_MEDIA_HTTP_REQUESTS=' + JSON.stringify(mediaRequests));
 
     const played = results.filter(r => r.playback?.playing || r.playback?.progressed).length;
-    console.log('REAL_SITE_REPORT=' + JSON.stringify({ played, results }));
-    if (results.some(r => r.status === 'failed')) process.exitCode = 1;
+    // External websites can legitimately refuse headless playback, but the
+    // local downloaded-media scenarios are REQUIRED coverage. The old workflow
+    // could finish green if all local downloads failed and an unrelated public
+    // page loaded; that masked loss of the most useful audio regression tests.
+    const required = [
+        'Downloaded real audio',
+        'Downloaded real video',
+        'Concurrent decoded MP3 and MP4',
+        'Real MP4 same-element playlist transition'
+    ];
+    const missingRequired = required.filter(name =>
+        !results.some(entry => entry.site === name && entry.status === 'passed'));
+    const report = { played, required, missingRequired, results };
+    console.log('REAL_SITE_REPORT=' + JSON.stringify(report));
+    if (process.env.GITHUB_STEP_SUMMARY) {
+        const lines = [
+            '## Volume Control streaming probes',
+            '',
+            '| Scenario | Result |',
+            '| --- | --- |',
+            ...results.map(entry => '| ' + String(entry.site).replace(/\|/g, '/') +
+                ' | ' + entry.status + ' |'),
+            '',
+            '**Required decoded-media scenarios:** ' +
+                (missingRequired.length ? 'FAILED: ' + missingRequired.join(', ') : 'all passed'),
+            ''
+        ];
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+    }
+    if (results.some(r => r.status === 'failed') || missingRequired.length) {
+        if (missingRequired.length) console.error('REQUIRED_MEDIA_PROBES_FAILED=' + missingRequired.join(', '));
+        process.exitCode = 1;
+    }
     if (!played) console.warn('INCONCLUSIVE: no real stream advanced; do not report a playback pass');
 } catch (e) {
     console.error('REAL_SITE_RUNNER_FAILURE=' + (e?.stack || e));

@@ -22,7 +22,7 @@ concurrency:
 jobs:
   prerelease:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository and tags
@@ -149,6 +149,35 @@ jobs:
         if: steps.changes.outputs.should_release == 'true'
         shell: powershell
         run: .\scripts\build.ps1
+
+      - name: Extract both prerelease packages for installed-browser checks
+        if: steps.changes.outputs.should_release == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = [string](Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json).version
+          foreach ($browser in @("chrome", "firefox")) {
+              $zip = "dist/volume-control-$browser-v$version.zip"
+              if (-not (Test-Path -LiteralPath $zip)) { throw "Missing $browser release archive: $zip" }
+              $target = "dist/smoke/$browser"
+              New-Item -ItemType Directory -Path $target -Force | Out-Null
+              Expand-Archive -LiteralPath $zip -DestinationPath $target -Force
+              if (-not (Test-Path -LiteralPath "$target/manifest.json")) {
+                  throw "Missing $browser manifest after ZIP extraction"
+              }
+          }
+
+      - name: Exercise installed Chromium prerelease package
+        if: steps.changes.outputs.should_release == 'true'
+        env:
+          VC_EXTENSION_DIR: dist/smoke/chrome
+        run: node scripts/chromium-functional-smoke.mjs
+
+      - name: Temporarily install Firefox prerelease package
+        if: steps.changes.outputs.should_release == 'true'
+        env:
+          VC_EXTENSION_DIR: dist/smoke/firefox
+        run: node scripts/firefox-extension-smoke.mjs
 
       - name: Create SHA-256 checksums
         if: steps.changes.outputs.should_release == 'true'

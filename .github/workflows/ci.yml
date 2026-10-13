@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# A newer push supersedes older checks for the same branch. Never abort
+# the main branch's own post-merge validation.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   test-and-build:
     runs-on: windows-latest
