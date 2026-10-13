@@ -1649,9 +1649,15 @@
             const limited = route.outputConnected && !route.limiterFallbackActive &&
                 typeof route.currentMode === "string" && route.currentMode.endsWith("-limited");
             const manual = effectiveGain();
+            // Seeking may preserve negative automatic gain from the preceding
+            // passage. Resetting straight to manual/unity briefly makes loud
+            // material MUCH louder than it was before the seek.
+            const retainedAuto = state.normalizerEnabled
+                ? dbToGain(Math.min(0, Number(route.normalizerGainDb) || 0)) : 1;
+            const combined = manual * retainedAuto;
             // Never expose positive gain if this path is direct or still
             // waiting for the limiter to reconnect.
-            const safe = limited ? manual : Math.min(1, manual);
+            const safe = limited ? combined : Math.min(1, combined);
             param.cancelScheduledValues(now);
             param.setValueAtTime(Math.max(0, safe), now);
             return true;
