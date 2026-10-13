@@ -569,6 +569,14 @@ test('isolated fallback stops unsafe automatic boost when two captured sources p
     assert.equal(fn.activeIsolatedMediaCount(), 1);
     assert.equal(fn.guardConcurrentIsolatedNormalizer(), false);
     assert.equal(tc.vars.normalizerGainDb, 12, 'single playing source is not affected');
+    // Count a freshly captured (but not yet connected) second source before
+    // the first audio block can escape through the shared gain.
+    assert.equal(fn.activeIsolatedMediaCount(second), 2);
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(second), true);
+    assert.equal(tc.vars.normalizerGainDb, 0, 'pending second source must shed AGC before connection');
+    assert.equal(param.value, 1, 'pending source is clamped synchronously');
+    tc.vars.normalizerGainDb = 12;
+    tc.vars.musicLevelState = { rmsDb: -32 };
     captured.get(second).connected = true;
     assert.equal(fn.activeIsolatedMediaCount(), 2);
     assert.equal(fn.guardConcurrentIsolatedNormalizer(), true);
@@ -595,8 +603,10 @@ test('isolated fallback stops unsafe automatic boost when two captured sources p
     assert.match(content, /if \(concurrent\) \{\s*gainDb = Math.min\(0, gainDb\)/);
     assert.match(content, /guardConcurrentIsolatedNormalizer\(\);[\s\S]*?applyState\(\);/,
         'newly captured audio must shed old boost before state routing');
-    assert.match(content, /element.addEventListener\('play', \(\) => \{[\s\S]*?guardConcurrentIsolatedNormalizer\(\)/,
-        'a returning captured source must clamp at play, not a later sampler');
+    assert.match(content, /element.addEventListener\('play', \(\) => \{[\s\S]*?guardConcurrentIsolatedNormalizer\(element\);[\s\S]*?reconnectIsolatedCapturedSource\(element\)/,
+        'a returning captured source must clamp before reconnecting, not after it plays');
+    assert.match(content, /tc\.vars\.mediaElements\.add\(element\);\s*\/\/ This captured node[\s\S]*?guardConcurrentIsolatedNormalizer\(element\);\s*const sourceConnected = reconnectIsolatedCapturedSource\(element\)/,
+        'initial MediaElementSource connection must not happen before concurrent AGC clamp');
 });
 
 test('music mode avoids needless compressor reduction at unity while protecting boosted output', () => {
