@@ -1364,6 +1364,124 @@ test('Firefox audio hook smoke uses an HTTP origin for bridge messages', () => {
 });
 
 
+test('experimental true-peak is off by default and runs only after explicit opt-in', () => {
+    const source = readFileSync(join(root, 'shared.js'), 'utf8');
+    const shared = runInNewContext(source + ';VolumeControlShared');
+    assert.equal(shared.DEFAULT_NORMALIZER_CONFIG.experimentalTruePeak, false);
+    assert.equal(shared.normalizeNormalizerConfig({}).experimentalTruePeak, false);
+    assert.equal(shared.normalizeNormalizerConfig({ experimentalTruePeak: 'true' }).experimentalTruePeak, false);
+    assert.equal(shared.normalizeNormalizerConfig({ experimentalTruePeak: true }).experimentalTruePeak, true);
+    const options = readFileSync(join(root, 'options.html'), 'utf8');
+    assert.match(options, /id="normalizerTruePeakExperimental"/);
+    assert.match(options, /isolated fallback only/);
+    const src = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.doesNotMatch(src, /new AudioWorkletNode\(/, 'MAIN routes must keep compressor behavior');
+});
+
+test('isolated opt-in switches only its output edge and recovers failed worklet routing', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function routeIsolatedOutput() {');
+    const end = source.indexOf('function applyState() {', start);
+    const node = id => ({
+        id, edges: [], port: { messages: [], postMessage(msg) { this.messages.push(msg); } },
+        connect(to) { if (this.fail) throw Error('connect refused'); this.edges.push(to); },
+        disconnect() { this.edges = []; }
+    });
+    const gainNode = node('gain'), limiterNode = node('compressor');
+    const analyserNode = node('analyser'), truePeakNode = node('worklet');
+    const destination = {};
+    gainNode.gain = { value: 1, cancelScheduledValues() {},
+        setValueAtTime(value) { this.value = value; } };
+    const tc = { vars: { audioCtx: { destination, currentTime: 3 },
+        gainNode, limiterNode, analyserNode, truePeakNode, truePeakStatus: 'idle',
+        normalizerEnabled: true, muted: false, isBlocked: false, dB: 8,
+        isolatedOutputUsesLimiter: null, isolatedOutputRouteKind: null
+    }, settings: { debugMode: false,
+        normalizerConfig: { experimentalTruePeak: true, ceilingDb: -1 } } };
+    const wire = runInNewContext('(' + source.slice(start, end).trim() + ')', {
+        tc, configureIsolatedLimiter: () => {}, getGainValue: dB => 10 ** (dB / 20),
+        log: () => {}
+    });
+    wire();
+    assert.equal(tc.vars.isolatedOutputRouteKind, 'compressor',
+        'not-yet-loaded worklet cannot displace safe compressor');
+    assert.equal(gainNode.edges[0], limiterNode);
+    tc.vars.truePeakStatus = 'ready';
+    wire();
+    assert.equal(tc.vars.isolatedOutputRouteKind, 'worklet');
+    assert.equal(tc.vars.isolatedOutputUsesLimiter, true);
+    assert.equal(gainNode.edges[0], truePeakNode);
+    assert.equal(truePeakNode.edges[0], analyserNode);
+    assert.equal(analyserNode.edges[0], destination);
+    assert.ok(truePeakNode.port.messages.some(x => x.type === 'reset'));
+    assert.ok(truePeakNode.port.messages.some(x => x.type === 'set-ceiling' && x.ceilingDb === -1));
+    tc.vars.normalizerGainDb = 12;
+    truePeakNode.fail = true;
+    tc.vars.isolatedOutputRouteKind = null;
+    wire();
+    assert.equal(tc.vars.truePeakStatus, 'failed');
+    assert.equal(tc.vars.isolatedOutputRouteKind, 'compressor',
+        'failed experimental worklet must recover via compressor before direct');
+    assert.equal(tc.vars.isolatedOutputUsesLimiter, true);
+    assert.equal(gainNode.edges[0], limiterNode);
+    assert.equal(limiterNode.edges[0], analyserNode);
+    tc.settings.normalizerConfig.experimentalTruePeak = false;
+    wire();
+    assert.equal(tc.vars.isolatedOutputRouteKind, 'compressor');
+});
+
+test('isolated worklet load waits for user opt-in and fails back without stale events', async () => {
+    const src = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = src.indexOf('function disableIsolatedTruePeak(reason) {');
+    const end = src.indexOf('function routeIsolatedOutput() {', start);
+    assert.ok(start >= 0 && end > start);
+    const urls = [];
+    const fakeContext = { state: 'running', audioWorklet: {
+        async addModule(url) { urls.push(url); }
+    } };
+    const state = { experimentalTruePeak: false, ceilingDb: -1 };
+    const tc = { vars: { audioCtx: fakeContext, limiterNode: {},
+        normalizerEnabled: true, dB: 0, muted: false, isBlocked: false,
+        isolatedOutputRouteKind: 'compressor', truePeakStatus: 'idle',
+        truePeakNode: undefined }, settings: { debugMode: false, normalizerConfig: state } };
+    let applies = 0, recoveries = 0;
+    class AudioWorkletNode {
+        constructor(context, name, options) {
+            assert.equal(context, fakeContext);
+            assert.equal(name, 'volume-control-true-peak');
+            assert.equal(options.outputChannelCount[0], 2);
+            this.port = { postMessage() {}, onmessage: null };
+        }
+        disconnect() {}
+    }
+    const fn = runInNewContext('(() => {' + src.slice(start, end) +
+        ';return { prepareIsolatedTruePeak, disableIsolatedTruePeak };})()', {
+            tc, AudioWorkletNode, normalizeNormalizerConfig: value => value,
+            browserAPI: { runtime: { getURL: path => 'moz-extension://abc/' + path } },
+            applyState: () => { applies++; },
+            routeIsolatedOutput: () => { recoveries++; },
+            log: () => {}
+        });
+    fn.prepareIsolatedTruePeak();
+    assert.equal(urls.length, 0, 'disabled experiment cannot initialize module');
+    state.experimentalTruePeak = true;
+    fn.prepareIsolatedTruePeak();
+    fn.prepareIsolatedTruePeak();
+    await tc.vars.truePeakLoadPromise;
+    assert.equal(urls.length, 1, 'only one module load per context');
+    assert.equal(tc.vars.truePeakStatus, 'ready');
+    assert.equal(applies, 1);
+    const oldNode = tc.vars.truePeakNode;
+    tc.vars.isolatedOutputRouteKind = 'worklet';
+    oldNode.port.onmessage({ data: { type: 'limiter-error', message: 'DSP failed' } });
+    assert.equal(tc.vars.truePeakStatus, 'failed');
+    assert.equal(recoveries, 1);
+    assert.equal(applies, 2);
+    tc.vars.truePeakStatus = 'ready';
+    oldNode.onprocessorerror();
+    assert.equal(recoveries, 1, 'stale node cannot disable a replacement');
+});
+
 test('isolated audio restores a gain-limited direct path after limiter route failures', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
     const start = source.indexOf('function routeIsolatedOutput() {');
@@ -1877,7 +1995,7 @@ test('limiter ceiling updates without reconnecting an unchanged audio route', ()
     assert.match(page, /function wireGraph\(graph\) \{[\s\S]*?configureLimiter\(graph\);/);
     assert.match(page, /graph\.currentMode === wantMode[\s\S]*?setGainValue\(graph\)/);
     assert.match(page, /function wireMediaRoute\(route\) \{[\s\S]*?configureLimiter\(route\);[\s\S]*?route\.currentMode === wantMode && route\.outputConnected/);
-    assert.match(isolated, /if \(tc\.vars\.isolatedOutputUsesLimiter\) configureIsolatedLimiter\(\);\s*routeIsolatedOutput\(\);/);
+    assert.match(isolated, /if \(tc\.vars\.isolatedOutputUsesLimiter\) configureIsolatedLimiter\(\);\s*prepareIsolatedTruePeak\(\);\s*routeIsolatedOutput\(\);/);
 });
 
 test('normalization off bypasses compressor but positive boosts retain limiting', () => {
