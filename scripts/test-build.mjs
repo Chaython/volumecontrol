@@ -539,6 +539,66 @@ test('seeking clears stale automatic boost immediately on captured audio routes'
         'isolated captured media seeks reset gain before next 100ms sample');
 });
 
+test('isolated fallback stops unsafe automatic boost when two captured sources play', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function activeIsolatedMediaCount() {');
+    const end = source.indexOf('function sampleIsolatedNormalizer() {', start);
+    assert.ok(start >= 0 && end > start, 'concurrent isolated guard must exist');
+    const first = { paused: false, ended: false, muted: false, volume: 1 };
+    const second = { paused: false, ended: false, muted: false, volume: 1 };
+    const captured = new WeakMap([[first, { connected: true }], [second, { connected: false }]]);
+    const param = { value: 3, history: [],
+        cancelScheduledValues(t) { this.history.push(['cancel', t]); },
+        setValueAtTime(value, t) { this.value = value; this.history.push(['set', value, t]); }
+    };
+    const tc = { vars: {
+        mediaElements: new Set([first, second]), capturedMediaSources: captured,
+        normalizerEnabled: true, normalizerGainDb: 12,
+        musicLevelState: { rmsDb: -32 }, audioCtx: { currentTime: 2 },
+        gainNode: { gain: param }, isolatedOutputUsesLimiter: true,
+        dB: 0, muted: false, isBlocked: false
+    }, settings: { debugMode: false } };
+    let limiterUpdates = 0;
+    const fn = runInNewContext('(() => { ' + source.slice(start, end) +
+        '; return { activeIsolatedMediaCount, guardConcurrentIsolatedNormalizer }; })()', {
+        tc, isMediaPlaying: element => !element.paused && !element.ended,
+        isAudibleMediaElement: element => !element.muted && element.volume > 0,
+        getGainValue: db => 10 ** (db / 20),
+        configureIsolatedLimiter: () => { limiterUpdates++; }, log: () => {}
+    });
+    assert.equal(fn.activeIsolatedMediaCount(), 1);
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(), false);
+    assert.equal(tc.vars.normalizerGainDb, 12, 'single playing source is not affected');
+    captured.get(second).connected = true;
+    assert.equal(fn.activeIsolatedMediaCount(), 2);
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(), true);
+    assert.equal(tc.vars.normalizerGainDb, 0, 'second source immediately sheds positive AGC');
+    assert.equal(tc.vars.musicLevelState, null, 'mixed audio never reuses track loudness history');
+    assert.equal(param.value, 1, 'AudioParam clamps before next 100ms sampler');
+    assert.equal(limiterUpdates, 1);
+    tc.vars.normalizerGainDb = -9;
+    param.value = 10 ** (-9 / 20);
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(), true);
+    assert.equal(tc.vars.normalizerGainDb, -9, 'existing negative gain remains protective');
+    assert.ok(Math.abs(param.value - 10 ** (-9 / 20)) < 0.00001);
+    tc.vars.normalizerGainDb = 8;
+    tc.vars.dB = 6;
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(), true);
+    assert.ok(Math.abs(param.value - 10 ** (6 / 20)) < 0.00001,
+        'manual boost remains user-controlled under the compressor');
+    second.paused = true;
+    assert.equal(fn.activeIsolatedMediaCount(), 1);
+    assert.equal(fn.guardConcurrentIsolatedNormalizer(), false);
+    const content = source;
+    assert.match(content, /const concurrent = guardConcurrentIsolatedNormalizer\(\)/,
+        'the sampler must not calculate AGC from the combined waveform');
+    assert.match(content, /if \(concurrent\) \{\s*gainDb = Math.min\(0, gainDb\)/);
+    assert.match(content, /guardConcurrentIsolatedNormalizer\(\);[\s\S]*?applyState\(\);/,
+        'newly captured audio must shed old boost before state routing');
+    assert.match(content, /element.addEventListener\('play', \(\) => \{[\s\S]*?guardConcurrentIsolatedNormalizer\(\)/,
+        'a returning captured source must clamp at play, not a later sampler');
+});
+
 test('music mode avoids needless compressor reduction at unity while protecting boosted output', () => {
     const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
