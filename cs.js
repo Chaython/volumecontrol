@@ -1936,6 +1936,9 @@ function connectOutput(element) {
                     if (tc.settings.debugMode) log(`song-boundary gain reset failed: ${e && e.message}`, 3);
                 }
             };
+            // Seeking can jump from quiet intro to loud chorus without a
+            // source/ended event. Reset captured gain before it resumes.
+            element.addEventListener('seeking', resetIsolatedSongGain, { passive: true });
             element.addEventListener('ended', resetIsolatedSongGain, { passive: true });
             element.addEventListener('emptied', resetIsolatedSongGain, { passive: true });
             // Suspend the AudioContext when media stops to release the Bluetooth lock
