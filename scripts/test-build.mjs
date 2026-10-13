@@ -1606,7 +1606,7 @@ test('peak safety labels do not promise a hard compressor ceiling', () => {
     assert.match(options, /Compressor threshold/);
     assert.doesNotMatch(options, /<span>Limiter ceiling<\/span>/);
     assert.match(popup, /peakDb < -0\.3/);
-    assert.match(docs, /not a certified BS\.1770 true-peak meter/);
+    assert.match(docs, /not\*\* a certified BS\.1770 true-peak meter/);
 });
 
 test('Normalize warning stays outside the folded meter and DRM fallback note mentions it', () => {
