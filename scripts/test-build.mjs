@@ -406,7 +406,11 @@ test('lookahead prototype remains bit-identical across audio quantum boundaries'
     const streaming = new LookaheadTruePeakLimiter(opts);
     const streamed = new Float32Array(frames);
     for (let start = 0; start < frames; start += 128) {
-        streamed.set(streaming.process([input.subarray(start, Math.min(start + 128, frames))])[0], start);
+        const segment = input.subarray(start, Math.min(start + 128, frames));
+        const result = new Float32Array(segment.length);
+        const written = streaming.processInto([segment], [result]);
+        assert.equal(written[0], result, 'processInto must use preallocated output');
+        streamed.set(result, start);
     }
     assert.deepEqual(streamed, allAtOnce, 'state must survive AudioWorklet 128-frame blocks');
     const truePeak = estimateInterSamplePeaks([streamed]);
@@ -424,6 +428,14 @@ test('lookahead prototype rejects malformed frames before they leak into future 
     assert.throws(() => limiter.process([new Float32Array(10)]), /configured number/);
     assert.throws(() => limiter.process([new Float32Array(5), new Float32Array(4)]),
         /equal, non-zero lengths/);
+    assert.throws(() => limiter.processInto(
+        [new Float32Array(10), new Float32Array(10)],
+        [new Float32Array(10), new Float32Array(9)]),
+        /matching all input channels/);
+    const same = new Float32Array(128);
+    assert.throws(() => limiter.processInto([same, new Float32Array(128)],
+        [same, new Float32Array(128)]), /separate output PCM buffers/);
+
     assert.throws(() => limiter.process([new Float32Array([NaN]), new Float32Array([0])]),
         /Non-finite PCM/);
     assert.equal(limiter.position, 0, 'invalid PCM resets any buffered output');
