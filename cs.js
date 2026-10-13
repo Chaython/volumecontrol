@@ -1253,7 +1253,7 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
     }
     if (sourceRmsDb <= -55) {
         // Don't pump up a music fade or gap between phrases. After 3 seconds
-        // of silence, forget the track instead of carrying gain into the next.
+        // of silence, discard boost history without dropping safe attenuation.
         if (config.mode === "music" && history && history.audibleSamples > 0 &&
             ++history.silentSamples < 30) return previous;
         if (history) {
@@ -1263,7 +1263,10 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
             history.audibleSamples = 0;
             history.silentSamples = 0;
         }
-        return 0;
+        // Positive boost could overload the next loud passage; negative
+            // attenuation should survive a silent dramatic pause instead
+            // of suddenly returning to full-scale after three seconds.
+            return config.mode === "music" ? Math.min(0, previous) : 0;
     }
 
     if (config.mode === "music" && history) {
@@ -1916,19 +1919,26 @@ function connectOutput(element) {
             // Isolated world has one gain for all captured media. A song
             // boundary must clear stale boost before the next track plays,
             // but never disrupt another concurrently playing captured source.
-            const resetIsolatedSongGain = () => {
+            const resetIsolatedSongGain = (event) => {
                 if (!tc.vars.normalizerEnabled) return;
                 for (const other of tc.vars.mediaElements) {
                     if (other !== element && isMediaPlaying(other) && isAudibleMediaElement(other)) return;
                 }
-                tc.vars.normalizerGainDb = 0;
+                // A seek within the same song should retain existing
+                // attenuation but must NEVER carry positive automatic gain
+                // into a suddenly loud section.
+                const previousDb = Number(tc.vars.normalizerGainDb) || 0;
+                const retainedDb = event && event.type === 'seeking'
+                    ? Math.min(0, previousDb) : 0;
+                tc.vars.normalizerGainDb = retainedDb;
                 tc.vars.musicLevelState = null;
                 tc.vars.normalizerPeakDb = -Infinity;
                 if (!tc.vars.gainNode || !tc.vars.audioCtx) return;
                 try {
                     const manual = tc.vars.isBlocked ? 1 : tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
+                    const combined = manual * Math.pow(10, retainedDb / 20);
                     const safeGain = tc.vars.isolatedOutputUsesLimiter === true
-                        ? manual : Math.min(1, manual);
+                        ? combined : Math.min(1, combined);
                     const now = tc.vars.audioCtx.currentTime;
                     tc.vars.gainNode.gain.cancelScheduledValues(now);
                     tc.vars.gainNode.gain.setValueAtTime(safeGain, now);
@@ -1936,6 +1946,9 @@ function connectOutput(element) {
                     if (tc.settings.debugMode) log(`song-boundary gain reset failed: ${e && e.message}`, 3);
                 }
             };
+            // Seeking can jump from quiet intro to loud chorus without a
+            // source/ended event. Reset captured gain before it resumes.
+            element.addEventListener('seeking', resetIsolatedSongGain, { passive: true });
             element.addEventListener('ended', resetIsolatedSongGain, { passive: true });
             element.addEventListener('emptied', resetIsolatedSongGain, { passive: true });
             // Suspend the AudioContext when media stops to release the Bluetooth lock

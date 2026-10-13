@@ -1649,9 +1649,15 @@
             const limited = route.outputConnected && !route.limiterFallbackActive &&
                 typeof route.currentMode === "string" && route.currentMode.endsWith("-limited");
             const manual = effectiveGain();
+            // Seeking may preserve negative automatic gain from the preceding
+            // passage. Resetting straight to manual/unity briefly makes loud
+            // material MUCH louder than it was before the seek.
+            const retainedAuto = state.normalizerEnabled
+                ? dbToGain(Math.min(0, Number(route.normalizerGainDb) || 0)) : 1;
+            const combined = manual * retainedAuto;
             // Never expose positive gain if this path is direct or still
             // waiting for the limiter to reconnect.
-            const safe = limited ? manual : Math.min(1, manual);
+            const safe = limited ? combined : Math.min(1, combined);
             param.cancelScheduledValues(now);
             param.setValueAtTime(Math.max(0, safe), now);
             return true;
@@ -2186,6 +2192,26 @@
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
 
+            const resetGainOnSeek = () => {
+                if (!state.normalizerEnabled || !state.extensionActive || !state.enabled) return;
+                const route = mediaRoutes.get(element);
+                if (!route) return;
+                // A seek within the same URL can jump straight from quiet
+                // material into a full-volume chorus. Do not carry positive
+                // automatic gain through the discontinuity; the next 100 ms
+                // detector tick cannot protect the very first audio block.
+                // Seeking is NOT a media source/DRM boundary.
+                // Discard potentially dangerous positive auto gain, but
+                // retain attenuation so a seek within a loud song cannot
+                // briefly jump back up to full-scale volume.
+                route.normalizerGainDb = Math.min(0, Number(route.normalizerGainDb) || 0);
+                route.musicLevelState = null;
+                route.meterPeakDb = -Infinity;
+                route.sourceGainResetPending = true;
+                wireMediaRoute(route);
+                if (!route.outputConnected) scheduleMediaRouteRecovery(element, route);
+            };
+            listen("seeking", resetGainOnSeek, { passive: true });
             listen("play", applyOnPlay, { passive: true });
             listen("playing", applyOnPlay, { passive: true });
             listen("volumechange", applyOnVolumeChange, { passive: true });
@@ -2904,7 +2930,7 @@
         }
         if (sourceRmsDb <= -55) {
             // Don't pump up a music fade or gap between phrases. After 3 seconds
-            // of silence, forget the track instead of carrying gain into the next.
+            // of silence, discard boost history without dropping safe attenuation.
             if (config.mode === "music" && history && history.audibleSamples > 0 &&
                 ++history.silentSamples < 30) return previous;
             if (history) {
@@ -2914,7 +2940,10 @@
                 history.audibleSamples = 0;
                 history.silentSamples = 0;
             }
-            return 0;
+            // Positive boost could overload the next loud passage; negative
+            // attenuation should survive a silent dramatic pause instead
+            // of suddenly returning to full-scale after three seconds.
+            return config.mode === "music" ? Math.min(0, previous) : 0;
         }
     
         if (config.mode === "music" && history) {

@@ -395,6 +395,18 @@ test('music leveling preserves dynamics and resets safely while adaptive remains
         assert.equal(gain, 0, file + ': extended silence resets gain and history');
         gain = gainFor(0, -30, -20, config, memory);
         assert.ok(gain <= 0, file + ': new song starts without stale boost');
+        const quietHistory = {};
+        let heldAttenuation = -15;
+        heldAttenuation = gainFor(heldAttenuation, -24, -22, config, quietHistory);
+        for (let n = 0; n < 42; n++) heldAttenuation = gainFor(heldAttenuation, -120, -Infinity, config, quietHistory);
+        assert.ok(heldAttenuation <= -14 && heldAttenuation >= -15,
+            file + ': dramatic pause must not undo protective attenuation');
+        let boostedBeforeSilence = 12;
+        const boostedHistory = {};
+        boostedBeforeSilence = gainFor(boostedBeforeSilence, -28, -25, config, boostedHistory);
+        for (let n = 0; n < 42; n++) boostedBeforeSilence = gainFor(boostedBeforeSilence, -120, -Infinity, config, boostedHistory);
+        assert.equal(boostedBeforeSilence, 0,
+            file + ': digital silence must discard positive boost before a new loud segment');
         gain = gainFor(10, -25, -0.1, config, memory);
         assert.equal(gain, 0, file + ': loud new peak removes positive boost without permanent extra attenuation');
         const peakHistory = {};
@@ -433,8 +445,8 @@ test('legacy normalizer configurations stay Adaptive while fresh installs defaul
 
 test('isolated track boundaries reset stale gain without interrupting another playing media element', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
-    const start = source.indexOf('const resetIsolatedSongGain = () => {');
-    const end = source.indexOf("element.addEventListener('ended', resetIsolatedSongGain", start);
+    const start = source.indexOf('const resetIsolatedSongGain = (event) => {');
+    const end = source.indexOf("element.addEventListener('seeking', resetIsolatedSongGain", start);
     assert.ok(start > 0 && end > start, 'isolated source-boundary reset must be wired');
     const current = { paused: true, ended: true, muted: false, volume: 1 };
     const other = { paused: false, ended: false, muted: false, volume: 1 };
@@ -464,6 +476,67 @@ test('isolated track boundaries reset stale gain without interrupting another pl
     assert.equal(tc.vars.normalizerGainDb, 0, 'single-source playlist clears auto gain');
     assert.equal(tc.vars.musicLevelState, null, 'new song requires fresh loudness history');
     assert.equal(param.value, 1, 'AudioParam is reset immediately, not after a 100ms tick');
+    tc.vars.normalizerGainDb = -14;
+    tc.vars.musicLevelState = { rmsDb: -4 };
+    reset({ type: 'seeking' });
+    assert.equal(tc.vars.normalizerGainDb, -14, 'seek must keep protective negative gain');
+    assert.ok(Math.abs(param.value - 10 ** (-14 / 20)) < 0.00001,
+        'seek must not briefly jump from negative auto gain to full-scale audio');
+    tc.vars.normalizerGainDb = 12;
+    reset({ type: 'seeking' });
+    assert.equal(tc.vars.normalizerGainDb, 0, 'seek must discard positive automatic boost');
+    assert.equal(param.value, 1);
+});
+
+test('seeking clears stale automatic boost immediately on captured audio routes', () => {
+    const main = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const isolated = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = main.indexOf('const resetGainOnSeek = () => {');
+    const end = main.indexOf('            listen("play", applyOnPlay,', start);
+    assert.ok(start >= 0 && end > start, 'MAIN seek handler and event must exist');
+    const el = { paused: false, ended: false };
+    const route = {
+        normalizerGainDb: 12,
+        musicLevelState: { rmsDb: -31, peakDb: -20 },
+        meterPeakDb: -8,
+        sourceGainResetPending: false,
+        outputConnected: true
+    };
+    const state = { normalizerEnabled: true, extensionActive: true, enabled: true };
+    const events = [];
+    const mediaRoutes = new Map([[el, route]]);
+    const wireMediaRoute = r => {
+        events.push('wire');
+        if (r.sourceGainResetPending) {
+            events.push('reset');
+            r.sourceGainResetPending = false;
+        }
+    };
+    const listen = (evt, fn) => { if (evt === 'seeking') events.push(fn); };
+    runInNewContext('(() => { ' + main.slice(start, end) + ' })()', {
+        element: el, state, mediaRoutes, wireMediaRoute, listen,
+        scheduleMediaRouteRecovery: () => events.push('retry')
+    });
+    const seek = events.find(e => typeof e === 'function');
+    assert.equal(typeof seek, 'function');
+    seek();
+    assert.equal(route.normalizerGainDb, 0, 'previous positive music boost cleared on seek');
+    assert.equal(route.musicLevelState, null, 'seek starts new loudness history');
+    assert.equal(route.meterPeakDb, -Infinity);
+    assert.equal(route.sourceGainResetPending, false, 'route resets gain immediately');
+    assert.deepEqual(events.filter(e => typeof e === 'string'), ['wire', 'reset']);
+    route.normalizerGainDb = -12;
+    route.musicLevelState = { peakDb: -8 };
+    seek();
+    assert.equal(route.normalizerGainDb, -12, 'MAIN seek must keep protective attenuation');
+    assert.equal(route.musicLevelState, null, 'MAIN seek starts a fresh history');
+    route.normalizerGainDb = 8;
+    state.normalizerEnabled = false;
+    seek();
+    assert.equal(route.normalizerGainDb, 8, 'Normalize-off playback remains untouched');
+    assert.match(isolated,
+        /element.addEventListener\('seeking', resetIsolatedSongGain, \{ passive: true \}\)/,
+        'isolated captured media seeks reset gain before next 100ms sample');
 });
 
 test('music mode avoids needless compressor reduction at unity while protecting boosted output', () => {
@@ -1698,6 +1771,8 @@ test('reused media source resets stale automatic gain before next track and fail
     let disconnected = false;
     const reset = runInNewContext('(' + page.slice(start, end).trim() + ')', {
         effectiveGain: () => manual,
+        dbToGain: db => 10 ** (db / 20),
+        state: { normalizerEnabled: true },
         disconnectMediaRouteOutput: route => { disconnected = true; route.outputConnected = false; },
         log: () => {}
     });
