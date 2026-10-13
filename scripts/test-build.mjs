@@ -389,10 +389,37 @@ test('music leveling preserves dynamics and resets safely while adaptive remains
         gain = gainFor(0, -30, -20, config, memory);
         assert.ok(gain <= 0, file + ': new song starts without stale boost');
         gain = gainFor(10, -25, -0.1, config, memory);
-        assert.ok(gain <= -2.9, file + ': fresh peak still caps unsafe gain');
+        assert.equal(gain, 0, file + ': loud new peak removes positive boost without permanent extra attenuation');
+        const peakHistory = {};
+        let peakLimitedGain = gainFor(0, -35, -0.1, config, peakHistory);
+        assert.equal(peakLimitedGain, 0, file + ': full-scale music without boost must not be attenuated solely for headroom');
+        for (let n = 0; n < 200; n++) peakLimitedGain = gainFor(peakLimitedGain, -35, -25, config, peakHistory);
+        assert.ok(peakLimitedGain > 0, file + ': a lone transient eventually releases its peak hold');
+        assert.ok(peakHistory.peakDb < -16, file + ': stale peak must decay instead of persisting all song');
         const fast = gainFor(0, -30, -20, { ...config, mode: 'adaptive' }, {});
         assert.ok(fast > 0, file + ': adaptive responds immediately');
     }
+});
+
+test('legacy normalizer configurations stay Adaptive while fresh installs default to Music', () => {
+    const context = { URL };
+    runInNewContext(readFileSync(join(root, 'shared.js'), 'utf8'), context);
+    const shared = context.VolumeControlShared;
+    assert.equal(shared.DEFAULT_NORMALIZER_CONFIG.mode, 'music');
+    assert.equal(shared.normalizeNormalizerConfig(shared.DEFAULT_NORMALIZER_CONFIG).mode, 'music');
+    assert.equal(shared.normalizeNormalizerConfig({ targetDb: -16, responseMs: 600 }).mode, 'adaptive');
+    assert.equal(shared.normalizeNormalizerConfig({ mode: 'adaptive' }).mode, 'adaptive');
+    assert.equal(shared.normalizeNormalizerConfig({ mode: 'music' }).mode, 'music');
+    for (const file of ['page-audio-hook.js', 'cs.js']) {
+        const src = readFileSync(join(root, file), 'utf8');
+        assert.match(src, /musicLevelState = null/, file + ': resetting history is required');
+    }
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    assert.match(page, /previousNormalizerMode !== state.normalizerConfig.mode/, 'page-mode switches reset graph gain');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(content, /previousNormalizerMode !== tc.settings.normalizerConfig.mode/, 'isolated mode switches reset gain');
+    assert.match(content, /element.addEventListener\('emptied', resetIsolatedSongGain/, 'captured media source swap resets stale gain');
+    assert.match(content, /element.addEventListener\('ended', resetIsolatedSongGain/, 'captured media end resets stale gain');
 });
 
 test('MAIN-world graph failures restore clamped direct output, then retry limiting', () => {
