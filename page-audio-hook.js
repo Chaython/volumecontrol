@@ -2930,7 +2930,7 @@
         }
         if (sourceRmsDb <= -55) {
             // Don't pump up a music fade or gap between phrases. After 3 seconds
-            // of silence, forget the track instead of carrying gain into the next.
+            // of silence, discard boost history without dropping safe attenuation.
             if (config.mode === "music" && history && history.audibleSamples > 0 &&
                 ++history.silentSamples < 30) return previous;
             if (history) {
@@ -2940,7 +2940,10 @@
                 history.audibleSamples = 0;
                 history.silentSamples = 0;
             }
-            return 0;
+            // Positive boost could overload the next loud passage; negative
+            // attenuation should survive a silent dramatic pause instead
+            // of suddenly returning to full-scale after three seconds.
+            return config.mode === "music" ? Math.min(0, previous) : 0;
         }
     
         if (config.mode === "music" && history) {
