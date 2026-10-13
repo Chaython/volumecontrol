@@ -129,7 +129,14 @@
         if (!processor || !processor.limiter) return;
         const config = normalizeNormalizerConfig(state.normalizerConfig);
         try {
-            processor.limiter.threshold.value = config.ceilingDb;
+            // At unity/attenuation, music needs no added peak compression.
+            // Keep the limiter node connected to avoid route clicks/latency
+            // changes, but move its threshold to 0 dBFS until boosted.
+            // Never do this for manual positive boost or adaptive mode.
+            const transparentMusic = state.normalizerEnabled && config.mode === "music" &&
+                state.dB <= 0 && (!Number.isFinite(processor.normalizerGainDb) ||
+                    processor.normalizerGainDb <= 0);
+            processor.limiter.threshold.value = transparentMusic ? 0 : config.ceilingDb;
             processor.limiter.knee.value = 0;
             processor.limiter.ratio.value = 20;
             processor.limiter.attack.value = 0.003;
@@ -2996,6 +3003,7 @@
                 let sourcePeak = 0;
                 for (let i = 0; i < processor.inputBuffer.length; i++) {
                     const sample = processor.inputBuffer[i];
+                    if (!Number.isFinite(sample)) throw new Error("invalid source sample");
                     sourceSum += sample * sample;
                     sourcePeak = Math.max(sourcePeak, Math.abs(sample));
                 }
