@@ -1348,6 +1348,15 @@ test('fallback mute never claims a site-owned native mute', () => {
     assert.match(source, /if \(element\.dataset\.vcNativeMuted === 'true'\) \{/);
 });
 
+test('Chromium smoke retries only an actual startup timeout with separate profiles', () => {
+    const source = readFileSync(join(root, 'scripts/browser-smoke.mjs'), 'utf8');
+    assert.match(source, /attempt <= 2/);
+    assert.match(source, /chrome-profile-.*attempt/);
+    assert.match(source, /run\.error && run\.error\.code === 'ETIMEDOUT' && attempt === 1/);
+    assert.match(source, /if \(run\.error\) throw run\.error/);
+    assert.match(source, /run\.status !== 0 \|\| !output\.includes\('VC_BROWSER_SMOKE_PASS'\)/);
+});
+
 test('Firefox audio smoke waits for state transitions instead of fixed 60ms timing', () => {
     const source = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
     assert.match(source, /const waitFor = async/);
