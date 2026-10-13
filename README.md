@@ -25,6 +25,15 @@ Media that cannot be boosted (DRM-protected or cross-origin streams) is detected
 
 **Normalize is opt-in and OFF by default.** Enable it for the current site/path using the **Normalize** switch in the popup. The live **Gain** readout and **output peak meter** expand only when that site's switch is on and WebAudio analysis is available; they fold away when it is off or temporarily unsupported. During Chromium DRM, cross-origin no-CORS, or Force native playback, the switch is **disabled and grayed out**, with an explanation displayed under it even if Normalize is off. A saved enabled preference is not erased: the switch can stay checked-but-disabled and automatically become active again once the page uses routable media. Firefox DRM audio can be normalized when Gecko provides a usable WebAudio route. In **Options → Normalizer**, **Normalize by default on sites without an override** controls the global default, and the target/boost/ceiling/response fields are folded away when the global default is off. A site-specific choice overrides the global default and is saved **separately** in `siteNormalizerSettings`; it does not require **Remember** and does not overwrite remembered volume, mute or mono.
 
+### Music-preserving normalization
+
+**Normalization style** in Options offers two modes, independent of the per-site Normalize switch:
+
+- **Music (new default):** follows the source RMS envelope slowly (about 3.5 seconds for increases and 11 seconds for decreases), keeps the loudest source peak observed on that route, waits roughly 2.5 seconds before permitting automatic positive gain, and adjusts musical gain over approximately 1.6 to 6 seconds. Short quiet passages preserve the prior gain; three seconds of silence resets it. A new media source/track and changes in Normalize state discard the old route history. The source-peak safety bound can still force an immediate reduction on unusually strong peaks.
+- **Adaptive (legacy behavior):** fast 100 ms RMS/peak decisions intended for uneven speech and video playback. The configurable Response speed affects this mode; Music has purpose-built, slower time constants.
+
+Both modes sample pre-slider audio so the manual volume control never causes the automatic controller to compensate for slider adjustments. Both remain subject to the existing sample-peak-based compressor safety limits; **neither is LUFS/ReplayGain scanning nor true-peak brick-wall limiting**. Music mode prioritizes preserving within-song dynamics over immediately equalizing every passage. No analysis can reliably anticipate a suddenly loud new section; keep manual +dB boosts conservative.
+
 ### Signal flow
 
 For supported WebAudio routes the MAIN-world page/MediaElement graph and ISOLATED-world fallback follow this signal chain:
