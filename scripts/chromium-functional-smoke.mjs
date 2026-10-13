@@ -84,8 +84,19 @@ try {
         'const ctx=new AudioContext();const o=ctx.createOscillator();const g=ctx.createGain();' +
         'g.gain.value=0.05;o.connect(g);g.connect(ctx.destination);await ctx.resume();' +
         'o.start();window.vcTone={ctx,o,g};return ctx.state;};</script>';
+    // Same-origin browser-only AudioWorklet experiment: this validates
+    // processor module loading and real 128-frame render quanta without
+    // adding CSP/permissions/worklet code to the shipped extension.
+    const truePeakCore = readFileSync(new URL('./true-peak-lookahead.mjs', import.meta.url), 'utf8');
+    const truePeakWorklet = "import { LookaheadTruePeakLimiter } from '/true-peak-core.mjs';\nclass VcTruePeakPrototype extends AudioWorkletProcessor {\n  constructor() {\n    super();\n    this.limiter = new LookaheadTruePeakLimiter({ sampleRate, channels: 2 });\n  }\n  process(inputs, outputs) {\n    const input = inputs[0], output = outputs[0];\n    if (!input || input.length !== 2 || !output || output.length !== 2) {\n      for (const channel of output || []) channel.fill(0);\n      return true;\n    }\n    this.limiter.processInto(input, output);\n    return true;\n  }\n}\nregisterProcessor('vc-true-peak-prototype', VcTruePeakPrototype);";
     server = createServer((req, res) => {
-        res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' }); res.end(html);
+        if (req.url === '/true-peak-core.mjs' || req.url === '/true-peak-worklet.mjs') {
+            res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+            res.end(req.url === '/true-peak-core.mjs' ? truePeakCore : truePeakWorklet);
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+        res.end(html);
     });
     await new Promise((resolve, reject) => {
         server.once('error', reject); server.listen(0, '127.0.0.1', resolve);
@@ -153,6 +164,13 @@ try {
     await send({ command: 'setNormalizer', enabled: true });
     check('Normalize enabled', (await state())?.normalizerEnabled === true);
     check('Real WebAudio oscillator running', await cdp.eval(tabSession, 'window.startTone()') === 'running');
+    const workletResult = await cdp.eval(tabSession, "(async () => {\n    const rate = 48000, length = 6144;\n    const context = new OfflineAudioContext(2, length, rate);\n    if (!context.audioWorklet) throw Error('OfflineAudioContext.audioWorklet missing');\n    await context.audioWorklet.addModule('/true-peak-worklet.mjs');\n    const source = context.createBufferSource();\n    const buffer = context.createBuffer(2, length, rate);\n    for (let n = 0; n < length - 1024; n++) {\n        const sample = 1.2 * Math.sin(n * Math.PI / 2 + Math.PI / 4);\n        buffer.getChannelData(0)[n] = sample;\n        buffer.getChannelData(1)[n] = -sample;\n    }\n    source.buffer = buffer;\n    const limiter = new AudioWorkletNode(context, 'vc-true-peak-prototype',\n        { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],\n          channelCount: 2, channelCountMode: 'explicit' });\n    source.connect(limiter);\n    limiter.connect(context.destination);\n    source.start();\n    const rendered = await context.startRendering();\n    const left = rendered.getChannelData(0), right = rendered.getChannelData(1);\n    let samplePeak = 0, difference = 0, rms = 0;\n    for (let n = 0; n < left.length; n++) {\n        samplePeak = Math.max(samplePeak, Math.abs(left[n]), Math.abs(right[n]));\n        difference = Math.max(difference, Math.abs(left[n] + right[n]));\n        rms += left[n] * left[n];\n    }\n    return { samplePeak, difference, rms: Math.sqrt(rms / left.length),\n        beginsWithSilence: left.slice(0, 128).every(x => x === 0) };\n})()");
+    check('Offline AudioWorklet loads true-peak prototype and emits nonzero music',
+        workletResult && workletResult.rms > 0.15, workletResult);
+    check('Lookahead prototype attenuates sample peaks and preserves stereo in real Chromium DSP',
+        workletResult.samplePeak < 0.89 && workletResult.difference < 1e-5 &&
+        workletResult.beginsWithSilence, workletResult);
+
     await sleep(250);
     const meter = (await send({ command: 'getMeterState' }))?.response;
     check('Normalizer meter responds', meter?.normalizerEnabled === true && Object.hasOwn(meter, 'peakDb'), meter);
