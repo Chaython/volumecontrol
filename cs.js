@@ -1053,7 +1053,8 @@ function prepareIsolatedTruePeak() {
     const vars = tc.vars;
     const ctx = vars.audioCtx;
     const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
-    if (!config.experimentalTruePeak || vars.isBlocked || !ctx || !vars.limiterNode) return;
+    if (!config.experimentalTruePeak || vars.isBlocked || !ctx || !vars.limiterNode ||
+        !(vars.normalizerEnabled || (!vars.muted && vars.dB > 0))) return;
     if (vars.truePeakStatus === 'ready') {
         try { vars.truePeakNode.port.postMessage({ type: 'set-ceiling', ceilingDb: config.ceilingDb }); }
         catch (e) { disableIsolatedTruePeak(e && e.message); }
@@ -1080,9 +1081,13 @@ function prepareIsolatedTruePeak() {
                 channelCountMode: 'explicit',
                 processorOptions: { channels: 2, ceilingDb: config.ceilingDb }
             });
-            node.onprocessorerror = () => disableIsolatedTruePeak('processorerror');
+            node.onprocessorerror = () => {
+                if (vars.truePeakNode === node && vars.audioCtx === ctx)
+                    disableIsolatedTruePeak('processorerror');
+            };
             node.port.onmessage = event => {
-                if (event.data && event.data.type === 'limiter-error') {
+                if (vars.truePeakNode === node && vars.audioCtx === ctx &&
+                    event.data && event.data.type === 'limiter-error') {
                     disableIsolatedTruePeak(event.data.message || 'DSP error');
                 }
             };
