@@ -429,6 +429,41 @@ test('legacy normalizer configurations stay Adaptive while fresh installs defaul
     assert.match(content, /element.addEventListener\('ended', resetIsolatedSongGain/, 'captured media end resets stale gain');
 });
 
+test('isolated track boundaries reset stale gain without interrupting another playing media element', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('const resetIsolatedSongGain = () => {');
+    const end = source.indexOf("element.addEventListener('ended', resetIsolatedSongGain", start);
+    assert.ok(start > 0 && end > start, 'isolated source-boundary reset must be wired');
+    const current = { paused: true, ended: true, muted: false, volume: 1 };
+    const other = { paused: false, ended: false, muted: false, volume: 1 };
+    const param = {
+        value: 5, cancelScheduledValues() {},
+        setValueAtTime(value) { this.value = value; }
+    };
+    const tc = { vars: {
+        mediaElements: new Set([current, other]),
+        normalizerEnabled: true, normalizerGainDb: 12,
+        musicLevelState: { peakDb: -2 }, normalizerPeakDb: -4,
+        gainNode: { gain: param }, audioCtx: { currentTime: 2 },
+        isolatedOutputUsesLimiter: true, dB: 0, muted: false, isBlocked: false
+    }, settings: { debugMode: false } };
+    const reset = runInNewContext('(() => { ' + source.slice(start, end) +
+        '; return resetIsolatedSongGain; })()', {
+        tc, element: current,
+        isMediaPlaying: el => !el.paused && !el.ended,
+        isAudibleMediaElement: el => !el.muted && el.volume > 0,
+        getGainValue: db => 10 ** (db / 20), log: () => {}
+    });
+    reset();
+    assert.equal(tc.vars.normalizerGainDb, 12, 'playing secondary source keeps its gain');
+    assert.equal(param.value, 5, 'do not cut over the active second source');
+    other.paused = true;
+    reset();
+    assert.equal(tc.vars.normalizerGainDb, 0, 'single-source playlist clears auto gain');
+    assert.equal(tc.vars.musicLevelState, null, 'new song requires fresh loudness history');
+    assert.equal(param.value, 1, 'AudioParam is reset immediately, not after a 100ms tick');
+});
+
 test('MAIN-world graph failures restore clamped direct output, then retry limiting', () => {
     const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const start = source.indexOf('    function clampUnprotectedOutput(processor) {');
