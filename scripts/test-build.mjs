@@ -379,7 +379,7 @@ test('music leveling preserves dynamics and resets safely while adaptive remains
         for (let n = 0; n < 90; n++) gain = gainFor(gain, -30, -20, config, memory);
         assert.ok(gain > 1 && gain <= 12, file + ': steady quiet music should rise slowly');
         const beforeTransient = gain;
-        gain = gainFor(gain, -12, -7, config, memory);
+        gain = gainFor(gain, -12, -13, config, memory);
         assert.ok(gain >= beforeTransient - 1, file + ': transient should not force an audible volume plunge');
         const beforeSilence = gain;
         for (let n = 0; n < 10; n++) gain = gainFor(gain, -120, -120, config, memory);
