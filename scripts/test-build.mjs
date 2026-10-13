@@ -381,6 +381,13 @@ test('music leveling preserves dynamics and resets safely while adaptive remains
         const beforeTransient = gain;
         gain = gainFor(gain, -12, -13, config, memory);
         assert.ok(gain >= beforeTransient - 1, file + ': transient should not force an audible volume plunge');
+        const actualDigitalSilence = gain;
+        gain = gainFor(gain, -120, -Infinity, config, memory);
+        assert.equal(gain, actualDigitalSilence, file + ': digital silence must hold gain instead of instantly resetting');
+        // The sampled output reports real digital silence as -Infinity peak,
+        // but malformed live analyser data must still fail to unity.
+        assert.equal(gainFor(8, NaN, NaN, config, {}), 0,
+            file + ': invalid analyser samples never retain stale boost');
         const beforeSilence = gain;
         for (let n = 0; n < 10; n++) gain = gainFor(gain, -120, -120, config, memory);
         assert.equal(gain, beforeSilence, file + ': fade does not pump the gain');
