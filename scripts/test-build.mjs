@@ -336,7 +336,7 @@ test('automatic normalization gains are bounded by source peaks and silence gate
     for (const file of ['page-audio-hook.js', 'cs.js']) {
         const src = readFileSync(join(root, file), 'utf8');
         const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
-        const end = src.indexOf(file === 'cs.js' ? 'function activeIsolatedMediaCount() {' : 'function sampleProcessor(processor) {', start);
+        const end = src.indexOf(file === 'cs.js' ? 'function activeIsolatedMediaCount(pendingElement = null) {' : 'function sampleProcessor(processor) {', start);
         assert.ok(start >= 0 && end > start, file + ': missing gain guard');
         const update = runInNewContext('(' + src.slice(start, end).trim() + '\n)');
         const cfg = { targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
@@ -369,7 +369,7 @@ test('music leveling preserves dynamics and resets safely while adaptive remains
     for (const file of ['page-audio-hook.js', 'cs.js']) {
         const src = readFileSync(join(root, file), 'utf8');
         const start = src.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
-        const end = src.indexOf(file === 'cs.js' ? 'function activeIsolatedMediaCount() {' : 'function sampleProcessor(processor) {', start);
+        const end = src.indexOf(file === 'cs.js' ? 'function activeIsolatedMediaCount(pendingElement = null) {' : 'function sampleProcessor(processor) {', start);
         const gainFor = runInNewContext('(' + src.slice(start, end).trim() + '\n)');
         const config = { mode: 'music', targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
         const memory = {};
@@ -541,7 +541,7 @@ test('seeking clears stale automatic boost immediately on captured audio routes'
 
 test('isolated fallback stops unsafe automatic boost when two captured sources play', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
-    const start = source.indexOf('function activeIsolatedMediaCount() {');
+    const start = source.indexOf('function activeIsolatedMediaCount(pendingElement = null) {');
     const end = source.indexOf('function sampleIsolatedNormalizer() {', start);
     assert.ok(start >= 0 && end > start, 'concurrent isolated guard must exist');
     const first = { paused: false, ended: false, muted: false, volume: 1 };
@@ -2465,7 +2465,7 @@ test('isolated captured source retries original node after both initial connect 
     assert.equal(captured.connected, true);
     assert.equal(element.dataset.vcFallbackReason, undefined);
     assert.match(content, /capturedMediaSources\.set\(element,\s*\{/);
-    assert.match(content, /element\.dataset\.vcHooked = "true";\s*tc\.vars\.mediaElements\.add\(element\);\s*const sourceConnected = reconnectIsolatedCapturedSource\(element\)/);
+    assert.match(content, /element\.dataset\.vcHooked = "true";\s*tc\.vars\.mediaElements\.add\(element\);[\s\S]*?guardConcurrentIsolatedNormalizer\(element\);\s*const sourceConnected = reconnectIsolatedCapturedSource\(element\)/);
 });
 
 
