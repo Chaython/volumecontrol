@@ -646,6 +646,7 @@ async function initOptions() {
     const normalizerMaxBoostDb = document.getElementById('normalizerMaxBoostDb');
     const normalizerCeilingDb = document.getElementById('normalizerCeilingDb');
     const normalizerResponseMs = document.getElementById('normalizerResponseMs');
+    const normalizerTruePeakExperimental = document.getElementById('normalizerTruePeakExperimental');
     const updateResponseField = () => {
         if (!normalizerResponseMs) return;
         const adaptive = normalizerMode && normalizerMode.value === 'adaptive';
@@ -696,7 +697,7 @@ async function initOptions() {
             }
         });
     }
-    const normalizerInputs = [normalizerMode, normalizerTargetDb, normalizerMaxBoostDb, normalizerCeilingDb, normalizerResponseMs];
+    const normalizerInputs = [normalizerMode, normalizerTargetDb, normalizerMaxBoostDb, normalizerCeilingDb, normalizerResponseMs, normalizerTruePeakExperimental];
     const applyNormalizerConfigToInputs = (rawConfig) => {
         const config = normalizeNormalizerConfig(rawConfig || DEFAULT_NORMALIZER_CONFIG);
         if (normalizerMode) normalizerMode.value = config.mode;
@@ -704,6 +705,7 @@ async function initOptions() {
         if (normalizerMaxBoostDb) normalizerMaxBoostDb.value = String(config.maxBoostDb);
         if (normalizerCeilingDb) normalizerCeilingDb.value = String(config.ceilingDb);
         if (normalizerResponseMs) normalizerResponseMs.value = String(config.responseMs);
+        if (normalizerTruePeakExperimental) normalizerTruePeakExperimental.checked = config.experimentalTruePeak;
         updateResponseField();
     };
     const saveNormalizerConfig = async () => {
@@ -712,7 +714,8 @@ async function initOptions() {
             targetDb: normalizerTargetDb && normalizerTargetDb.value,
             maxBoostDb: normalizerMaxBoostDb && normalizerMaxBoostDb.value,
             ceilingDb: normalizerCeilingDb && normalizerCeilingDb.value,
-            responseMs: normalizerResponseMs && normalizerResponseMs.value
+            responseMs: normalizerResponseMs && normalizerResponseMs.value,
+            experimentalTruePeak: Boolean(normalizerTruePeakExperimental && normalizerTruePeakExperimental.checked)
         });
         applyNormalizerConfigToInputs(config);
         await storageSet({ normalizerConfig: config });

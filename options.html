@@ -95,6 +95,11 @@
                 <span class="setting-unit">ms</span>
             </label>
         </div>
+        <label class="toggle-box" for="normalizerTruePeakExperimental">
+            <input type="checkbox" id="normalizerTruePeakExperimental">
+            Experimental true-peak limiter (isolated fallback only)
+        </label>
+        <span class="hint">Off by default. Only changes the isolated compatibility audio route when a positive boost or Normalize requires protection; page-managed MAIN-world audio continues using the existing compressor. Adds about 5 ms latency. If module loading or DSP fails, the compressor remains the fallback. Do not use for time-critical audio.</span>
         <span class="hint">
             Defaults: Music style, −16 dBFS RMS target, +12 dB max auto boost, −1 dBFS compressor threshold. Response speed applies to Adaptive style. Automatic gain measures pre-slider audio, with a noise gate and source-peak headroom. This compressor is not a hard true-peak limiter; high manual boost can still distort.
         </span>
