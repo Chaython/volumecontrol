@@ -2201,7 +2201,10 @@
                 // automatic gain through the discontinuity; the next 100 ms
                 // detector tick cannot protect the very first audio block.
                 // Seeking is NOT a media source/DRM boundary.
-                route.normalizerGainDb = 0;
+                // Discard potentially dangerous positive auto gain, but
+                // retain attenuation so a seek within a loud song cannot
+                // briefly jump back up to full-scale volume.
+                route.normalizerGainDb = Math.min(0, Number(route.normalizerGainDb) || 0);
                 route.musicLevelState = null;
                 route.meterPeakDb = -Infinity;
                 route.sourceGainResetPending = true;
