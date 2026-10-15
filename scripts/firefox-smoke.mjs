@@ -72,9 +72,19 @@ try {
         }
         if (url.pathname === '/real-recording.mp3') {
             const range = /^bytes=(\d+)-(\d*)/.exec(req.headers.range || '');
-            const from = range ? Math.min(recordedMp3.length - 1, Number(range[1])) : 0;
+            const from = range ? Number(range[1]) : 0;
             const to = range && range[2] ? Math.min(recordedMp3.length - 1, Number(range[2])) :
                 recordedMp3.length - 1;
+            // Reject unsatisfiable ranges instead of returning the last byte
+            // masquerading as a valid 206 response (triggers decoder errors).
+            if (from >= recordedMp3.length || to < from) {
+                console.log('FIREFOX_MP3_BAD_RANGE=' + (req.headers.range || ''));
+                res.writeHead(416, { 'Content-Range': 'bytes */' + recordedMp3.length });
+                res.end();
+                return;
+            }
+            console.log('FIREFOX_MP3_REQUEST=' + JSON.stringify({ range: req.headers.range || '',
+                from, to, method: req.method }));
             res.writeHead(range ? 206 : 200, {
                 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store',
                 'Accept-Ranges': 'bytes', 'Content-Length': to - from + 1,
@@ -181,22 +191,64 @@ window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
     document.body.appendChild(audio);
     const approx = (value, target) => Number.isFinite(value) && Math.abs(value - target) < .018;
     const attenuation = 10 ** (-6 / 20);
-    const decoded = await waitFor(() => audio.readyState >= 2 && !audio.error, 7000);
-    const played = decoded && await audio.play().then(() => true, () => false);
-    const playing = played && await waitFor(() => !audio.paused && audio.currentTime > .08, 4000);
+    // Firefox may leave play() pending indefinitely when its decoder cannot
+    // start. A timed, explicit failure is more diagnostic than hanging CI.
+    const boundedPlay = element => Promise.race([
+        element.play().then(() => true, () => false),
+        sleep(5000).then(() => false)
+    ]);
+    // Decode the actual compressed recording into PCM without opening an
+    // output device. Hosted Firefox runners can have NO functional audio sink,
+    // producing OnMediaSinkAudioError even when the MP3 decoder works.
+    let pcmDecoded = false, pcmFrames = 0, pcmPeak = 0, pcmError = "";
+    try {
+        const payload = await fetch("/real-recording.mp3").then(r => {
+            if (!r.ok) throw Error("PCM fixture HTTP " + r.status);
+            return r.arrayBuffer();
+        });
+        const offline = new OfflineAudioContext(1, 8192, 44100);
+        const decodedBuffer = await offline.decodeAudioData(payload);
+        pcmFrames = decodedBuffer.length;
+        const samples = decodedBuffer.getChannelData(0);
+        for (let i = 0; i < samples.length; i += 32) {
+            pcmPeak = Math.max(pcmPeak, Math.abs(samples[i]));
+        }
+        pcmDecoded = pcmFrames > decodedBuffer.sampleRate / 2 && pcmPeak > .001;
+    } catch (e) {
+        pcmError = String(e?.message || e);
+    }
+
+    const loaded = await waitFor(() => audio.readyState >= 2 && !audio.error, 7000);
+    let playing = false;
+    let outputStatus = "unavailable";
+    let outputError = null;
+    if (loaded) {
+        const played = await boundedPlay(audio);
+        playing = played && await waitFor(() => audio.currentTime > .08, 1500);
+        await sleep(550);
+        outputError = audio.error && { code: audio.error.code, message: audio.error.message };
+        if (playing && !outputError && audio.currentTime > .25) {
+            outputStatus = "passed";
+        } else if (outputError?.message === "OnMediaSinkAudioError") {
+            outputStatus = "unavailable-no-audio-sink";
+        } else {
+            outputStatus = "failed";
+        }
+    }
+    // MP3 decoding is independently verified above. Distinguish a missing
+    // runner audio output device from an actual MP3 decode/format error.
+    const unexpectedMediaError = outputError && outputError.message !== "OnMediaSinkAudioError";
+    audio.pause();
     const scaled = await waitFor(() => approx(audio.volume, .72) &&
         approx(window.__vcNativeVolume.get.call(audio), .72 * attenuation), 2000);
-    // Native media controls and isolated-world writers bypass the page setter.
-    // Exercise that actual browser boundary instead of only the JS setter.
+    // Native browser controls bypass the page's patched .volume setter.
     window.__vcNativeVolume.set.call(audio, .5);
     const nativeSlider = await waitFor(() => approx(audio.volume, .5) &&
         approx(window.__vcNativeVolume.get.call(audio), .5 * attenuation), 2000);
-    audio.pause();
     audio.volume = .31;
     const pausedSlider = await waitFor(() => approx(audio.volume, .31) &&
         approx(window.__vcNativeVolume.get.call(audio), .31 * attenuation), 2000);
-    // A website can mute WHILE Volume Control is muted; releasing extension
-    // mute must not clear the website's independent mute.
+    // Site-mute choices must survive a Volume Control mute/unmute cycle.
     const sendState = muted => window.postMessage({
         source: "volume-control-extension", target: "volume-control-page-audio",
         token, command: "setState", version: 3, enabled: true, dB: -6,
@@ -212,25 +264,30 @@ window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
     audio.muted = false;
     audio.src = "/real-recording.mp3?track=next";
     audio.load();
-    const replayed = await audio.play().then(() => true, () => false);
-    const changedSource = replayed && await waitFor(() =>
-        audio.currentSrc.includes("track=next") && !audio.paused &&
-        audio.currentTime > .08 && approx(audio.volume, .31) &&
-        approx(window.__vcNativeVolume.get.call(audio), .31 * attenuation), 5000);
-    audio.pause();
+    // Source reassignment can be checked even without a usable hardware
+    // output sink: require metadata, loaded decoded frames and fresh volume.
+    const changedSource = await waitFor(() =>
+        audio.currentSrc.includes("track=next") && audio.readyState >= 2 &&
+        !audio.error && approx(audio.volume, .31) &&
+        approx(window.__vcNativeVolume.get.call(audio), .31 * attenuation), 6000);
+    const decoderHealthy = pcmDecoded && !unexpectedMediaError &&
+        (outputStatus === "passed" || outputStatus === "unavailable-no-audio-sink");
     const realMedia = {
-        decoded, playing, scaled, nativeSlider, pausedSlider,
-        preservedSiteMute, changedSource,
-        readyState: audio.readyState, error: audio.error?.code || null,
-        source: audio.currentSrc, time: audio.currentTime
+        pcmDecoded, pcmFrames, pcmPeak, pcmError, loaded,
+        playing, outputStatus, outputError, scaled, nativeSlider,
+        pausedSlider, preservedSiteMute, changedSource, decoderHealthy,
+        readyState: audio.readyState,
+        error: audio.error && { code: audio.error.code, message: audio.error.message },
+        source: audio.currentSrc, time: audio.currentTime, networkState: audio.networkState
     };
+    audio.pause();
     const result = { preflightPatched, preflightMuted, preflightRestored,
         disabledRestored, reenabledPatched, realMedia };
     const pass = preflightPatched && preflightMuted && preflightRestored &&
         disabledRestored && reenabledPatched &&
         Object.entries(realMedia).filter(([key]) =>
-            ['decoded','playing','scaled','nativeSlider','pausedSlider',
-                'preservedSiteMute','changedSource'].includes(key))
+            ['pcmDecoded','loaded','scaled','nativeSlider','pausedSlider',
+                'preservedSiteMute','changedSource','decoderHealthy'].includes(key))
             .every(([, value]) => value === true);
     location.href = "http://127.0.0.1:${port}/result?pass=" + (pass ? "1" : "0") +
         "&detail=" + encodeURIComponent(JSON.stringify(result));
@@ -261,7 +318,7 @@ window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
 
     const timeout = setTimeout(() => {
         rejectResult(new Error('Firefox smoke timed out.\n' + stderr));
-    }, 30000);
+    }, 75000);
 
     const result = await resultPromise;
     clearTimeout(timeout);

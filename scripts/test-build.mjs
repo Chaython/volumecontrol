@@ -1823,16 +1823,21 @@ test('Firefox audio smoke waits for state transitions instead of fixed 60ms timi
     assert.doesNotMatch(source, /await sleep\(60\)/);
 });
 
-test('Firefox hook smoke decodes recorded audio and checks native player state', () => {
+test('Firefox hook smoke requires real MP3 PCM decode, native controls and honest sink status', () => {
     const source = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
     assert.match(source, /t-rex-roar\.mp3/);
     assert.match(source, /recordedMp3\.length < 1000/);
     assert.match(source, /'Content-Type': 'audio\/mpeg'/);
+    assert.match(source, /OfflineAudioContext\(1, 8192, 44100\)/);
+    assert.match(source, /offline\.decodeAudioData\(payload\)/);
+    assert.match(source, /pcmPeak > \.001/);
     assert.match(source, /audio\.readyState >= 2/);
     assert.match(source, /audio\.currentTime > \.08/);
     assert.match(source, /window\.__vcNativeVolume\.set\.call\(audio, \.5\)/);
     assert.match(source, /preservedSiteMute = audio\.muted === true/);
-    assert.match(source, /changedSource = replayed/);
+    assert.match(source, /changedSource = await waitFor/);
+    assert.match(source, /OnMediaSinkAudioError/);
+    assert.match(source, /'pcmDecoded','loaded','scaled','nativeSlider'/);
     assert.match(source, /const pass = preflightPatched && preflightMuted/);
 });
 
