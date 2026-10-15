@@ -1422,6 +1422,7 @@
             entry = {
                 baseVolume: readNativeVolume(element),
                 applyingVolume: false,
+                lastObservedNativeMuted: readNativeMuted(element),
                 listenersInstalled: false,
                 listenerCleanup: null,
                 streamBacked: isMediaStreamLike(readMediaSrcObject(element)),
@@ -2174,10 +2175,16 @@
             };
             const applyOnVolumeChange = () => {
                 const currentEntry = getMediaState(element);
-                // Ignore our own queued volumechange events regardless of
-                // their delivery delay. A DIFFERENT native value is a genuine
-                // page/native-controls adjustment, even within the first 100ms.
-                if (!adoptNativePlayerVolume(element, currentEntry)) return;
+                // volumechange also fires for media.muted transitions, even if
+                // media.volume did not change. Handle mute/unmute independently
+                // or a player's native mute button can leave route state stale.
+                const nativeMuted = readNativeMuted(element);
+                const muteChanged = nativeMuted !== currentEntry.lastObservedNativeMuted;
+                currentEntry.lastObservedNativeMuted = nativeMuted;
+                // Ignore our own queued volume writes, but allow native player
+                // volume and mute changes even immediately after our writes.
+                const volumeChanged = adoptNativePlayerVolume(element, currentEntry);
+                if (!volumeChanged && !muteChanged) return;
                 applyMediaElementState(element, { immediateFallback: true, eagerRoute: true });
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
