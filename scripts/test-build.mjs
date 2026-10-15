@@ -1061,6 +1061,38 @@ test('fallback routing preserves native site volume and invalidates new restrict
     assert.match(source, /invalidateBoostLimitCache\(\)/);
 });
 
+test('native player sliders retain fine steps while isolated fallback gain changes', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    assert.match(source, /const lastApplied = element\.__vc_lastAppliedVolume/);
+    assert.match(source, /Math\.abs\(currentVolume - lastApplied\) > 0\.000001/);
+    assert.match(source, /element\.__vc_lastAppliedVolume = newVol/);
+    assert.match(source, /delete element\.__vc_lastAppliedVolume/);
+    assert.doesNotMatch(source, /Math\.abs\(currentVolume - expectedScaled\) > 0\.05/);
+});
+
+test('MAIN-world volumechange adopts real browser-native slider edits', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function adoptNativePlayerVolume(element, entry) {');
+    const end = source.indexOf('    function getMediaState(element) {', start);
+    assert.ok(start >= 0 && end > start);
+    const adopt = runInNewContext('(function () {\n' + source.slice(start, end) +
+        '\nreturn adoptNativePlayerVolume;\n})()', {
+        readNativeVolume: element => element.actual
+    });
+    const entry = { baseVolume: 0.7, lastNativeVolume: 0.35 };
+    const player = { actual: 0.35 };
+    assert.equal(adopt(player, entry), false, 'extension volumechange is ignored');
+    assert.equal(entry.baseVolume, 0.7);
+    player.actual = 0.36;
+    assert.equal(adopt(player, entry), true, 'small native slider step is preserved');
+    assert.equal(entry.baseVolume, 0.36);
+    entry.lastNativeVolume = 0.18;
+    player.actual = 0.18;
+    assert.equal(adopt(player, entry), false, 'deferred own write must not alter base');
+    assert.equal(entry.baseVolume, 0.36);
+    assert.match(source, /if \(!adoptNativePlayerVolume\(element, currentEntry\)\) return/);
+});
+
 test('live exclusion restores isolated fallback state before teardown', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
     assert.match(source, /if \(blocked\) \{[\s\S]*lastSyncedPageAudioState = null;[\s\S]*applyState\(\);[\s\S]*stopPageBridgeTimers\(\)/);

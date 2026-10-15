@@ -887,11 +887,12 @@ function applyFallbackVolume(element, reason = "") {
             // Already in fallback mode. If the page changed element.volume out
             // from under us (e.g., the page's own volume slider), update
             // __vc_originalVolume to reflect the page's intent.
-            const origBase = element.__vc_originalVolume !== undefined
-                ? element.__vc_originalVolume
-                : currentVolume;
-            const expectedScaled = Math.min(1, Math.max(0, origBase * Math.min(gain, 1)));
-            if (Math.abs(currentVolume - expectedScaled) > 0.05) {
+            // Compare against OUR previous native write, not an estimate using
+            // the CURRENT extension gain. Comparing with the new gain mistook
+            // dB changes for site slider changes; the old 0.05 dead zone also
+            // swallowed small movements of native player controls.
+            const lastApplied = element.__vc_lastAppliedVolume;
+            if (Number.isFinite(lastApplied) && Math.abs(currentVolume - lastApplied) > 0.000001) {
                 element.__vc_originalVolume = currentVolume;
             }
         }
@@ -933,7 +934,10 @@ function applyFallbackVolume(element, reason = "") {
             ? element.__vc_originalVolume
             : (gain > 1 ? 1 : element.volume);
         const newVol = Math.min(1, Math.max(0, baseVolume * Math.min(gain, 1)));
+        // Save the value actually written so the next volumechange can tell a
+        // native player-slider gesture from our own fallback correction.
         element.volume = newVol;
+        element.__vc_lastAppliedVolume = newVol;
         if (tc.settings.debugMode) element.style.border = "2px dashed #ffa500";
     } catch (e) {
         log(`Fallback volume set failed: ${e && e.message}`, 2);
@@ -956,6 +960,7 @@ function clearFallbackVolume(element) {
     } catch (e) {}
 
     delete element.__vc_originalVolume;
+    delete element.__vc_lastAppliedVolume;
     delete element.dataset.vcFallback;
     delete element.dataset.vcFallbackReason;
     delete element.dataset.vcNativeMuted;
