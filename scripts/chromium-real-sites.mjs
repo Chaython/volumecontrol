@@ -408,6 +408,104 @@ try {
                     console.log('NATIVE_SLIDER_RESULT=' + JSON.stringify(entry));
                 }
             }
+            // Exercise real MediaStream audio captured from the downloaded MP4.
+            // Force the rarely encountered MediaElementSource rejection, so
+            // our direct MediaStreamSource fallback actually runs in Chromium.
+            // Inspect the real GainNode and native media volume instead of
+            // checking whether the popup merely reports the requested dB.
+            if (downloaded.some(x => x.path === '/video.mp4')) {
+                const entry = { site: 'Decoded MP4 MediaStream direct capture and native player volume',
+                    status: 'inconclusive' };
+                results.push(entry);
+                const streamState = '(()=>{const p=document.getElementById("stream-receiver");' +
+                    'const g=window.__vcStreamGains?.[window.__vcFirstStreamGain];' +
+                    'if(!p)return null;const d=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,"volume");' +
+                    'return {time:p.currentTime,paused:p.paused,ready:p.readyState,' +
+                    'siteVolume:p.volume,nativeVolume:d.get.call(p),muted:p.muted,' +
+                    'gain:g?.gain?.value??null}})()';
+                const approx = (x,y) => Number.isFinite(x) && Math.abs(x-y) < .04;
+                try {
+                    await send({ command: 'setNormalizer', enabled: false });
+                    await send({ command: 'setVolume', dB: 6 });
+                    await cdp.evaluate(fixtureSession, '(()=>{' +
+                        'const src=document.createElement("video");src.id="stream-source";' +
+                        'src.muted=true;src.loop=true;src.src="/video.mp4?stream-source";' +
+                        'src.preload="auto";document.body.appendChild(src);' +
+                        'src.play()?.catch?.(()=>{});return true})()');
+                    await waitFor(async () => {
+                        const v=await cdp.evaluate(fixtureSession,
+                            '(()=>{const m=document.getElementById("stream-source");' +
+                            'return {ready:m.readyState,paused:m.paused,t:m.currentTime,' +
+                            'capture:typeof m.captureStream==="function"}})()');
+                        return v.ready >= 2 && !v.paused && v.capture ? v : null;
+                    },12000);
+                    const capture = await cdp.evaluate(fixtureSession, '(()=>{' +
+                        'const src=document.getElementById("stream-source");' +
+                        'window.__vcCapturedMedia=src.captureStream();' +
+                        'return {audio:window.__vcCapturedMedia.getAudioTracks().length,' +
+                        'video:window.__vcCapturedMedia.getVideoTracks().length}})()');
+                    entry.capture = capture;
+                    if (!capture.audio) {
+                        entry.reason = 'Chromium did not expose an audio track in the MP4 captureStream';
+                    } else {
+                        await cdp.evaluate(fixtureSession, '(()=>{' +
+                            'const p=AudioContext.prototype;' +
+                            'const originalSource=p.createMediaElementSource;' +
+                            'const originalGain=p.createGain;' +
+                            'window.__vcStreamGains=[];' +
+                            'window.__vcStreamRestore=()=>{' +
+                            'p.createMediaElementSource=originalSource;p.createGain=originalGain};' +
+                            'p.createMediaElementSource=function(el){' +
+                            'if(el.id==="stream-receiver")throw new DOMException("Forced unsupported media element","NotSupportedError");' +
+                            'return originalSource.call(this,el)};' +
+                            'p.createGain=function(...args){const node=originalGain.apply(this,args);' +
+                            'window.__vcStreamGains.push(node);return node};' +
+                            'window.__vcFirstStreamGain=window.__vcStreamGains.length;' +
+                            'const m=document.createElement("audio");m.id="stream-receiver";' +
+                            'm.controls=true;m.volume=.45;m.srcObject=window.__vcCapturedMedia;' +
+                            'document.body.appendChild(m);m.play()?.catch?.(()=>{});return true})()');
+                        const routed = await waitFor(async () => {
+                            const s=await cdp.evaluate(fixtureSession,streamState);
+                            return s && s.ready >= 2 && !s.paused &&
+                                approx(s.siteVolume,.45) && approx(s.nativeVolume,0) &&
+                                approx(s.gain,.45 * 10 ** (6/20)) ? s : null;
+                        },5000);
+                        await cdp.evaluate(fixtureSession,
+                            'document.getElementById("stream-receiver").volume=.2;true');
+                        const lowered=await waitFor(async () => {
+                            const s=await cdp.evaluate(fixtureSession,streamState);
+                            return s && approx(s.siteVolume,.2) && approx(s.nativeVolume,0) &&
+                                approx(s.gain,.2 * 10 ** (6/20)) ? s : null;
+                        },2500);
+                        await cdp.evaluate(fixtureSession,
+                            'document.getElementById("stream-receiver").muted=true;true');
+                        const muted=await waitFor(async () => {
+                            const s=await cdp.evaluate(fixtureSession,streamState);
+                            return s && s.muted && approx(s.gain,0) ? s : null;
+                        },2500);
+                        await cdp.evaluate(fixtureSession,
+                            'document.getElementById("stream-receiver").muted=false;true');
+                        const unmuted=await waitFor(async () => {
+                            const s=await cdp.evaluate(fixtureSession,streamState);
+                            return s && !s.muted && approx(s.gain,.2 * 10 ** (6/20)) ? s : null;
+                        },2500);
+                        entry.routed=routed;entry.lowered=lowered;
+                        entry.muted=muted;entry.unmuted=unmuted;
+                        entry.status=unmuted.time > routed.time + .1 ? 'passed' : 'failed';
+                        if(entry.status==='failed')entry.reason='Captured stream stopped decoding';
+                    }
+                } catch(error) {
+                    entry.status = 'failed';entry.reason=error.message;
+                } finally {
+                    await cdp.evaluate(fixtureSession, '(()=>{' +
+                        'for(const id of ["stream-source","stream-receiver"]){' +
+                        'const m=document.getElementById(id);if(m){m.pause();m.remove()}}' +
+                        'window.__vcStreamRestore?.();' +
+                        'window.__vcCapturedMedia?.getTracks().forEach(t=>t.stop());return true})()').catch(()=>{});
+                    await send({ command: 'setVolume', dB: 0 }).catch(()=>{});
+                    console.log('DIRECT_STREAM_RESULT=' + JSON.stringify(entry));
+                }
+            }
             // Play two real compressed sources together, and change
             // normalization while both are actively decoding.
             if (downloaded.some(x => x.path === '/audio.mp3') &&
