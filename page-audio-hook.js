@@ -2510,7 +2510,11 @@
         entry.streamBacked = isMediaStreamLike(stream);
         if (!entry.streamBacked || typeof stream.addEventListener !== "function") return;
 
-        const refresh = () => {
+        const refresh = (event) => {
+            // Webcam video track switches do not change the captured audio.
+            // Rebuilding the audio graph on every video-only add/removetrack
+            // causes unnecessary call-audio gaps and device wake-ups.
+            if (event && event.track && event.track.kind !== "audio") return;
             resetDirectMediaStreamRoute(element);
             entry.streamBacked = isMediaStreamLike(readMediaSrcObject(element));
             registerMediaElement(element, { immediateFallback: true, eagerRoute: true });
