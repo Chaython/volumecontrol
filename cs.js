@@ -917,33 +917,14 @@ function applyFallbackVolume(element, reason = "") {
     }
 
     try {
-        // Native mute: when the extension is muted, set element.muted = true
-        // so the browser can release the OS audio device handle (important for
-        // Bluetooth headphones that stay active while a media element plays).
-        // We still restore __vc_originalVolume below so unmuting is clean.
-        if (tc.vars.muted) {
-            // Only claim ownership when we actually change the native mute.
-            // A site-muted element must stay muted when Volume Control unmutes.
-            if (!element.muted) {
-                // The site may have cleared native .muted while our mute
-                // flag was already set. Reassert it: ownership does not
-                // guarantee the physical media element is still muted.
-                // Never claim ownership if the site itself was already muted.
-                element.muted = true;
-                element.dataset.vcNativeMuted = 'true';
-            }
-            if (tc.settings.debugMode) element.style.border = "2px dashed #ffa500";
-            return;
-        }
-        // Unmute ONLY a native mute WE applied. Blanket-unmuting any muted
-        // element overrode the SITE's own mute (muted autoplay ads, the site's
-        // mute button): our fallback loop has no isAudible gate, so with
-        // attenuation active a site-muted element was force-unmuted.
-        if (element.dataset.vcNativeMuted === 'true') {
-            element.muted = false;
-            delete element.dataset.vcNativeMuted;
-        }
-
+        // The isolated fallback cannot intercept the page's own muted setter.
+        // Writing element.muted here loses the distinction between a site mute
+        // and an extension mute: unmuting the extension could then unmute a
+        // site-muted ad or player. Apply extension mute as native volume=0,
+        // preserve the site-owned .muted flag, and restore its slider level
+        // from __vc_originalVolume when the extension is unmuted.
+        // This rare DRM/CORS fallback cannot release the OS audio handle by
+        // muting natively, but it must never change the page's mute intent.
         const baseVolume = element.__vc_originalVolume !== undefined
             ? element.__vc_originalVolume
             : (gain > 1 ? 1 : element.volume);
@@ -978,12 +959,9 @@ function clearFallbackVolume(element) {
                 element.volume = element.__vc_originalVolume;
             }
         }
-        // Clear any native mute WE applied while in fallback mode (only ours —
-        // never the site's own muted element; see applyFallbackVolume).
-        if (element.dataset.vcNativeMuted === 'true') {
-            element.muted = false;
-            delete element.dataset.vcNativeMuted;
-        }
+        // Extension muting uses volume=0, so there is no native mute flag to
+        // undo. Never set element.muted=false on teardown: it might now be a
+        // site-owned mute that the extension did not observe.
     } catch (e) {}
 
     delete element.__vc_originalVolume;

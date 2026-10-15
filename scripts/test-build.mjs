@@ -1755,46 +1755,55 @@ test('access-list changes clear stale toolbar feedback', () => {
 });
 
 
-test('fallback mute never claims a site-owned native mute', () => {
-    const source = readFileSync(join(root, 'cs.js'), 'utf8');
-    assert.match(source, /if \(!element\.muted\) \{/);
-    assert.match(source, /if \(element\.dataset\.vcNativeMuted === 'true'\) \{/);
-});
-
-test('isolated fallback reasserts extension mute after a page unmute', () => {
+test('isolated fallback mute uses zero native volume without changing site mute state', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
     const start = source.indexOf('function applyFallbackVolume(element, reason = "") {');
     const end = source.indexOf('function clearFallbackVolume(element) {', start);
-    assert.ok(start >= 0 && end > start);
+    const cleanupEnd = source.indexOf('// Track the last state sent to the page-audio hook', end);
+    assert.ok(start >= 0 && end > start && cleanupEnd > end);
     const vars = { muted: true, dB: -12 };
-    const apply = runInNewContext('(' + source.slice(start,end).trim() + ')', {
+    const sandbox = {
         tc: { vars, settings: { debugMode: false } },
-        getGainValue: dB => 10 ** (dB/20),
+        getGainValue: dB => 10 ** (dB / 20),
         isProbablyProtectedMedia: () => false,
         invalidateBoostLimitCache: () => {},
         log: () => {}
+    };
+    const funcs = runInNewContext('(function () {\n' +
+        source.slice(start, cleanupEnd) +
+        '\nreturn { applyFallbackVolume, clearFallbackVolume };\n})()', sandbox);
+    const media = siteMuted => ({
+        muted: siteMuted, volume: .8, dataset: {}, style: {}
     });
-    const element = (muted = false) => ({
-        muted, volume: .8, dataset: {}, style: {}
-    });
-    const siteMuted = element(true);
-    apply(siteMuted);
-    assert.equal(siteMuted.muted, true);
-    assert.equal(siteMuted.dataset.vcNativeMuted, undefined,
-        'never claim ownership of a player that was already muted');
-    const originallyAudible = element(false);
-    apply(originallyAudible);
-    assert.equal(originallyAudible.muted, true);
-    assert.equal(originallyAudible.dataset.vcNativeMuted, 'true');
-    originallyAudible.muted = false; // site changes mute while extension mute stays ON
-    apply(originallyAudible);
-    assert.equal(originallyAudible.muted, true,
-        'a stale ownership marker must not prevent enforcing current mute');
+    const originalSiteMute = media(true);
+    funcs.applyFallbackVolume(originalSiteMute);
+    assert.equal(originalSiteMute.muted, true);
+    assert.equal(originalSiteMute.volume, 0, 'extension mute silences native media');
+    assert.equal(originalSiteMute.dataset.vcNativeMuted, undefined,
+        'extension must not claim native mute ownership');
+
+    // Native player mute can change independently while the extension is
+    // muted; releasing extension mute must preserve the site's last choice.
+    const player = media(false);
+    funcs.applyFallbackVolume(player);
+    assert.equal(player.muted, false);
+    assert.equal(player.volume, 0);
+    player.muted = true;   // site mutes while extension remains muted
+    funcs.applyFallbackVolume(player);
     vars.muted = false;
-    apply(originallyAudible);
-    assert.equal(originallyAudible.muted, false,
-        'removing the extension mute should release its own native mute');
-    assert.equal(originallyAudible.dataset.vcNativeMuted, undefined);
+    funcs.applyFallbackVolume(player);
+    assert.equal(player.muted, true, 'extension unmute must preserve site mute');
+    assert.ok(Math.abs(player.volume - .8 * 10 ** (-12/20)) < 1e-6);
+    player.muted = false;
+    funcs.applyFallbackVolume(player);
+    assert.equal(player.muted, false, 'site can unmute freely');
+    vars.muted = true;
+    funcs.applyFallbackVolume(player);
+    player.muted = true;
+    funcs.clearFallbackVolume(player);
+    assert.equal(player.muted, true, 'cleanup must not unmute the site');
+    assert.equal(player.volume, .8);
+    assert.equal(player.dataset.vcFallback, undefined);
 });
 
 test('Chromium smoke retries only an actual startup timeout with separate profiles', () => {
@@ -1812,6 +1821,19 @@ test('Firefox audio smoke waits for state transitions instead of fixed 60ms timi
     assert.match(source, /disabledRestored = await waitFor/);
     assert.match(source, /reenabledPatched = await waitFor/);
     assert.doesNotMatch(source, /await sleep\(60\)/);
+});
+
+test('Firefox hook smoke decodes recorded audio and checks native player state', () => {
+    const source = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
+    assert.match(source, /t-rex-roar\.mp3/);
+    assert.match(source, /recordedMp3\.length < 1000/);
+    assert.match(source, /'Content-Type': 'audio\/mpeg'/);
+    assert.match(source, /audio\.readyState >= 2/);
+    assert.match(source, /audio\.currentTime > \.08/);
+    assert.match(source, /window\.__vcNativeVolume\.set\.call\(audio, \.5\)/);
+    assert.match(source, /preservedSiteMute = audio\.muted === true/);
+    assert.match(source, /changedSource = replayed/);
+    assert.match(source, /const pass = preflightPatched && preflightMuted/);
 });
 
 test('Firefox audio hook smoke uses an HTTP origin for bridge messages', () => {
