@@ -1387,9 +1387,11 @@
 
     function setNativeVolume(element, value) {
         const entry = getMediaState(element);
+        // An unchanged write can fire redundant player events and occasionally
+        // cause third-party volume managers to fight the extension.
+        entry.lastNativeVolume = value; // last extension-owned native write
+        if (Math.abs(readNativeVolume(element) - value) <= 0.000001) return;
         entry.applyingVolume = true;
-        entry.ignoreVolumeEventsUntil = Date.now() + 100;
-        entry.lastNativeVolume = value; // remember what we wrote (see applyOnVolumeChange)
         try {
             if (nativeVolumeDescriptor && nativeVolumeDescriptor.set) {
                 nativeVolumeDescriptor.set.call(element, value);
@@ -1401,13 +1403,25 @@
         }
     }
 
+    // Browser-provided video controls and isolated-world scripts can change the
+    // underlying native volume WITHOUT going through patchedVolumeSetter.
+    // Treat that real change as the player's chosen base instead of snapping
+    // the slider back to an outdated extension-stored base on volumechange.
+    function adoptNativePlayerVolume(element, entry) {
+        const actual = readNativeVolume(element);
+        if (!Number.isFinite(actual) || actual < 0 || actual > 1) return false;
+        if (Number.isFinite(entry.lastNativeVolume) &&
+            Math.abs(actual - entry.lastNativeVolume) <= 0.000001) return false;
+        entry.baseVolume = actual;
+        return true;
+    }
+
     function getMediaState(element) {
         let entry = mediaState.get(element);
         if (!entry) {
             entry = {
                 baseVolume: readNativeVolume(element),
                 applyingVolume: false,
-                ignoreVolumeEventsUntil: 0,
                 listenersInstalled: false,
                 listenerCleanup: null,
                 streamBacked: isMediaStreamLike(readMediaSrcObject(element)),
@@ -2160,13 +2174,10 @@
             };
             const applyOnVolumeChange = () => {
                 const currentEntry = getMediaState(element);
-                if (currentEntry.ignoreVolumeEventsUntil > Date.now()) {
-                    if (currentEntry.lastNativeVolume === undefined ||
-                        currentEntry.lastNativeVolume === readNativeVolume(element)) {
-                        return;
-                    }
-                }
-
+                // Ignore our own queued volumechange events regardless of
+                // their delivery delay. A DIFFERENT native value is a genuine
+                // page/native-controls adjustment, even within the first 100ms.
+                if (!adoptNativePlayerVolume(element, currentEntry)) return;
                 applyMediaElementState(element, { immediateFallback: true, eagerRoute: true });
                 setTimeout(suspendMediaContextIfIdle, 250);
             };
