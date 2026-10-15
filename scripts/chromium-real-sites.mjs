@@ -517,8 +517,31 @@ try {
                         },2500);
                         entry.routed=routed;entry.lowered=lowered;
                         entry.muted=muted;entry.unmuted=unmuted;
-                        entry.status=unmuted.time > routed.time + .1 ? 'passed' : 'failed';
-                        if(entry.status==='failed')entry.reason='Captured stream stopped decoding';
+                        // Disable only this site (the same operation as the
+                        // popup Active toggle), without reloading the player.
+                        // A direct-stream fallback must restore the native
+                        // HTMLMediaElement output, or call audio goes silent.
+                        const setActive = active => cdp.evaluate(optionsSession,
+                            'new Promise((ok,fail)=>chrome.runtime.sendMessage(' +
+                            JSON.stringify({ command:'mutateAccessLists', mutation: {
+                                type:'setSiteActive',url:localPage,active
+                            } }) + ',x=>chrome.runtime.lastError?' +
+                            'fail(Error(chrome.runtime.lastError.message)):ok(x)))');
+                        try {
+                            const blocked = await setActive(false);
+                            if (!blocked?.ok) throw Error('Site disable failed: ' + JSON.stringify(blocked));
+                            entry.disabled = await waitFor(async () => {
+                                const snap = await streamSnapshot();
+                                return snap && approx(snap.nativeVolume,.2) &&
+                                    snap.siteVolume === .2 ? snap : null;
+                            },6000);
+                        } finally {
+                            const restored = await setActive(true);
+                            if (!restored?.ok) throw Error('Site re-enable failed: ' + JSON.stringify(restored));
+                        }
+                        entry.status = unmuted.time > routed.time + .1 &&
+                            entry.disabled?.nativeVolume > .15 ? 'passed' : 'failed';
+                        if(entry.status==='failed')entry.reason='Direct MediaStream route failed to restore native controls';
                     }
                 } catch(error) {
                     entry.status = 'failed';entry.reason=error.message;
@@ -528,6 +551,12 @@ try {
                         'const m=document.getElementById(id);if(m){m.pause();m.remove()}}' +
                         'window.__vcStreamRestore?.();' +
                         'window.__vcCapturedMedia?.getTracks().forEach(t=>t.stop());return true})()').catch(()=>{});
+                    await cdp.evaluate(optionsSession,
+                        'new Promise((ok,fail)=>chrome.runtime.sendMessage(' +
+                        JSON.stringify({command:'mutateAccessLists', mutation:{
+                            type:'setSiteActive',url:localPage,active:true
+                        }}) + ',x=>chrome.runtime.lastError?' +
+                        'fail(Error(chrome.runtime.lastError.message)):ok(x)))').catch(()=>{});
                     await send({ command: 'setVolume', dB: 0 }).catch(()=>{});
                     console.log('DIRECT_STREAM_RESULT=' + JSON.stringify(entry));
                 }
@@ -878,6 +907,8 @@ try {
     const required = [
         'Downloaded real audio',
         'Downloaded real video',
+        'Real MP4 native slider, pause, boost and mute',
+        'Decoded MP4 MediaStream direct capture and native player volume',
         'Concurrent decoded MP3 and MP4',
         'Real MP4 same-element playlist transition'
     ];
