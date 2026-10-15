@@ -1250,7 +1250,7 @@ test('WebRTC stream already attached before hooks receives lifecycle listeners o
         '\nreturn registerMediaElement;\n})()', {
         isMediaElement: () => true,
         mediaElements: new Set(),
-        updatePageMediaRestriction: () => {},
+        updatePageMediaRestriction: () => {}, log: () => {},
         getMediaState: () => entry,
         readMediaSrcObject: element => element.stream,
         resetDirectMediaStreamRoute: () => { resets++; },
@@ -2483,7 +2483,7 @@ test('reused media source resets stale automatic gain before next track and fail
     let manual = 1;
     let disconnected = false;
     const reset = runInNewContext('(' + page.slice(start, end).trim() + ')', {
-        effectiveGain: () => manual,
+        effectiveGain: () => manual, mediaSourceGain: () => 1,
         dbToGain: db => 10 ** (db / 20),
         state: { normalizerEnabled: true },
         disconnectMediaRouteOutput: route => { disconnected = true; route.outputConnected = false; },
