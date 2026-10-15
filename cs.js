@@ -949,7 +949,20 @@ function clearFallbackVolume(element) {
 
     try {
         if (element.__vc_originalVolume !== undefined) {
-            element.volume = element.__vc_originalVolume;
+            const currentVolume = element.volume;
+            const lastApplied = element.__vc_lastAppliedVolume;
+            // A paused, muted, or disconnected player can change its native
+            // volume without our playback handler running. Do not overwrite
+            // that newer player choice with an old fallback snapshot when the
+            // user resets to 0 dB or disables the extension.
+            if (Number.isFinite(currentVolume) &&
+                (!Number.isFinite(lastApplied) ||
+                    Math.abs(currentVolume - lastApplied) > 0.000001)) {
+                element.__vc_originalVolume = currentVolume;
+            }
+            if (Math.abs(element.volume - element.__vc_originalVolume) > 0.000001) {
+                element.volume = element.__vc_originalVolume;
+            }
         }
         // Clear any native mute WE applied while in fallback mode (only ours —
         // never the site's own muted element; see applyFallbackVolume).
