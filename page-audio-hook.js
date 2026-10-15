@@ -2083,6 +2083,7 @@
             entry.streamCleanup = null;
         }
         entry.streamBacked = false;
+        entry.observedStream = null;
     }
 
     function cleanupTrackedMediaElement(element) {
@@ -2164,6 +2165,13 @@
         mediaElements.add(element);
         updatePageMediaRestriction();
         const entry = getMediaState(element);
+        // A stream can be attached before page hooks are installed or
+        // replaced through a saved native setter. Bind lifecycle on discovery.
+        const currentStream = readMediaSrcObject(element);
+        if (entry.observedStream !== currentStream) {
+            if (entry.observedStream !== undefined) resetDirectMediaStreamRoute(element);
+            bindMediaStreamLifecycle(element, currentStream);
+        }
         // DOM reinsertion or patched play() can register an element before the
         // detached wake fires. Remove that obsolete one-shot listener.
         if (entry.detachedPlayWake) {
@@ -2507,6 +2515,7 @@
             entry.streamCleanup = null;
         }
 
+        entry.observedStream = stream;
         entry.streamBacked = isMediaStreamLike(stream);
         if (!entry.streamBacked || typeof stream.addEventListener !== "function") return;
 
