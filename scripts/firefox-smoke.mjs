@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -31,6 +31,13 @@ if (!browser) {
 
 const work = mkdtempSync(join(tmpdir(), 'volume-control-firefox-'));
 const profile = join(work, 'profile');
+// Headless playback should not silently fail solely because no physical
+// input gesture occurred. Real browser decoding remains required.
+mkdirSync(profile, { recursive: true });
+writeFileSync(join(profile, 'user.js'),
+    'user_pref("media.autoplay.default", 0);\n' +
+    'user_pref("media.autoplay.blocking_policy", 0);\n' +
+    'user_pref("media.block-autoplay-until-in-foreground", false);\n');
 let child = null;
 let server = null;
 
@@ -42,6 +49,17 @@ try {
         rejectResult = rejectPromise;
     });
 
+    // Use a real compressed MP3, not a synthetic WebAudio oscillator. An
+    // invalid download should fail the probe rather than falsely pass without
+    // decoded playback. Firefox serves it from localhost for repeatability.
+    const recordingUrl = 'https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3';
+    const recordingResponse = await fetch(recordingUrl, { signal: AbortSignal.timeout(18000) });
+    if (!recordingResponse.ok) throw new Error('Firefox MP3 fixture HTTP ' + recordingResponse.status);
+    const recordedMp3 = Buffer.from(await recordingResponse.arrayBuffer());
+    if (recordedMp3.length < 1000 || recordedMp3.length > 1_000_000)
+        throw new Error('Firefox MP3 fixture invalid length ' + recordedMp3.length);
+    console.log('Firefox real MP3 fixture downloaded: ' + recordedMp3.length + ' bytes');
+
     server = createServer((req, res) => {
         const url = new URL(req.url || '/', 'http://127.0.0.1');
         if (url.pathname === '/result') {
@@ -50,6 +68,19 @@ try {
             res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
             res.end('ok');
             resolveResult({ pass, detail });
+            return;
+        }
+        if (url.pathname === '/real-recording.mp3') {
+            const range = /^bytes=(\d+)-(\d*)/.exec(req.headers.range || '');
+            const from = range ? Math.min(recordedMp3.length - 1, Number(range[1])) : 0;
+            const to = range && range[2] ? Math.min(recordedMp3.length - 1, Number(range[2])) :
+                recordedMp3.length - 1;
+            res.writeHead(range ? 206 : 200, {
+                'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store',
+                'Accept-Ranges': 'bytes', 'Content-Length': to - from + 1,
+                ...(range ? { 'Content-Range': 'bytes ' + from + '-' + to + '/' + recordedMp3.length } : {})
+            });
+            res.end(recordedMp3.subarray(from, to + 1));
             return;
         }
         if (url.pathname === '/') {
@@ -140,8 +171,67 @@ window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
     }, "*");
     const reenabledPatched = await waitFor(() =>
         AudioNode.prototype.connect !== window.__vcNativeConnect);
-    const result = { preflightPatched, preflightMuted, preflightRestored, disabledRestored, reenabledPatched };
-    const pass = Object.values(result).every(Boolean);
+    const audio = document.createElement("audio");
+    audio.id = "real-recording";
+    audio.controls = true;
+    audio.loop = true;
+    audio.preload = "auto";
+    audio.volume = .72;
+    audio.src = "/real-recording.mp3";
+    document.body.appendChild(audio);
+    const approx = (value, target) => Number.isFinite(value) && Math.abs(value - target) < .018;
+    const attenuation = 10 ** (-6 / 20);
+    const decoded = await waitFor(() => audio.readyState >= 2 && !audio.error, 7000);
+    const played = decoded && await audio.play().then(() => true, () => false);
+    const playing = played && await waitFor(() => !audio.paused && audio.currentTime > .08, 4000);
+    const scaled = await waitFor(() => approx(audio.volume, .72) &&
+        approx(window.__vcNativeVolume.get.call(audio), .72 * attenuation), 2000);
+    // Native media controls and isolated-world writers bypass the page setter.
+    // Exercise that actual browser boundary instead of only the JS setter.
+    window.__vcNativeVolume.set.call(audio, .5);
+    const nativeSlider = await waitFor(() => approx(audio.volume, .5) &&
+        approx(window.__vcNativeVolume.get.call(audio), .5 * attenuation), 2000);
+    audio.pause();
+    audio.volume = .31;
+    const pausedSlider = await waitFor(() => approx(audio.volume, .31) &&
+        approx(window.__vcNativeVolume.get.call(audio), .31 * attenuation), 2000);
+    // A website can mute WHILE Volume Control is muted; releasing extension
+    // mute must not clear the website's independent mute.
+    const sendState = muted => window.postMessage({
+        source: "volume-control-extension", target: "volume-control-page-audio",
+        token, command: "setState", version: 3, enabled: true, dB: -6,
+        mono: false, muted, debugMode: false, forceDrmCapture: false,
+        forceCorsCapture: false, debugRouteMode: "auto"
+    }, "*");
+    sendState(true);
+    await sleep(70);
+    audio.muted = true;
+    sendState(false);
+    await sleep(70);
+    const preservedSiteMute = audio.muted === true;
+    audio.muted = false;
+    audio.src = "/real-recording.mp3?track=next";
+    audio.load();
+    const replayed = await audio.play().then(() => true, () => false);
+    const changedSource = replayed && await waitFor(() =>
+        audio.currentSrc.includes("track=next") && !audio.paused &&
+        audio.currentTime > .08 && approx(audio.volume, .31) &&
+        approx(window.__vcNativeVolume.get.call(audio), .31 * attenuation), 5000);
+    audio.pause();
+    const realMedia = {
+        decoded, playing, scaled, nativeSlider, pausedSlider,
+        preservedSiteMute, changedSource,
+        readyState: audio.readyState, error: audio.error?.code || null,
+        source: audio.currentSrc, time: audio.currentTime
+    };
+    const result = { preflightPatched, preflightMuted, preflightRestored,
+        disabledRestored, reenabledPatched, realMedia };
+    const pass = preflightPatched && preflightMuted && preflightRestored &&
+        disabledRestored && reenabledPatched &&
+        Object.entries(realMedia).filter(([key]) =>
+            ['decoded','playing','scaled','nativeSlider','pausedSlider',
+                'preservedSiteMute','changedSource'].includes(key))
+            .every(([, value]) => value === true);
     location.href = "http://127.0.0.1:${port}/result?pass=" + (pass ? "1" : "0") +
         "&detail=" + encodeURIComponent(JSON.stringify(result));
 })();
@@ -176,7 +266,7 @@ window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
     const result = await resultPromise;
     clearTimeout(timeout);
     if (!result.pass) throw new Error('Firefox smoke failed: ' + result.detail);
-    console.log('Firefox smoke passed: preflight mute, exclusion teardown, and re-enable.');
+    console.log('Firefox smoke passed: preflight, exclusion, and decoded MP3 native slider/mute/source-transition checks: ' + result.detail);
 } finally {
     if (child && child.exitCode === null) {
         try { child.kill(); } catch (e) {}
