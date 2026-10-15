@@ -191,8 +191,14 @@ window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
     document.body.appendChild(audio);
     const approx = (value, target) => Number.isFinite(value) && Math.abs(value - target) < .018;
     const attenuation = 10 ** (-6 / 20);
+    // Firefox may leave play() pending indefinitely when its decoder cannot
+    // start. A timed, explicit failure is more diagnostic than hanging CI.
+    const boundedPlay = element => Promise.race([
+        element.play().then(() => true, () => false),
+        sleep(5000).then(() => false)
+    ]);
     const decoded = await waitFor(() => audio.readyState >= 2 && !audio.error, 7000);
-    const played = decoded && await audio.play().then(() => true, () => false);
+    const played = decoded && await boundedPlay(audio);
     const playing = played && await waitFor(() => !audio.paused && audio.currentTime > .08, 4000);
     const scaled = await waitFor(() => approx(audio.volume, .72) &&
         approx(window.__vcNativeVolume.get.call(audio), .72 * attenuation), 2000);
@@ -222,7 +228,7 @@ window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
     audio.muted = false;
     audio.src = "/real-recording.mp3?track=next";
     audio.load();
-    const replayed = await audio.play().then(() => true, () => false);
+    const replayed = await boundedPlay(audio);
     const changedSource = replayed && await waitFor(() =>
         audio.currentSrc.includes("track=next") && !audio.paused &&
         audio.currentTime > .28 && !audio.error &&
@@ -281,7 +287,7 @@ window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
 
     const timeout = setTimeout(() => {
         rejectResult(new Error('Firefox smoke timed out.\n' + stderr));
-    }, 30000);
+    }, 75000);
 
     const result = await resultPromise;
     clearTimeout(timeout);
