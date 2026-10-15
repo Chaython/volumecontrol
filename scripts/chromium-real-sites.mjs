@@ -377,6 +377,19 @@ try {
                         const v = await nativeSnapshot();
                         return closeTo(v.site,.71) && closeTo(v.physical,.71*attenuation) ? v : null;
                     }, 2500);
+                    // Browser-native volume controls do NOT go through the
+                    // MAIN-world patched setter. Simulate that exact boundary
+                    // from Chromium's isolated world, as native video controls
+                    // do, then verify the page hook adopts and attenuates it.
+                    const nativeSlider = await cdp.send('Runtime.evaluate', {
+                        expression: 'document.getElementById("native-player").volume=.5',
+                        contextId: nativeContextId, returnByValue: true
+                    }, fixtureSession);
+                    if (nativeSlider.exceptionDetails) throw Error('Native volume slider failed');
+                    const browserSlider = await waitFor(async () => {
+                        const v = await nativeSnapshot();
+                        return closeTo(v.site,.5) && closeTo(v.physical,.5*attenuation) ? v : null;
+                    },2500);
                     await cdp.evaluate(fixtureSession,
                         '(()=>{const m=document.getElementById("native-player");' +
                         'm.pause();m.volume=.34;return true})()');
@@ -409,7 +422,7 @@ try {
                     await sleep(350);
                     const unmuted = await nativeSnapshot();
                     entry.playing = playing; entry.down = down; entry.fineStep = fineStep;
-                    entry.pausedStep = pausedStep; entry.restored = restored;
+                    entry.browserSlider = browserSlider; entry.pausedStep = pausedStep; entry.restored = restored;
                     entry.boosted = boosted; entry.siteMuted = siteMuted;
                     entry.extensionMuted = extensionMuted?.muted; entry.unmuted = unmuted;
                     entry.status = closeTo(boosted.site,.34) && closeTo(boosted.physical,.34) &&
