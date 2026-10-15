@@ -1203,6 +1203,42 @@ test('WebRTC video-only track changes do not drop audio but audio swaps refresh 
     assert.equal(events.addtrack, undefined, 'listeners are cleaned up');
 });
 
+test('WebRTC stream already attached before hooks receives lifecycle listeners on discovery', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const begin = source.indexOf('    function registerMediaElement(element, options = {}) {');
+    const end = source.indexOf('    function scanMediaElements(root) {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    const first = { id: 'first' }, second = { id: 'second' };
+    const media = { stream: first, dataset: {}, addEventListener() {}, removeEventListener() {} };
+    const entry = { listenersInstalled: true };
+    let bindings = 0, resets = 0, registrations = 0;
+    const register = runInNewContext('(function () {\n' +
+        source.slice(begin, end) +
+        '\nreturn registerMediaElement;\n})()', {
+        isMediaElement: () => true,
+        mediaElements: new Set(),
+        updatePageMediaRestriction: () => {},
+        getMediaState: () => entry,
+        readMediaSrcObject: element => element.stream,
+        resetDirectMediaStreamRoute: () => { resets++; },
+        bindMediaStreamLifecycle: (_element, stream) => {
+            entry.observedStream = stream;
+            bindings++;
+        },
+        applyMediaElementState: () => { registrations++; }
+    });
+    register(media);
+    assert.equal(bindings, 1, 'pre-existing stream gets its lifecycle binding');
+    assert.equal(resets, 0);
+    register(media);
+    assert.equal(bindings, 1, 'repeat scans cannot duplicate stream listeners');
+    media.stream = second;
+    register(media);
+    assert.equal(bindings, 2, 'native setter bypass must refresh stream listeners');
+    assert.equal(resets, 1, 'old stream route must be detached once');
+    assert.equal(registrations, 3);
+});
+
 test('MAIN hook preflights early WebAudio but restores page APIs on exclusion', () => {
     const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     assert.match(source, /patchAudioNodeRouting\(\);\s*\n\s*try \{/);
