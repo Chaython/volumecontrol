@@ -1757,8 +1757,44 @@ test('access-list changes clear stale toolbar feedback', () => {
 
 test('fallback mute never claims a site-owned native mute', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
-    assert.match(source, /element\.dataset\.vcNativeMuted !== 'true' && !element\.muted/);
+    assert.match(source, /if \(!element\.muted\) \{/);
     assert.match(source, /if \(element\.dataset\.vcNativeMuted === 'true'\) \{/);
+});
+
+test('isolated fallback reasserts extension mute after a page unmute', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function applyFallbackVolume(element, reason = "") {');
+    const end = source.indexOf('function clearFallbackVolume(element) {', start);
+    assert.ok(start >= 0 && end > start);
+    const vars = { muted: true, dB: -12 };
+    const apply = runInNewContext('(' + source.slice(start,end).trim() + ')', {
+        tc: { vars, settings: { debugMode: false } },
+        getGainValue: dB => 10 ** (dB/20),
+        isProbablyProtectedMedia: () => false,
+        invalidateBoostLimitCache: () => {},
+        log: () => {}
+    });
+    const element = (muted = false) => ({
+        muted, volume: .8, dataset: {}, style: {}
+    });
+    const siteMuted = element(true);
+    apply(siteMuted);
+    assert.equal(siteMuted.muted, true);
+    assert.equal(siteMuted.dataset.vcNativeMuted, undefined,
+        'never claim ownership of a player that was already muted');
+    const originallyAudible = element(false);
+    apply(originallyAudible);
+    assert.equal(originallyAudible.muted, true);
+    assert.equal(originallyAudible.dataset.vcNativeMuted, 'true');
+    originallyAudible.muted = false; // site changes mute while extension mute stays ON
+    apply(originallyAudible);
+    assert.equal(originallyAudible.muted, true,
+        'a stale ownership marker must not prevent enforcing current mute');
+    vars.muted = false;
+    apply(originallyAudible);
+    assert.equal(originallyAudible.muted, false,
+        'removing the extension mute should release its own native mute');
+    assert.equal(originallyAudible.dataset.vcNativeMuted, undefined);
 });
 
 test('Chromium smoke retries only an actual startup timeout with separate profiles', () => {
