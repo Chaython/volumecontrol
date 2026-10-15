@@ -72,9 +72,19 @@ try {
         }
         if (url.pathname === '/real-recording.mp3') {
             const range = /^bytes=(\d+)-(\d*)/.exec(req.headers.range || '');
-            const from = range ? Math.min(recordedMp3.length - 1, Number(range[1])) : 0;
+            const from = range ? Number(range[1]) : 0;
             const to = range && range[2] ? Math.min(recordedMp3.length - 1, Number(range[2])) :
                 recordedMp3.length - 1;
+            // Reject unsatisfiable ranges instead of returning the last byte
+            // masquerading as a valid 206 response (triggers decoder errors).
+            if (from >= recordedMp3.length || to < from) {
+                console.log('FIREFOX_MP3_BAD_RANGE=' + (req.headers.range || ''));
+                res.writeHead(416, { 'Content-Range': 'bytes */' + recordedMp3.length });
+                res.end();
+                return;
+            }
+            console.log('FIREFOX_MP3_REQUEST=' + JSON.stringify({ range: req.headers.range || '',
+                from, to, method: req.method }));
             res.writeHead(range ? 206 : 200, {
                 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store',
                 'Accept-Ranges': 'bytes', 'Content-Length': to - from + 1,
@@ -215,14 +225,24 @@ window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
     const replayed = await audio.play().then(() => true, () => false);
     const changedSource = replayed && await waitFor(() =>
         audio.currentSrc.includes("track=next") && !audio.paused &&
-        audio.currentTime > .08 && approx(audio.volume, .31) &&
-        approx(window.__vcNativeVolume.get.call(audio), .31 * attenuation), 5000);
+        audio.currentTime > .28 && !audio.error &&
+        approx(audio.volume, .31) &&
+        approx(window.__vcNativeVolume.get.call(audio), .31 * attenuation), 5500);
+    // A decoder may fail AFTER play() resolves and readyState reaches 4.
+    // Let several real compressed frames decode, then require a clean media
+    // element, not merely a nonzero currentTime.
+    await sleep(450);
+    const decoderHealthy = audio.error == null && audio.readyState >= 2 &&
+        audio.currentTime > .3;
+    const error = audio.error && {
+        code: audio.error.code, message: audio.error.message
+    };
     audio.pause();
     const realMedia = {
         decoded, playing, scaled, nativeSlider, pausedSlider,
-        preservedSiteMute, changedSource,
-        readyState: audio.readyState, error: audio.error?.code || null,
-        source: audio.currentSrc, time: audio.currentTime
+        preservedSiteMute, changedSource, decoderHealthy,
+        readyState: audio.readyState, error,
+        source: audio.currentSrc, time: audio.currentTime, networkState: audio.networkState
     };
     const result = { preflightPatched, preflightMuted, preflightRestored,
         disabledRestored, reenabledPatched, realMedia };
@@ -230,7 +250,7 @@ window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
         disabledRestored && reenabledPatched &&
         Object.entries(realMedia).filter(([key]) =>
             ['decoded','playing','scaled','nativeSlider','pausedSlider',
-                'preservedSiteMute','changedSource'].includes(key))
+                'preservedSiteMute','changedSource','decoderHealthy'].includes(key))
             .every(([, value]) => value === true);
     location.href = "http://127.0.0.1:${port}/result?pass=" + (pass ? "1" : "0") +
         "&detail=" + encodeURIComponent(JSON.stringify(result));
