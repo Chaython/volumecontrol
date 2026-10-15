@@ -264,6 +264,23 @@ try {
             });
             const send = cmd => cdp.evaluate(optionsSession,
                 'probe.send(' + tabId + ',' + JSON.stringify(cmd) + ')');
+            // Read the real HTMLMediaElement volume from a separate browser
+            // execution world. MAIN-world .volume is patched by the extension.
+            await cdp.send('Page.enable', {}, fixtureSession);
+            const { frameTree } = await cdp.send('Page.getFrameTree', {}, fixtureSession);
+            const { executionContextId: nativeContextId } = await cdp.send(
+                'Page.createIsolatedWorld',
+                { frameId: frameTree.frame.id, worldName: 'volume-control-native-probe' },
+                fixtureSession
+            );
+            const readNativeVolume = async id => {
+                const value = await cdp.send('Runtime.evaluate', {
+                    expression: 'document.getElementById(' + JSON.stringify(id) + ')?.volume',
+                    contextId: nativeContextId, returnByValue: true
+                }, fixtureSession);
+                if (value.exceptionDetails) throw Error(value.exceptionDetails.text);
+                return value.result?.value;
+            };
             for (const s of downloaded) {
                 const kind = s.path === '/video.mp4' ? 'video' : 'audio';
                 // Start analysis BEFORE the short MP3 begins. Previously
@@ -327,10 +344,14 @@ try {
                 results.push(entry);
                 const nativeState = '(()=>{const m=document.getElementById("native-player");' +
                     'const p=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,"volume");' +
-                    'return {site:m.volume,physical:p.get.call(m),muted:m.muted,' +
+                    'return {site:m.volume,muted:m.muted,' +
                     'paused:m.paused,ready:m.readyState,time:m.currentTime,' +
                     'managed:m.dataset.vcPageAudioManaged||null}})()';
                 const closeTo = (a,b) => Number.isFinite(a) && Math.abs(a-b) < 0.015;
+                const nativeSnapshot = async () => ({
+                    ...(await cdp.evaluate(fixtureSession,nativeState)),
+                    physical: await readNativeVolume('native-player')
+                });
                 try {
                     await send({ command: 'setNormalizer', enabled: false });
                     await send({ command: 'setVolume', dB: 0 });
@@ -341,32 +362,32 @@ try {
                         'm.src="/video.mp4?native-player-test";' +
                         'document.body.appendChild(m);m.play()?.catch?.(()=>{});return true})()');
                     const playing = await waitFor(async () => {
-                        const v = await cdp.evaluate(fixtureSession, nativeState);
+                        const v = await nativeSnapshot();
                         return v.ready >= 2 && !v.paused ? v : null;
                     }, 12000);
                     await send({ command: 'setVolume', dB: -12 });
                     const attenuation = 10 ** (-12 / 20);
                     const down = await waitFor(async () => {
-                        const v = await cdp.evaluate(fixtureSession, nativeState);
+                        const v = await nativeSnapshot();
                         return closeTo(v.site,.7) && closeTo(v.physical,.7*attenuation) ? v : null;
                     }, 2500);
                     await cdp.evaluate(fixtureSession,
                         'document.getElementById("native-player").volume=.71;true');
                     const fineStep = await waitFor(async () => {
-                        const v = await cdp.evaluate(fixtureSession, nativeState);
+                        const v = await nativeSnapshot();
                         return closeTo(v.site,.71) && closeTo(v.physical,.71*attenuation) ? v : null;
                     }, 2500);
                     await cdp.evaluate(fixtureSession,
                         '(()=>{const m=document.getElementById("native-player");' +
                         'm.pause();m.volume=.34;return true})()');
                     const pausedStep = await waitFor(async () => {
-                        const v = await cdp.evaluate(fixtureSession, nativeState);
+                        const v = await nativeSnapshot();
                         return v.paused && closeTo(v.site,.34) &&
                             closeTo(v.physical,.34*attenuation) ? v : null;
                     }, 2500);
                     await send({ command: 'setVolume', dB: 0 });
                     const restored = await waitFor(async () => {
-                        const v = await cdp.evaluate(fixtureSession, nativeState);
+                        const v = await nativeSnapshot();
                         return closeTo(v.site,.34) && closeTo(v.physical,.34) ? v : null;
                     }, 2500);
                     // A positive dB setting requires WebAudio. Its media
@@ -375,18 +396,18 @@ try {
                         'document.getElementById("native-player").play()?.catch?.(()=>{});true');
                     await send({ command: 'setVolume', dB: 6 });
                     await sleep(450);
-                    const boosted = await cdp.evaluate(fixtureSession,nativeState);
+                    const boosted = await nativeSnapshot();
                     await cdp.evaluate(fixtureSession,
                         'document.getElementById("native-player").muted=true;true');
                     await sleep(150);
-                    const siteMuted = await cdp.evaluate(fixtureSession,nativeState);
+                    const siteMuted = await nativeSnapshot();
                     await cdp.evaluate(fixtureSession,
                         'document.getElementById("native-player").muted=false;true');
                     await send({ command: 'setMute', muted: true });
                     const extensionMuted = (await send({ command: 'getAudioControlState' }))?.response;
                     await send({ command: 'setMute', muted: false });
                     await sleep(350);
-                    const unmuted = await cdp.evaluate(fixtureSession,nativeState);
+                    const unmuted = await nativeSnapshot();
                     entry.playing = playing; entry.down = down; entry.fineStep = fineStep;
                     entry.pausedStep = pausedStep; entry.restored = restored;
                     entry.boosted = boosted; entry.siteMuted = siteMuted;
@@ -398,6 +419,7 @@ try {
                     if(entry.status === 'failed')entry.reason='Native slider or mute changed unexpectedly during live WebAudio route';
                 } catch(error) {
                     entry.reason = error.message;
+                    entry.lastState = await nativeSnapshot().catch(() => null);
                 } finally {
                     await send({ command: 'setNormalizer', enabled: false }).catch(() => {});
                     await send({ command: 'setVolume', dB: 0 }).catch(() => {});
@@ -421,9 +443,13 @@ try {
                     'const g=window.__vcStreamGains?.[window.__vcFirstStreamGain];' +
                     'if(!p)return null;const d=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,"volume");' +
                     'return {time:p.currentTime,paused:p.paused,ready:p.readyState,' +
-                    'siteVolume:p.volume,nativeVolume:d.get.call(p),muted:p.muted,' +
+                    'siteVolume:p.volume,muted:p.muted,' +
                     'gain:g?.gain?.value??null}})()';
                 const approx = (x,y) => Number.isFinite(x) && Math.abs(x-y) < .04;
+                const streamSnapshot = async () => ({
+                    ...(await cdp.evaluate(fixtureSession,streamState)),
+                    nativeVolume: await readNativeVolume('stream-receiver')
+                });
                 try {
                     await send({ command: 'setNormalizer', enabled: false });
                     await send({ command: 'setVolume', dB: 6 });
@@ -465,7 +491,7 @@ try {
                             'm.controls=true;m.volume=.45;m.srcObject=window.__vcCapturedMedia;' +
                             'document.body.appendChild(m);m.play()?.catch?.(()=>{});return true})()');
                         const routed = await waitFor(async () => {
-                            const s=await cdp.evaluate(fixtureSession,streamState);
+                            const s=await streamSnapshot();
                             return s && s.ready >= 2 && !s.paused &&
                                 approx(s.siteVolume,.45) && approx(s.nativeVolume,0) &&
                                 approx(s.gain,.45 * 10 ** (6/20)) ? s : null;
@@ -473,20 +499,20 @@ try {
                         await cdp.evaluate(fixtureSession,
                             'document.getElementById("stream-receiver").volume=.2;true');
                         const lowered=await waitFor(async () => {
-                            const s=await cdp.evaluate(fixtureSession,streamState);
+                            const s=await streamSnapshot();
                             return s && approx(s.siteVolume,.2) && approx(s.nativeVolume,0) &&
                                 approx(s.gain,.2 * 10 ** (6/20)) ? s : null;
                         },2500);
                         await cdp.evaluate(fixtureSession,
                             'document.getElementById("stream-receiver").muted=true;true');
                         const muted=await waitFor(async () => {
-                            const s=await cdp.evaluate(fixtureSession,streamState);
+                            const s=await streamSnapshot();
                             return s && s.muted && approx(s.gain,0) ? s : null;
                         },2500);
                         await cdp.evaluate(fixtureSession,
                             'document.getElementById("stream-receiver").muted=false;true');
                         const unmuted=await waitFor(async () => {
-                            const s=await cdp.evaluate(fixtureSession,streamState);
+                            const s=await streamSnapshot();
                             return s && !s.muted && approx(s.gain,.2 * 10 ** (6/20)) ? s : null;
                         },2500);
                         entry.routed=routed;entry.lowered=lowered;
