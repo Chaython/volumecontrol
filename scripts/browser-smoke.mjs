@@ -43,6 +43,7 @@ try {
 window.__vcNativeConnect = AudioNode.prototype.connect;
 window.__vcNativeDisconnect = AudioNode.prototype.disconnect;
 window.__vcNativeVolume = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "volume");
+window.__vcNativeMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "muted");
 </script>
 <script>${escapedHook}</script>
 <script>
@@ -55,7 +56,10 @@ window.__vcNativeVolume = Object.getOwnPropertyDescriptor(HTMLMediaElement.proto
     const earlyAudio = document.createElement("audio");
     document.body.appendChild(earlyAudio);
     earlyAudio.dispatchEvent(new Event("play"));
-    const preflightMuted = earlyAudio.muted === true;
+    // Native output stays protected, but the page-facing player getter
+    // reflects its own requested mute state, not our temporary safety mute.
+    const preflightMuted = window.__vcNativeMuted.get.call(earlyAudio) === true &&
+        earlyAudio.muted === false;
 
     window.postMessage({
         source: "volume-control-extension",
