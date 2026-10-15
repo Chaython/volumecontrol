@@ -597,3 +597,18 @@ A reused media element's DRM marker is discarded only when a different, nonempty
 ### CI coverage and release checks (October 2026)
 
 The streaming-site workflow requires four decoded-media checks to pass before reporting success: downloaded MP3, downloaded MP4, simultaneous MP3+MP4 (including a finite normalization peak), and a reused-element MP4 playlist transition. Public websites, including YouTube, remain separately reported as **inconclusive** when headless playback is blocked; a successful navigation is not evidence that audible output was verified. Each run publishes a GitHub Actions step summary. The daily prerelease job now installs and exercises both packaged extensions before publishing, and streaming checks also run on packaging, manifest, and popup/options UI changes. Superseded non-master CI runs are cancelled.
+
+<!-- chaython-funding:start -->
+## Support development
+
+Support this project through [GitHub Sponsors](https://github.com/sponsors/Chaython), [Patreon](https://patreon.com/Chaython), [Buy Me a Coffee](https://buymeacoffee.com/chaython), or [PayPal](https://paypal.me/ChaythonM).
+
+Crypto donations:
+
+- **Ethereum (ETH):** `0x201B6E0B0282BBAE1592C24f9CbD39009A70F7d7`
+- **Bitcoin (BTC):** `32o7JmXgFcs4R1SbcLLVKQCRw9KHkhneJi`
+- **Solana (SOL):** `BDicyUL9zizDeYBLw8oBwotv6jtHotLLQD7Bcqg2atLk`
+- **USDC (network not specified):** `0xBeD35dcAd9F1A32459B3C0DF004371EBE939E760`
+
+**For USDC, confirm the intended blockchain network before sending.** The EVM-style address does not specify a network.
+<!-- chaython-funding:end -->
