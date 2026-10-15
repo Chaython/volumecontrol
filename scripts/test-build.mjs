@@ -1090,7 +1090,8 @@ test('MAIN-world volumechange adopts real browser-native slider edits', () => {
     player.actual = 0.18;
     assert.equal(adopt(player, entry), false, 'deferred own write must not alter base');
     assert.equal(entry.baseVolume, 0.36);
-    assert.match(source, /if \(!adoptNativePlayerVolume\(element, currentEntry\)\) return/);
+    assert.match(source, /const volumeChanged = adoptNativePlayerVolume\(element, currentEntry\)/);
+    assert.match(source, /if \(!volumeChanged && !muteChanged\) return/);
 });
 
 test('clearing isolated fallback respects native slider edits while paused or muted', () => {
