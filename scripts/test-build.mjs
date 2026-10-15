@@ -1383,6 +1383,97 @@ test('main-world volumechange processes mute-only player changes', () => {
     assert.equal(routeUpdates, 3, 'volume-only change still updates route');
 });
 
+test('detached isolated media retains volume and mute updates while playing', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const retainStart = source.indexOf('function shouldRetainDetachedMediaElement(element) {');
+    const retainEnd = source.indexOf('function sweepKnownMediaElements() {', retainStart);
+    const stateStart = source.indexOf('function applyState() {');
+    const stateEnd = source.indexOf('function configureIsolatedLimiter() {', stateStart);
+    assert.ok(retainStart >= 0 && retainEnd > retainStart);
+    assert.ok(stateStart >= 0 && stateEnd > stateStart);
+
+    const detached = {
+        isConnected: false, paused: false, ended: false,
+        volume: 0.25, muted: false, dataset: { vcFallback: 'true' }
+    };
+    const records = [];
+    const vars = {
+        knownMediaElements: new Set([detached]), isBlocked: false,
+        muted: false, dB: -12, normalizerEnabled: false
+    };
+    const sandbox = {
+        tc: { vars, settings: { debugMode: false } },
+        enforceBoostLimit: () => {}, syncPageAudioHook: () => {},
+        guardConcurrentIsolatedNormalizer: () => {},
+        needsAudioRoute: () => false,
+        getGainValue: db => 10 ** (db / 20),
+        isMediaPlaying: element => !element.paused && !element.ended,
+        isAudibleMediaElement: element => !element.muted && element.volume > 0,
+        isPageAudioManaged: () => false,
+        applyFallbackVolume: element => records.push(['attenuate', element]),
+        clearFallbackVolume: element => {
+            records.push(['restore', element]);
+            delete element.dataset.vcFallback;
+        },
+        connectOutput: () => {},
+        suspendAudioContextIfIdle: () => {},
+        setTimeout: () => 1
+    };
+    const funcs = runInNewContext('(function () {\n' +
+        source.slice(retainStart,retainEnd) + '\n' +
+        source.slice(stateStart,stateEnd) +
+        '\nreturn { shouldRetainDetachedMediaElement, applyState };\n})()',sandbox);
+    assert.equal(funcs.shouldRetainDetachedMediaElement(detached), true);
+    funcs.applyState();
+    assert.deepEqual(records.map(x => x[0]), ['attenuate'],
+        'active detached video must receive updated dB, not only be retained');
+    assert.equal(vars.knownMediaElements.has(detached), true);
+
+    // A native fallback temporarily muted by the extension must not be
+    // dropped merely because isAudibleMediaElement now returns false.
+    detached.muted = true;
+    vars.muted = true;
+    funcs.applyState();
+    assert.equal(vars.knownMediaElements.has(detached), true);
+    assert.equal(records.filter(x => x[0] === 'attenuate').length, 2);
+
+    detached.paused = true;
+    vars.muted = false;
+    funcs.applyState();
+    assert.equal(vars.knownMediaElements.has(detached), false);
+    assert.equal(records.at(-1)[0], 'restore',
+        'idle detached fallback must be restored before tracking stops');
+});
+
+test('detached fallback sweep retains silent playing elements but clears idle elements', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const begin = source.indexOf('function shouldRetainDetachedMediaElement(element) {');
+    const end = source.indexOf('function setupBoostLimitObserver() {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    const playing = { isConnected: false, paused: false, ended: false,
+        muted: true, volume: 0, dataset: { vcFallback: 'true' } };
+    const idle = { isConnected: false, paused: true, ended: false,
+        muted: true, volume: 0, dataset: { vcFallback: 'true' } };
+    const connected = { isConnected: true, paused: true, dataset: {} };
+    const vars = { knownMediaElements: new Set([playing,idle,connected]),
+        mediaElements: new Set(), normalizerEnabled: false };
+    const restored = [];
+    const sweep = runInNewContext('(function () {\n' + source.slice(begin,end) +
+        '\nreturn sweepKnownMediaElements;\n})()', {
+        tc: { vars },
+        isMediaPlaying: el => !el.paused && !el.ended,
+        isAudibleMediaElement: el => !el.muted && el.volume > 0,
+        clearFallbackVolume: el => restored.push(el),
+        resetEmePending: () => {},
+        suspendAudioContextIfIdle: () => {}
+    });
+    sweep();
+    assert.equal(vars.knownMediaElements.has(playing), true);
+    assert.equal(vars.knownMediaElements.has(idle), false);
+    assert.equal(vars.knownMediaElements.has(connected), true);
+    assert.deepEqual(restored,[idle]);
+});
+
 test('live exclusion restores isolated fallback state before teardown', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
     assert.match(source, /if \(blocked\) \{[\s\S]*lastSyncedPageAudioState = null;[\s\S]*applyState\(\);[\s\S]*stopPageBridgeTimers\(\)/);
@@ -1666,8 +1757,44 @@ test('access-list changes clear stale toolbar feedback', () => {
 
 test('fallback mute never claims a site-owned native mute', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
-    assert.match(source, /element\.dataset\.vcNativeMuted !== 'true' && !element\.muted/);
+    assert.match(source, /if \(!element\.muted\) \{/);
     assert.match(source, /if \(element\.dataset\.vcNativeMuted === 'true'\) \{/);
+});
+
+test('isolated fallback reasserts extension mute after a page unmute', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function applyFallbackVolume(element, reason = "") {');
+    const end = source.indexOf('function clearFallbackVolume(element) {', start);
+    assert.ok(start >= 0 && end > start);
+    const vars = { muted: true, dB: -12 };
+    const apply = runInNewContext('(' + source.slice(start,end).trim() + ')', {
+        tc: { vars, settings: { debugMode: false } },
+        getGainValue: dB => 10 ** (dB/20),
+        isProbablyProtectedMedia: () => false,
+        invalidateBoostLimitCache: () => {},
+        log: () => {}
+    });
+    const element = (muted = false) => ({
+        muted, volume: .8, dataset: {}, style: {}
+    });
+    const siteMuted = element(true);
+    apply(siteMuted);
+    assert.equal(siteMuted.muted, true);
+    assert.equal(siteMuted.dataset.vcNativeMuted, undefined,
+        'never claim ownership of a player that was already muted');
+    const originallyAudible = element(false);
+    apply(originallyAudible);
+    assert.equal(originallyAudible.muted, true);
+    assert.equal(originallyAudible.dataset.vcNativeMuted, 'true');
+    originallyAudible.muted = false; // site changes mute while extension mute stays ON
+    apply(originallyAudible);
+    assert.equal(originallyAudible.muted, true,
+        'a stale ownership marker must not prevent enforcing current mute');
+    vars.muted = false;
+    apply(originallyAudible);
+    assert.equal(originallyAudible.muted, false,
+        'removing the extension mute should release its own native mute');
+    assert.equal(originallyAudible.dataset.vcNativeMuted, undefined);
 });
 
 test('Chromium smoke retries only an actual startup timeout with separate profiles', () => {
