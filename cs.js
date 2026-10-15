@@ -924,7 +924,11 @@ function applyFallbackVolume(element, reason = "") {
         if (tc.vars.muted) {
             // Only claim ownership when we actually change the native mute.
             // A site-muted element must stay muted when Volume Control unmutes.
-            if (element.dataset.vcNativeMuted !== 'true' && !element.muted) {
+            if (!element.muted) {
+                // The site may have cleared native .muted while our mute
+                // flag was already set. Reassert it: ownership does not
+                // guarantee the physical media element is still muted.
+                // Never claim ownership if the site itself was already muted.
                 element.muted = true;
                 element.dataset.vcNativeMuted = 'true';
             }
