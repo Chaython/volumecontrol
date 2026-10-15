@@ -1093,6 +1093,67 @@ test('MAIN-world volumechange adopts real browser-native slider edits', () => {
     assert.match(source, /if \(!adoptNativePlayerVolume\(element, currentEntry\)\) return/);
 });
 
+test('clearing isolated fallback respects native slider edits while paused or muted', () => {
+    const source = readFileSync(join(root, 'cs.js'), 'utf8');
+    const start = source.indexOf('function clearFallbackVolume(element) {');
+    const end = source.indexOf('// Track the last state sent to the page-audio hook', start);
+    assert.ok(start >= 0 && end > start);
+    const clear = runInNewContext('(function () {\n' + source.slice(start, end) +
+        '\nreturn clearFallbackVolume;\n})()');
+    const element = (volume, original, lastApplied) => ({
+        volume, __vc_originalVolume: original,
+        ...(lastApplied === undefined ? {} : { __vc_lastAppliedVolume: lastApplied }),
+        dataset: { vcFallback: 'true' }
+    });
+    const pausedSlider = element(0.60, 0.50, 0.25);
+    clear(pausedSlider);
+    assert.equal(pausedSlider.volume, 0.60, 'paused native slider must take priority');
+    assert.equal(pausedSlider.dataset.vcFallback, undefined);
+
+    const unchanged = element(0.25, 0.50, 0.25);
+    clear(unchanged);
+    assert.equal(unchanged.volume, 0.50, 'restore original base when only extension adjusted volume');
+
+    const mutedNoVolumeWrite = element(0.65, 0.50);
+    clear(mutedNoVolumeWrite);
+    assert.equal(mutedNoVolumeWrite.volume, 0.65,
+        'mute-only fallback must not restore a stale initial volume');
+});
+
+test('main-world volumechange processes mute-only player changes', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('            const applyOnVolumeChange = () => {');
+    const end = source.indexOf('            const sourceBoundary = () => {', start);
+    assert.ok(start >= 0 && end > start);
+    const media = { muted: false };
+    const entry = { lastObservedNativeMuted: false };
+    let routeUpdates = 0;
+    let volumeChanged = false;
+    const listener = runInNewContext('(function () {\n' + source.slice(start, end) +
+        '\nreturn applyOnVolumeChange;\n})()', {
+        element: media,
+        getMediaState: () => entry,
+        readNativeMuted: el => el.muted,
+        adoptNativePlayerVolume: () => volumeChanged,
+        applyMediaElementState: () => { routeUpdates++; },
+        setTimeout: () => {},
+        suspendMediaContextIfIdle: () => {}
+    });
+    listener();
+    assert.equal(routeUpdates, 0, 'unchanged native event should be ignored');
+    media.muted = true;
+    listener();
+    assert.equal(routeUpdates, 1, 'native mute must update route');
+    listener();
+    assert.equal(routeUpdates, 1, 'duplicate mute event must not rewire');
+    media.muted = false;
+    listener();
+    assert.equal(routeUpdates, 2, 'native unmute must update route');
+    volumeChanged = true;
+    listener();
+    assert.equal(routeUpdates, 3, 'volume-only change still updates route');
+});
+
 test('live exclusion restores isolated fallback state before teardown', () => {
     const source = readFileSync(join(root, 'cs.js'), 'utf8');
     assert.match(source, /if \(blocked\) \{[\s\S]*lastSyncedPageAudioState = null;[\s\S]*applyState\(\);[\s\S]*stopPageBridgeTimers\(\)/);
