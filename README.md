@@ -608,7 +608,7 @@ Crypto donations:
 - **Ethereum (ETH):** `0x201B6E0B0282BBAE1592C24f9CbD39009A70F7d7`
 - **Bitcoin (BTC):** `32o7JmXgFcs4R1SbcLLVKQCRw9KHkhneJi`
 - **Solana (SOL):** `BDicyUL9zizDeYBLw8oBwotv6jtHotLLQD7Bcqg2atLk`
-- **USDC (network not specified):** `0xBeD35dcAd9F1A32459B3C0DF004371EBE939E760`
+- **USDC (Base network):** `0xBeD35dcAd9F1A32459B3C0DF004371EBE939E760`
 
-**For USDC, confirm the intended blockchain network before sending.** The EVM-style address does not specify a network.
+**Send USDC only on Base.**
 <!-- chaython-funding:end -->
