@@ -317,6 +317,97 @@ try {
                 await cdp.evaluate(fixtureSession,
                     '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');m.pause();return true})()');
             }
+            // Run against a genuinely decoded MP4, not a mocked media
+            // element. Check the JS-facing site volume AND browser-native
+            // HTMLMediaElement.volume separately: a player slider can appear
+            // enabled while extension attenuation makes it snap back.
+            if (downloaded.some(x => x.path === '/video.mp4')) {
+                const entry = { site: 'Real MP4 native slider, pause, boost and mute',
+                    status: 'failed' };
+                results.push(entry);
+                const nativeState = '(()=>{const m=document.getElementById("native-player");' +
+                    'const p=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,"volume");' +
+                    'return {site:m.volume,physical:p.get.call(m),muted:m.muted,' +
+                    'paused:m.paused,ready:m.readyState,time:m.currentTime,' +
+                    'managed:m.dataset.vcPageAudioManaged||null}})()';
+                const closeTo = (a,b) => Number.isFinite(a) && Math.abs(a-b) < 0.015;
+                try {
+                    await send({ command: 'setNormalizer', enabled: false });
+                    await send({ command: 'setVolume', dB: 0 });
+                    await send({ command: 'setMute', muted: false });
+                    await cdp.evaluate(fixtureSession, '(()=>{' +
+                        'const m=document.createElement("video");m.id="native-player";' +
+                        'm.controls=true;m.preload="auto";m.volume=.7;' +
+                        'm.src="/video.mp4?native-player-test";' +
+                        'document.body.appendChild(m);m.play()?.catch?.(()=>{});return true})()');
+                    const playing = await waitFor(async () => {
+                        const v = await cdp.evaluate(fixtureSession, nativeState);
+                        return v.ready >= 2 && !v.paused ? v : null;
+                    }, 12000);
+                    await send({ command: 'setVolume', dB: -12 });
+                    const attenuation = 10 ** (-12 / 20);
+                    const down = await waitFor(async () => {
+                        const v = await cdp.evaluate(fixtureSession, nativeState);
+                        return closeTo(v.site,.7) && closeTo(v.physical,.7*attenuation) ? v : null;
+                    }, 2500);
+                    await cdp.evaluate(fixtureSession,
+                        'document.getElementById("native-player").volume=.71;true');
+                    const fineStep = await waitFor(async () => {
+                        const v = await cdp.evaluate(fixtureSession, nativeState);
+                        return closeTo(v.site,.71) && closeTo(v.physical,.71*attenuation) ? v : null;
+                    }, 2500);
+                    await cdp.evaluate(fixtureSession,
+                        '(()=>{const m=document.getElementById("native-player");' +
+                        'm.pause();m.volume=.34;return true})()');
+                    const pausedStep = await waitFor(async () => {
+                        const v = await cdp.evaluate(fixtureSession, nativeState);
+                        return v.paused && closeTo(v.site,.34) &&
+                            closeTo(v.physical,.34*attenuation) ? v : null;
+                    }, 2500);
+                    await send({ command: 'setVolume', dB: 0 });
+                    const restored = await waitFor(async () => {
+                        const v = await cdp.evaluate(fixtureSession, nativeState);
+                        return closeTo(v.site,.34) && closeTo(v.physical,.34) ? v : null;
+                    }, 2500);
+                    // A positive dB setting requires WebAudio. Its media
+                    // route must not reset the site's saved 34% slider.
+                    await cdp.evaluate(fixtureSession,
+                        'document.getElementById("native-player").play()?.catch?.(()=>{});true');
+                    await send({ command: 'setVolume', dB: 6 });
+                    await sleep(450);
+                    const boosted = await cdp.evaluate(fixtureSession,nativeState);
+                    await cdp.evaluate(fixtureSession,
+                        'document.getElementById("native-player").muted=true;true');
+                    await sleep(150);
+                    const siteMuted = await cdp.evaluate(fixtureSession,nativeState);
+                    await cdp.evaluate(fixtureSession,
+                        'document.getElementById("native-player").muted=false;true');
+                    await send({ command: 'setMute', muted: true });
+                    const extensionMuted = (await send({ command: 'getAudioControlState' }))?.response;
+                    await send({ command: 'setMute', muted: false });
+                    await sleep(350);
+                    const unmuted = await cdp.evaluate(fixtureSession,nativeState);
+                    entry.playing = playing; entry.down = down; entry.fineStep = fineStep;
+                    entry.pausedStep = pausedStep; entry.restored = restored;
+                    entry.boosted = boosted; entry.siteMuted = siteMuted;
+                    entry.extensionMuted = extensionMuted?.muted; entry.unmuted = unmuted;
+                    entry.status = closeTo(boosted.site,.34) && closeTo(boosted.physical,.34) &&
+                        siteMuted.muted === true && extensionMuted?.muted === true &&
+                        unmuted.muted === false && unmuted.time > boosted.time + .1 ?
+                        'passed' : 'failed';
+                    if(entry.status === 'failed')entry.reason='Native slider or mute changed unexpectedly during live WebAudio route';
+                } catch(error) {
+                    entry.reason = error.message;
+                } finally {
+                    await send({ command: 'setNormalizer', enabled: false }).catch(() => {});
+                    await send({ command: 'setVolume', dB: 0 }).catch(() => {});
+                    await send({ command: 'setMute', muted: false }).catch(() => {});
+                    await cdp.evaluate(fixtureSession,
+                        '(()=>{const m=document.getElementById("native-player");' +
+                        'if(m){m.pause();m.remove()}return true})()').catch(() => {});
+                    console.log('NATIVE_SLIDER_RESULT=' + JSON.stringify(entry));
+                }
+            }
             // Play two real compressed sources together, and change
             // normalization while both are actively decoding.
             if (downloaded.some(x => x.path === '/audio.mp3') &&
