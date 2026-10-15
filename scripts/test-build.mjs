@@ -1823,6 +1823,19 @@ test('Firefox audio smoke waits for state transitions instead of fixed 60ms timi
     assert.doesNotMatch(source, /await sleep\(60\)/);
 });
 
+test('Firefox hook smoke decodes recorded audio and checks native player state', () => {
+    const source = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
+    assert.match(source, /t-rex-roar\.mp3/);
+    assert.match(source, /recordedMp3\.length < 1000/);
+    assert.match(source, /'Content-Type': 'audio\/mpeg'/);
+    assert.match(source, /audio\.readyState >= 2/);
+    assert.match(source, /audio\.currentTime > \.08/);
+    assert.match(source, /window\.__vcNativeVolume\.set\.call\(audio, \.5\)/);
+    assert.match(source, /preservedSiteMute = audio\.muted === true/);
+    assert.match(source, /changedSource = replayed/);
+    assert.match(source, /const pass = preflightPatched && preflightMuted/);
+});
+
 test('Firefox audio hook smoke uses an HTTP origin for bridge messages', () => {
     const source = readFileSync(join(root, 'scripts/firefox-smoke.mjs'), 'utf8');
     assert.match(source, /res\.end\(html\)/);
