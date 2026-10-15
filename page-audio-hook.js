@@ -355,6 +355,14 @@
         } catch (e) {}
     }
 
+    // Keep the protective native mute invisible to page-owned UI/state.
+    function getRequestedMediaMuted(element) {
+        if (!authorizationResolved && preflightMutedElements.has(element)) {
+            return Boolean(preflightDesiredMuted.get(element));
+        }
+        return readNativeMuted(element);
+    }
+
     function patchPreflightMuted() {
         if (!nativeMutedDescriptor || !nativeMutedDescriptor.get || !nativeMutedDescriptor.set ||
             !window.HTMLMediaElement || !window.HTMLMediaElement.prototype) return;
@@ -368,7 +376,7 @@
                 configurable: true,
                 enumerable: nativeMutedDescriptor.enumerable,
                 get: function patchedPreflightMutedGetter() {
-                    return nativeMutedDescriptor.get.call(this);
+                    return getRequestedMediaMuted(this);
                 },
                 set: function patchedPreflightMutedSetter(value) {
                     const desired = Boolean(value);
@@ -443,7 +451,9 @@
 
     function isAudibleMediaElement(element) {
         if (!isMediaElement(element)) return false;
-        if (element.muted) return false;
+        // Startup's temporary physical mute is not the site's own mute:
+        // preflight must not prevent attaching a safe route before unmuting.
+        if (getRequestedMediaMuted(element)) return false;
         return getMediaState(element).baseVolume > 0;
     }
 
@@ -588,6 +598,16 @@
         }
     }
 
+    // Direct MediaStreamSource capture bypasses the HTML player's volume/mute.
+    // Preserve the site's requested controls independently of extension gain.
+    function mediaSourceGain(processor) {
+        if (!processor || processor.sourceKind !== "mediaStream" || !processor.element) return 1;
+        const element = processor.element;
+        if (getRequestedMediaMuted(element)) return 0;
+        const base = Number(getMediaState(element).baseVolume);
+        return Number.isFinite(base) ? Math.max(0, Math.min(1, base)) : 1;
+    }
+
     function clampUnprotectedOutput(processor) {
         // The native MediaElementSource has already been captured and cannot
         // be restored by reconnecting the HTML element. If a limited route
@@ -599,7 +619,7 @@
         try {
             const param = processor.gain.gain;
             const now = processor.context.currentTime;
-            const safeGain = Math.max(0, Math.min(1, effectiveGain()));
+            const safeGain = Math.max(0, Math.min(1, effectiveGain())) * mediaSourceGain(processor);
             param.cancelScheduledValues(now);
             param.setValueAtTime(safeGain, now);
             return true;
@@ -619,7 +639,7 @@
         try {
             const param = processor.gain.gain;
             const now = processor.context.currentTime;
-            const safeGain = Math.max(0, Math.min(1, effectiveGain()));
+            const safeGain = Math.max(0, Math.min(1, effectiveGain())) * mediaSourceGain(processor);
             param.cancelScheduledValues(now);
             param.setValueAtTime(safeGain, now);
             return true;
@@ -1635,8 +1655,9 @@
 
     function setMediaGainValue(route) {
         const autoGain = state.normalizerEnabled ? dbToGain(route.normalizerGainDb || 0) : 1;
-        const targetGain = (route.limiterFallbackActive || route.fallbackDirectOnly)
-            ? Math.max(0, Math.min(1, effectiveGain())) : effectiveGain() * autoGain;
+        const targetGain = ((route.limiterFallbackActive || route.fallbackDirectOnly)
+            ? Math.max(0, Math.min(1, effectiveGain())) : effectiveGain() * autoGain) *
+            mediaSourceGain(route);
 
         try {
             const now = route.context.currentTime;
@@ -1663,7 +1684,7 @@
             const now = route.context.currentTime;
             const limited = route.outputConnected && !route.limiterFallbackActive &&
                 typeof route.currentMode === "string" && route.currentMode.endsWith("-limited");
-            const manual = effectiveGain();
+            const manual = effectiveGain() * mediaSourceGain(route);
             // Seeking may preserve negative automatic gain from the preceding
             // passage. Resetting straight to manual/unity briefly makes loud
             // material MUCH louder than it was before the seek.
@@ -1780,6 +1801,12 @@
     }
 
     function scheduleMediaRouteRecovery(element, route) {
+        // Unlike an irreversible MediaElementSource, a disconnected direct
+        // MediaStream route has a working native output. Do not leave that
+        // native output stuck at volume zero while retrying a failed graph.
+        if (route && route.muteNative && !route.outputConnected) {
+            setNativeVolume(element, nativeVolumeForBase(element, getMediaState(element).baseVolume));
+        }
         if (!route || route.outputConnected || route.recoveryTimer ||
             (route.recoveryAttempts || 0) >= 6 ||
             !route.context || route.context.state === "closed") return;
@@ -1795,6 +1822,9 @@
             wireMediaRoute(route);
             if (route.outputConnected) {
                 route.recoveryAttempts = 0;
+                // Once captured audio becomes audible again, suppress the
+                // parallel native output to prevent duplicate/echoed playback.
+                if (route.muteNative) setNativeVolume(element, 0);
                 // A paused source may reconnect successfully while the
                 // context is suspended. Do not awaken the audio device until
                 // playback actually resumes.
@@ -1881,6 +1911,7 @@
                 meterBuffer,
                 inputBuffer,
                 sourceKind: routeSource.kind,
+                element, // direct MediaStream routes need the player's base volume/mute
                 muteNative: Boolean(routeSource.muteNative),
                 stream: routeSource.stream || null,
                 outputConnected: false,
@@ -1891,6 +1922,8 @@
             // a failed connection can be recovered without constructing a
             // second MediaElementAudioSourceNode for this element.
             mediaRoutes.set(element, route);
+            // Initialize before first decoded sample, not after a timer tick.
+            gain.gain.value = Math.max(0, Math.min(1, effectiveGain())) * mediaSourceGain(route);
             connectNative(route.source, inputAnalyser);
             log(`media route attached (${route.sourceKind}): ${element.currentSrc || element.src || element.tagName}`);
             return route;
@@ -1953,9 +1986,16 @@
         // constructed on a new context if the old one was closed. Clear the
         // stale route before selecting the existingRoute fast-path below.
         const previousRoute = mediaRoutes.get(element);
-        if (previousRoute && previousRoute.sourceKind === "mediaStream" &&
-            previousRoute.context && previousRoute.context.state === "closed") {
-            resetDirectMediaStreamRoute(element);
+        if (previousRoute && previousRoute.sourceKind === "mediaStream") {
+            if (!state.extensionActive || !state.enabled) {
+                // Direct capture can be undone; preserve native player controls.
+                resetDirectMediaStreamRoute(element);
+                setNativeVolume(element, entry.baseVolume);
+                return;
+            }
+            if (previousRoute.context && previousRoute.context.state === "closed") {
+                resetDirectMediaStreamRoute(element);
+            }
         }
         const existingRoute = mediaRoutes.get(element);
         const playing = isMediaPlaying(element);
@@ -1968,6 +2008,9 @@
             if (existingRoute) {
                 setNativeVolume(element, existingRoute.muteNative ? 0 : entry.baseVolume);
                 wireMediaRoute(existingRoute);
+                if (existingRoute.muteNative && !existingRoute.outputConnected) {
+                    setNativeVolume(element, nativeVolumeForBase(element, entry.baseVolume));
+                }
                 if (!existingRoute.outputConnected) scheduleMediaRouteRecovery(element, existingRoute);
                 return;
             }
@@ -1982,6 +2025,9 @@
                 if (eagerRoute) {
                     setNativeVolume(element, eagerRoute.muteNative ? 0 : entry.baseVolume);
                     wireMediaRoute(eagerRoute);
+                    if (eagerRoute.muteNative && !eagerRoute.outputConnected) {
+                        setNativeVolume(element, nativeVolumeForBase(element, entry.baseVolume));
+                    }
                     return;
                 }
             }
@@ -2011,6 +2057,9 @@
             // causes an audible dip-then-snap spike.
             setNativeVolume(element, route.muteNative ? 0 : entry.baseVolume);
             wireMediaRoute(route);
+            if (route.muteNative && !route.outputConnected) {
+                setNativeVolume(element, nativeVolumeForBase(element, entry.baseVolume));
+            }
             if (!route.outputConnected) scheduleMediaRouteRecovery(element, route);
             // After wireMediaRoute, output should be reconnected. If the context
             // was suspended (e.g. after pause), resume it so audio flows again.
@@ -2043,6 +2092,7 @@
             entry.streamCleanup = null;
         }
         entry.streamBacked = false;
+        entry.observedStream = null;
     }
 
     function cleanupTrackedMediaElement(element) {
@@ -2124,6 +2174,13 @@
         mediaElements.add(element);
         updatePageMediaRestriction();
         const entry = getMediaState(element);
+        // A stream can be attached before page hooks are installed or
+        // replaced through a saved native setter. Bind lifecycle on discovery.
+        const currentStream = readMediaSrcObject(element);
+        if (entry.observedStream !== currentStream) {
+            if (entry.observedStream !== undefined) resetDirectMediaStreamRoute(element);
+            bindMediaStreamLifecycle(element, currentStream);
+        }
         // DOM reinsertion or patched play() can register an element before the
         // detached wake fires. Remove that obsolete one-shot listener.
         if (entry.detachedPlayWake) {
@@ -2383,7 +2440,13 @@
     function nativeVolumeForBase(element, baseVolume) {
         const base = Math.max(0, Math.min(1, Number(baseVolume) || 0));
         if (!state.extensionActive || !state.enabled) return base;
-        if (mediaRoutes.has(element)) return base;
+        const route = mediaRoutes.get(element);
+        if (route) {
+            // Do not unmute the native duplicate of an active direct stream.
+            if (route.muteNative && route.outputConnected) return 0;
+            if (route.muteNative) return Math.max(0, Math.min(1, base * Math.min(effectiveGain(), 1)));
+            return base;
+        }
 
         // Native fallback applies only attenuation/mute. The page still reads
         // baseVolume from our patched getter, so its own volume is independent
@@ -2461,10 +2524,15 @@
             entry.streamCleanup = null;
         }
 
+        entry.observedStream = stream;
         entry.streamBacked = isMediaStreamLike(stream);
         if (!entry.streamBacked || typeof stream.addEventListener !== "function") return;
 
-        const refresh = () => {
+        const refresh = (event) => {
+            // Webcam video track switches do not change the captured audio.
+            // Rebuilding the audio graph on every video-only add/removetrack
+            // causes unnecessary call-audio gaps and device wake-ups.
+            if (event && event.track && event.track.kind !== "audio") return;
             resetDirectMediaStreamRoute(element);
             entry.streamBacked = isMediaStreamLike(readMediaSrcObject(element));
             registerMediaElement(element, { immediateFallback: true, eagerRoute: true });
@@ -2869,6 +2937,12 @@
 
         for (const element of Array.from(mediaElements)) {
             const route = mediaRoutes.get(element);
+            if (route && route.sourceKind === "mediaStream") {
+                // Native output and native controls must work after disconnect.
+                resetDirectMediaStreamRoute(element);
+                setNativeVolume(element, getMediaState(element).baseVolume);
+                continue;
+            }
             if (route && isMediaPlaying(element) && isAudibleMediaElement(element)) {
                 // Once createMediaElementSource() has been called, the element's
                 // native output is permanently detached — its ONLY remaining
@@ -3078,9 +3152,10 @@
 
         try {
             const now = processor.context.currentTime;
-            const target = processor.limiterFallbackActive
+            const target = (processor.limiterFallbackActive
                 ? Math.min(1, effectiveGain())
-                : effectiveGain() * (state.normalizerEnabled ? dbToGain(gainDb) : 1);
+                : effectiveGain() * (state.normalizerEnabled ? dbToGain(gainDb) : 1)) *
+                mediaSourceGain(processor);
             processor.gain.gain.cancelScheduledValues(now);
             processor.gain.gain.setTargetAtTime(target, now, gainDb < previousGainDb ? 0.008 : 0.035);
         } catch (e) {}

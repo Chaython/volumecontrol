@@ -301,7 +301,7 @@ test('moving volume slider cannot cause the MAIN-world normalizer to compensate'
     const state = { normalizerEnabled: true, extensionActive: true, enabled: true, muted: false };
     const config = { targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 100 };
     const sample = runInNewContext('(function () {\n' + source.slice(start, end) + '\nreturn sampleProcessor;\n})()', {
-        state, normalizeNormalizerConfig: () => config, configureLimiter: () => {},
+        state, mediaSourceGain: () => 1, normalizeNormalizerConfig: () => config, configureLimiter: () => {},
         effectiveGain: () => manualGain, dbToGain: dB => 10 ** (dB / 20)
     });
     for (let n = 0; n < 40; n++) sample(processor);
@@ -809,7 +809,7 @@ test('MAIN-world graph failures restore clamped direct output, then retry limiti
     const state = { extensionActive: true, enabled: true, muted: false, mono: false,
         dB: 20, normalizerEnabled: true };
     const fns = runInNewContext('(() => {\n' + source.slice(start, end) + '\nreturn { wireGraph };})()', {
-        state, effectiveGain: () => 10, dbToGain: db => 10 ** (db / 20),
+        state, mediaSourceGain: () => 1, effectiveGain: () => 10, dbToGain: db => 10 ** (db / 20),
         safeDisconnect: node => { node.edges = []; }, connectNative,
         configureLimiter: () => {}, log: () => {}
     });
@@ -869,7 +869,7 @@ test('MAIN-world media element route failures cannot bypass limiter with boosted
     };
     const wire = runInNewContext('(() => {\n' + source.slice(start, end) + '\nreturn wireMediaRoute;})()', {
         state: { extensionActive: true, enabled: true, mono: false, normalizerEnabled: true, muted: false, dB: 20 },
-        effectiveGain: () => 10, dbToGain: d => 10 ** (d / 20), connectNative,
+        mediaSourceGain: () => 1, effectiveGain: () => 10, dbToGain: d => 10 ** (d / 20), connectNative,
         configureLimiter: () => {}, log: () => {}, safetyLimiterRequired: () => true,
         syncNormalizerMeterTimer: () => {},
         currentRoutingMode: () => 'stereo-limited',
@@ -1043,6 +1043,234 @@ test('CI crosses the ZIP boundary and runs real installed-extension smoke covera
     assert.match(firefoxInstall, /--source-dir/);
 });
 
+
+test('startup preflight mute hides temporary physical mute from site UI while guarding audio', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function getRequestedMediaMuted(element) {');
+    const end = source.indexOf('    function restorePreflightMutedPatch() {', start);
+    assert.ok(start >= 0 && end > start);
+    const proto = {};
+    const native = {
+        configurable: true, enumerable: true,
+        get() { return this.nativeMuted; },
+        set(value) { this.nativeMuted = Boolean(value); }
+    };
+    Object.defineProperty(proto, 'muted', native);
+    const tracked = new Set(), desired = new WeakMap();
+    const env = {
+        window: { HTMLMediaElement: { prototype: proto } },
+        nativeMutedDescriptor: native, authorizationResolved: false,
+        preflightMutedElements: tracked, preflightDesiredMuted: desired,
+        readNativeMuted: element => element.nativeMuted, log: () => {}
+    };
+    const handlers = runInNewContext('(function () {\n' + source.slice(start, end) +
+        '\nreturn { patchPreflightMuted, getRequestedMediaMuted };\n})()', env);
+    const player = Object.create(proto);
+    player.nativeMuted = true; // extension's physical safety mute
+    tracked.add(player); desired.set(player, false);
+    handlers.patchPreflightMuted();
+    assert.equal(player.muted, false, 'site sees its own requested unmuted value');
+    assert.equal(player.nativeMuted, true, 'actual audio stays muted until authorized');
+    player.muted = true;
+    assert.equal(player.muted, true, 'site mute request is visible');
+    player.muted = false;
+    assert.equal(player.muted, false, 'latest site unmute is visible');
+    assert.equal(player.nativeMuted, true, 'site unmute cannot bypass preflight');
+    env.authorizationResolved = true;
+    player.muted = false;
+    assert.equal(player.nativeMuted, false, 'normal native setter works after authorization');
+
+    const audibleStart = source.indexOf('    function isAudibleMediaElement(element) {');
+    const audibleEnd = source.indexOf('    // Returns true if any media element', audibleStart);
+    const isAudible = runInNewContext('(function () {\n' +
+        source.slice(audibleStart, audibleEnd) +
+        '\nreturn isAudibleMediaElement;\n})()', {
+        isMediaElement: () => true,
+        getRequestedMediaMuted: () => desired.get(player),
+        getMediaState: () => ({ baseVolume: 0.6 })
+    });
+    assert.equal(isAudible(player), true,
+        'startup safety mute cannot defer eager WebAudio/MediaStream routing');
+    desired.set(player, true);
+    assert.equal(isAudible(player), false, 'actual site mute must suppress eager routing');
+});
+
+test('direct WebRTC capture preserves native slider and mute across processing paths', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const sourceGainStart = source.indexOf('    function mediaSourceGain(processor) {');
+    const sourceGainEnd = source.indexOf('    function clampUnprotectedOutput(processor) {', sourceGainStart);
+    const setGainStart = source.indexOf('    function setMediaGainValue(route) {');
+    const setGainEnd = source.indexOf('    function resetMediaBoundaryGain(route) {', setGainStart);
+    assert.ok(sourceGainStart >= 0 && sourceGainEnd > sourceGainStart);
+    assert.ok(setGainStart >= 0 && setGainEnd > setGainStart);
+    const player = { muted: false, volume: 0.3 };
+    const funcs = runInNewContext('(function () {\n' +
+        source.slice(sourceGainStart, sourceGainEnd) + '\n' +
+        source.slice(setGainStart, setGainEnd) +
+        '\nreturn { mediaSourceGain, setMediaGainValue };\n})()', {
+        state: { normalizerEnabled: false },
+        effectiveGain: () => 2, dbToGain: x => Math.pow(10, x / 20),
+        getRequestedMediaMuted: el => el.muted,
+        getMediaState: el => ({ baseVolume: el.volume }), log: () => {}
+    });
+    const gain = { value: 0 };
+    const route = {
+        sourceKind: 'mediaStream', element: player,
+        context: { state: 'suspended', currentTime: 0 },
+        gain: { gain }, normalizerGainDb: 0
+    };
+    funcs.setMediaGainValue(route);
+    assert.ok(Math.abs(gain.value - 0.6) < 0.00001,
+        '30% native slider multiplies extension +6dB, instead of being ignored');
+    player.volume = 0.1;
+    funcs.setMediaGainValue(route);
+    assert.ok(Math.abs(gain.value - 0.2) < 0.00001, 'fine native slider moves affect stream');
+    player.muted = true;
+    funcs.setMediaGainValue(route);
+    assert.equal(gain.value, 0, 'native player mute must silence captured stream');
+    player.muted = false;
+    route.limiterFallbackActive = true;
+    funcs.setMediaGainValue(route);
+    assert.ok(Math.abs(gain.value - 0.1) < 0.00001,
+        'limiter fallback still applies native volume');
+    assert.equal(funcs.mediaSourceGain({ sourceKind: 'mediaElement' }), 1,
+        'normal MediaElementSource must not apply native volume twice');
+    assert.match(source, /Math\.max\(0, Math\.min\(1, effectiveGain\(\)\)\) \* mediaSourceGain\(route\)/,
+        'first direct stream sample is clamped by native volume');
+    assert.match(source, /\*\s*mediaSourceGain\(processor\)/,
+        'normalizer gain updates retain the native player volume');
+});
+
+test('WebRTC native output stays suppressed while connected and restores on disable', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function nativeVolumeForBase(element, baseVolume) {');
+    const end = source.indexOf('    function patchMediaVolume() {', start);
+    assert.ok(start >= 0 && end > start);
+    const routes = new Map();
+    const state = { extensionActive: true, enabled: true };
+    const nativeVolumeForBase = runInNewContext('(function () {\n' +
+        source.slice(start, end) +
+        '\nreturn nativeVolumeForBase;\n})()', {
+        state, mediaRoutes: routes, effectiveGain: () => 0.5
+    });
+    const player = {};
+    const direct = { muteNative: true, outputConnected: true };
+    routes.set(player, direct);
+    assert.equal(nativeVolumeForBase(player, 0.8), 0,
+        'adjusting the native slider must not create a second audible output');
+    direct.outputConnected = false;
+    assert.equal(nativeVolumeForBase(player, 0.8), 0.4,
+        'unconnected direct stream falls back to safe native attenuation');
+    routes.set(player, { muteNative: false, outputConnected: true });
+    assert.equal(nativeVolumeForBase(player, 0.8), 0.8,
+        'MediaElementSource must keep exactly one native-volume factor');
+    state.enabled = false;
+    assert.equal(nativeVolumeForBase(player, 0.8), 0.8);
+    assert.match(source, /if \(route && route\.sourceKind === "mediaStream"\) \{\s*\/\/ Native output and native controls must work after disconnect/,
+        'heartbeat loss must remove reversible stream capture and restore slider');
+});
+
+test('WebRTC video-only track changes do not drop audio but audio swaps refresh capture', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function bindMediaStreamLifecycle(element, stream) {');
+    const end = source.indexOf('    function patchMediaSrcObject() {', start);
+    assert.ok(start >= 0 && end > start);
+    const player = { stream: null }, entry = {};
+    let resets = 0, registrations = 0;
+    const events = {};
+    const stream = {
+        getTracks: () => [], getAudioTracks: () => [],
+        addEventListener: (name, fn) => { events[name] = fn; },
+        removeEventListener: name => { delete events[name]; }
+    };
+    player.stream = stream;
+    const bind = runInNewContext('(function () {\n' + source.slice(start, end) +
+        '\nreturn bindMediaStreamLifecycle;\n})()', {
+        getMediaState: () => entry,
+        isMediaStreamLike: value => value === stream,
+        readMediaSrcObject: el => el.stream,
+        resetDirectMediaStreamRoute: () => { resets++; },
+        registerMediaElement: () => { registrations++; }
+    });
+    bind(player, stream);
+    events.addtrack({ track: { kind: 'video' } });
+    events.removetrack({ track: { kind: 'video' } });
+    assert.equal(resets, 0, 'video-only changes must not rebuild audio graph');
+    events.addtrack({ track: { kind: 'audio' } });
+    assert.equal(resets, 1);
+    assert.equal(registrations, 1, 'new remote audio track refreshes route');
+    entry.streamCleanup();
+    assert.equal(events.addtrack, undefined, 'listeners are cleaned up');
+});
+
+test('failed direct WebRTC route restores native fallback then suppresses echo on recovery', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function scheduleMediaRouteRecovery(element, route) {');
+    const end = source.indexOf('    function ensureMediaRoute(element) {', start);
+    assert.ok(start >= 0 && end > start);
+    const player = { volume: 0.6 };
+    const route = {
+        sourceKind: 'mediaStream', muteNative: true, outputConnected: false,
+        context: { state: 'running' }
+    };
+    const routes = new Map([[player, route]]);
+    const written = [];
+    const timers = [];
+    const schedule = runInNewContext('(function () {\n' + source.slice(start, end) +
+        '\nreturn scheduleMediaRouteRecovery;\n})()', {
+        mediaRoutes: routes,
+        nativeVolumeForBase: () => 0.3,
+        getMediaState: () => ({ baseVolume: 0.6 }),
+        setNativeVolume: (_element, value) => { written.push(value); },
+        setTimeout: cb => { timers.push(cb); return timers.length; },
+        wireMediaRoute: r => { r.outputConnected = true; },
+        isMediaPlaying: () => false, resumeContext: () => {}
+    });
+    schedule(player, route);
+    assert.equal(written[0], 0.3,
+        'native fallback must be audible during a failed WebAudio connection');
+    assert.equal(timers.length, 1);
+    timers.shift()();
+    assert.equal(route.outputConnected, true);
+    assert.equal(written.at(-1), 0,
+        'recovered WebRTC route must mute native duplicate immediately');
+});
+
+test('WebRTC stream already attached before hooks receives lifecycle listeners on discovery', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const begin = source.indexOf('    function registerMediaElement(element, options = {}) {');
+    const end = source.indexOf('    function scanMediaElements(root) {', begin);
+    assert.ok(begin >= 0 && end > begin);
+    const first = { id: 'first' }, second = { id: 'second' };
+    const media = { stream: first, dataset: {}, addEventListener() {}, removeEventListener() {} };
+    const entry = { listenersInstalled: true };
+    let bindings = 0, resets = 0, registrations = 0;
+    const register = runInNewContext('(function () {\n' +
+        source.slice(begin, end) +
+        '\nreturn registerMediaElement;\n})()', {
+        isMediaElement: () => true,
+        mediaElements: new Set(),
+        updatePageMediaRestriction: () => {}, log: () => {},
+        getMediaState: () => entry,
+        readMediaSrcObject: element => element.stream,
+        resetDirectMediaStreamRoute: () => { resets++; },
+        bindMediaStreamLifecycle: (_element, stream) => {
+            entry.observedStream = stream;
+            bindings++;
+        },
+        applyMediaElementState: () => { registrations++; }
+    });
+    register(media);
+    assert.equal(bindings, 1, 'pre-existing stream gets its lifecycle binding');
+    assert.equal(resets, 0);
+    register(media);
+    assert.equal(bindings, 1, 'repeat scans cannot duplicate stream listeners');
+    media.stream = second;
+    register(media);
+    assert.equal(bindings, 2, 'native setter bypass must refresh stream listeners');
+    assert.equal(resets, 1, 'old stream route must be detached once');
+    assert.equal(registrations, 3);
+});
 
 test('MAIN hook preflights early WebAudio but restores page APIs on exclusion', () => {
     const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
@@ -1672,7 +1900,7 @@ test('limiter-to-direct transitions clamp boosted MAIN-world page output before 
     const state = { extensionActive: true, enabled: true, normalizerEnabled: false,
         mono: false, muted: false, dB: -10 };
     const wireGraph = runInNewContext('(() => {\n' + source.slice(start,end) + '\nreturn wireGraph;})()', {
-        state, log: () => {}, configureLimiter: () => {},
+        state, mediaSourceGain: () => 1, log: () => {}, configureLimiter: () => {},
         effectiveGain: () => 10 ** (-10 / 20),
         dbToGain: v => 10 ** (v/20),
         connectNative: (a,b) => {
@@ -1715,7 +1943,7 @@ test('MAIN-world media route clamps before bypassing limiter on Normalize off', 
         log: () => {}, configureLimiter: () => {}, safetyLimiterRequired: () => false,
         syncNormalizerMeterTimer: () => {},
         currentRoutingMode: () => 'stereo-direct',
-        dbToGain: v => 10 ** (v/20), effectiveGain: () => 10 ** (-10/20),
+        mediaSourceGain: () => 1, dbToGain: v => 10 ** (v/20), effectiveGain: () => 10 ** (-10/20),
         connectNative: (a,b) => {
             if (a === nodes.gain && b === destination) safeAtConnection = param.value <= 1;
             a.edges.push(b);
@@ -2255,7 +2483,7 @@ test('reused media source resets stale automatic gain before next track and fail
     let manual = 1;
     let disconnected = false;
     const reset = runInNewContext('(' + page.slice(start, end).trim() + ')', {
-        effectiveGain: () => manual,
+        effectiveGain: () => manual, mediaSourceGain: () => 1,
         dbToGain: db => 10 ** (db / 20),
         state: { normalizerEnabled: true },
         disconnectMediaRouteOutput: route => { disconnected = true; route.outputConnected = false; },
@@ -2402,7 +2630,7 @@ test('media route source capture is recoverable and rescue path never boosts wit
     assert.ok(begin > 0 && end > begin);
     const setup = source.slice(begin, end);
     assert.ok(setup.indexOf('connectNative(inputAnalyser, gain)') < setup.indexOf('createMediaRouteSource(context, element)'));
-    assert.match(setup, /mediaRoutes\.set\(element, route\);\s*connectNative\(route\.source, inputAnalyser\)/);
+    assert.match(setup, /mediaRoutes\.set\(element, route\);[\s\S]*?mediaSourceGain\(route\);[\s\S]*?connectNative\(route\.source, inputAnalyser\)/);
     assert.match(setup, /route\.fallbackDirectOnly = true/);
     assert.match(source, /if \(route\.fallbackDirectOnly\) \{/);
     assert.match(source, /\(route\.limiterFallbackActive \|\| route\.fallbackDirectOnly\)/);
@@ -2566,7 +2794,7 @@ test('failed first MediaElementSource connection keeps its source and restores a
             return { source: sourceNode, kind: 'mediaElement', muteNative: false };
         },
         connectNative,
-        effectiveGain: () => 5,
+        mediaSourceGain: () => 1, effectiveGain: () => 5,
         safeDisconnect: () => {},
         wireMediaRoute: () => { fallbackInvoked = true; },
         scheduleMediaRouteRecovery: () => {},
@@ -3422,7 +3650,7 @@ test('closed direct MediaStream routes rebuild on a fresh AudioContext without r
             return { source: {}, kind: 'mediaStream', muteNative: true, stream: {} };
         },
         connectNative: () => {},
-        effectiveGain: () => 2,
+        mediaSourceGain: () => 1, effectiveGain: () => 2,
         getMediaSourceUrl: () => '',
         log: () => {}
     };
