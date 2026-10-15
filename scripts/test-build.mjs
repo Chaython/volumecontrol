@@ -1203,6 +1203,39 @@ test('WebRTC video-only track changes do not drop audio but audio swaps refresh 
     assert.equal(events.addtrack, undefined, 'listeners are cleaned up');
 });
 
+test('failed direct WebRTC route restores native fallback then suppresses echo on recovery', () => {
+    const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const start = source.indexOf('    function scheduleMediaRouteRecovery(element, route) {');
+    const end = source.indexOf('    function ensureMediaRoute(element) {', start);
+    assert.ok(start >= 0 && end > start);
+    const player = { volume: 0.6 };
+    const route = {
+        sourceKind: 'mediaStream', muteNative: true, outputConnected: false,
+        context: { state: 'running' }
+    };
+    const routes = new Map([[player, route]]);
+    const written = [];
+    const timers = [];
+    const schedule = runInNewContext('(function () {\n' + source.slice(start, end) +
+        '\nreturn scheduleMediaRouteRecovery;\n})()', {
+        mediaRoutes: routes,
+        nativeVolumeForBase: () => 0.3,
+        getMediaState: () => ({ baseVolume: 0.6 }),
+        setNativeVolume: (_element, value) => { written.push(value); },
+        setTimeout: cb => { timers.push(cb); return timers.length; },
+        wireMediaRoute: r => { r.outputConnected = true; },
+        isMediaPlaying: () => false, resumeContext: () => {}
+    });
+    schedule(player, route);
+    assert.equal(written[0], 0.3,
+        'native fallback must be audible during a failed WebAudio connection');
+    assert.equal(timers.length, 1);
+    timers.shift()();
+    assert.equal(route.outputConnected, true);
+    assert.equal(written.at(-1), 0,
+        'recovered WebRTC route must mute native duplicate immediately');
+});
+
 test('WebRTC stream already attached before hooks receives lifecycle listeners on discovery', () => {
     const source = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     const begin = source.indexOf('    function registerMediaElement(element, options = {}) {');
