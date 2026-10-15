@@ -301,7 +301,7 @@ test('moving volume slider cannot cause the MAIN-world normalizer to compensate'
     const state = { normalizerEnabled: true, extensionActive: true, enabled: true, muted: false };
     const config = { targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 100 };
     const sample = runInNewContext('(function () {\n' + source.slice(start, end) + '\nreturn sampleProcessor;\n})()', {
-        state, normalizeNormalizerConfig: () => config, configureLimiter: () => {},
+        state, mediaSourceGain: () => 1, normalizeNormalizerConfig: () => config, configureLimiter: () => {},
         effectiveGain: () => manualGain, dbToGain: dB => 10 ** (dB / 20)
     });
     for (let n = 0; n < 40; n++) sample(processor);
@@ -809,7 +809,7 @@ test('MAIN-world graph failures restore clamped direct output, then retry limiti
     const state = { extensionActive: true, enabled: true, muted: false, mono: false,
         dB: 20, normalizerEnabled: true };
     const fns = runInNewContext('(() => {\n' + source.slice(start, end) + '\nreturn { wireGraph };})()', {
-        state, effectiveGain: () => 10, dbToGain: db => 10 ** (db / 20),
+        state, mediaSourceGain: () => 1, effectiveGain: () => 10, dbToGain: db => 10 ** (db / 20),
         safeDisconnect: node => { node.edges = []; }, connectNative,
         configureLimiter: () => {}, log: () => {}
     });
@@ -869,7 +869,7 @@ test('MAIN-world media element route failures cannot bypass limiter with boosted
     };
     const wire = runInNewContext('(() => {\n' + source.slice(start, end) + '\nreturn wireMediaRoute;})()', {
         state: { extensionActive: true, enabled: true, mono: false, normalizerEnabled: true, muted: false, dB: 20 },
-        effectiveGain: () => 10, dbToGain: d => 10 ** (d / 20), connectNative,
+        mediaSourceGain: () => 1, effectiveGain: () => 10, dbToGain: d => 10 ** (d / 20), connectNative,
         configureLimiter: () => {}, log: () => {}, safetyLimiterRequired: () => true,
         syncNormalizerMeterTimer: () => {},
         currentRoutingMode: () => 'stereo-limited',
@@ -1900,7 +1900,7 @@ test('limiter-to-direct transitions clamp boosted MAIN-world page output before 
     const state = { extensionActive: true, enabled: true, normalizerEnabled: false,
         mono: false, muted: false, dB: -10 };
     const wireGraph = runInNewContext('(() => {\n' + source.slice(start,end) + '\nreturn wireGraph;})()', {
-        state, log: () => {}, configureLimiter: () => {},
+        state, mediaSourceGain: () => 1, log: () => {}, configureLimiter: () => {},
         effectiveGain: () => 10 ** (-10 / 20),
         dbToGain: v => 10 ** (v/20),
         connectNative: (a,b) => {
@@ -1943,7 +1943,7 @@ test('MAIN-world media route clamps before bypassing limiter on Normalize off', 
         log: () => {}, configureLimiter: () => {}, safetyLimiterRequired: () => false,
         syncNormalizerMeterTimer: () => {},
         currentRoutingMode: () => 'stereo-direct',
-        dbToGain: v => 10 ** (v/20), effectiveGain: () => 10 ** (-10/20),
+        mediaSourceGain: () => 1, dbToGain: v => 10 ** (v/20), effectiveGain: () => 10 ** (-10/20),
         connectNative: (a,b) => {
             if (a === nodes.gain && b === destination) safeAtConnection = param.value <= 1;
             a.edges.push(b);
@@ -2630,7 +2630,7 @@ test('media route source capture is recoverable and rescue path never boosts wit
     assert.ok(begin > 0 && end > begin);
     const setup = source.slice(begin, end);
     assert.ok(setup.indexOf('connectNative(inputAnalyser, gain)') < setup.indexOf('createMediaRouteSource(context, element)'));
-    assert.match(setup, /mediaRoutes\.set\(element, route\);\s*connectNative\(route\.source, inputAnalyser\)/);
+    assert.match(setup, /mediaRoutes\.set\(element, route\);[\s\S]*?mediaSourceGain\(route\);[\s\S]*?connectNative\(route\.source, inputAnalyser\)/);
     assert.match(setup, /route\.fallbackDirectOnly = true/);
     assert.match(source, /if \(route\.fallbackDirectOnly\) \{/);
     assert.match(source, /\(route\.limiterFallbackActive \|\| route\.fallbackDirectOnly\)/);
@@ -2794,7 +2794,7 @@ test('failed first MediaElementSource connection keeps its source and restores a
             return { source: sourceNode, kind: 'mediaElement', muteNative: false };
         },
         connectNative,
-        effectiveGain: () => 5,
+        mediaSourceGain: () => 1, effectiveGain: () => 5,
         safeDisconnect: () => {},
         wireMediaRoute: () => { fallbackInvoked = true; },
         scheduleMediaRouteRecovery: () => {},
@@ -3650,7 +3650,7 @@ test('closed direct MediaStream routes rebuild on a fresh AudioContext without r
             return { source: {}, kind: 'mediaStream', muteNative: true, stream: {} };
         },
         connectNative: () => {},
-        effectiveGain: () => 2,
+        mediaSourceGain: () => 1, effectiveGain: () => 2,
         getMediaSourceUrl: () => '',
         log: () => {}
     };
