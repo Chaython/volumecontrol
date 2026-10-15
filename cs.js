@@ -725,10 +725,20 @@ function stopFrameReporting() {
     if (isTopFrame()) frameLimitReports.clear();
 }
 
+// Sites sometimes detach a video while it continues producing audio. Even if
+// Volume Control made its native fallback temporarily silent, it must remain
+// tracked so a later unmute/dB change can restore it without reinsertion.
+function shouldRetainDetachedMediaElement(element) {
+    if (!element || !isMediaPlaying(element)) return false;
+    if (isAudibleMediaElement(element)) return true;
+    const dataset = element.dataset;
+    return Boolean(dataset && (dataset.vcFallback === 'true' || dataset.vcHooked === 'true'));
+}
+
 function sweepKnownMediaElements() {
     for (const element of Array.from(tc.vars.knownMediaElements || [])) {
         if (element && element.isConnected) continue;
-        if (element && isMediaPlaying(element) && isAudibleMediaElement(element)) continue;
+        if (shouldRetainDetachedMediaElement(element)) continue;
         if (element && element.dataset && element.dataset.vcFallback === 'true') {
             clearFallbackVolume(element);
         }
@@ -1278,12 +1288,17 @@ function applyState() {
             // detach their <video> during player rebuilds while playback
             // continues; dropping those would freeze any fallback volume we
             // applied and stop later state changes from reaching them.
-            if (!el.isConnected) {
-                if (!(isMediaPlaying(el) && isAudibleMediaElement(el))) {
-                    tc.vars.knownMediaElements.delete(el);
-                }
+            if (!el.isConnected && !shouldRetainDetachedMediaElement(el)) {
+                // An idle detached fallback must be restored before dropping
+                // our last strong reference; otherwise it can resume later at
+                // the extension's old attenuation without being tracked.
+                if (el.dataset && el.dataset.vcFallback === 'true') clearFallbackVolume(el);
+                tc.vars.knownMediaElements.delete(el);
                 continue;
             }
+            // Still-playing detached elements take the SAME update path as
+            // connected elements. Retention without applying new dB/mute was
+            // leaving audible detached videos stuck at stale native volume.
             if (isPageAudioManaged(el)) {
                 if (el.dataset.vcFallback === 'true') clearFallbackVolume(el);
                 continue;
