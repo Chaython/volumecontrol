@@ -1138,7 +1138,7 @@ test('direct WebRTC capture preserves native slider and mute across processing p
     assert.match(source, /Math\.max\(0, Math\.min\(1, effectiveGain\(\)\)\) \* mediaSourceGain\(route\)/,
         'first direct stream sample is clamped by native volume');
     assert.match(source, /\*\s*mediaSourceGain\(processor\)/,
-        'normalizer gain updates retain the player's native volume');
+        'normalizer gain updates retain the native player volume');
 });
 
 test('WebRTC native output stays suppressed while connected and restores on disable', () => {
