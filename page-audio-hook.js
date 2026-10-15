@@ -1801,6 +1801,12 @@
     }
 
     function scheduleMediaRouteRecovery(element, route) {
+        // Unlike an irreversible MediaElementSource, a disconnected direct
+        // MediaStream route has a working native output. Do not leave that
+        // native output stuck at volume zero while retrying a failed graph.
+        if (route && route.muteNative && !route.outputConnected) {
+            setNativeVolume(element, nativeVolumeForBase(element, getMediaState(element).baseVolume));
+        }
         if (!route || route.outputConnected || route.recoveryTimer ||
             (route.recoveryAttempts || 0) >= 6 ||
             !route.context || route.context.state === "closed") return;
@@ -1816,6 +1822,9 @@
             wireMediaRoute(route);
             if (route.outputConnected) {
                 route.recoveryAttempts = 0;
+                // Once captured audio becomes audible again, suppress the
+                // parallel native output to prevent duplicate/echoed playback.
+                if (route.muteNative) setNativeVolume(element, 0);
                 // A paused source may reconnect successfully while the
                 // context is suspended. Do not awaken the audio device until
                 // playback actually resumes.
