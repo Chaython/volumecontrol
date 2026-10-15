@@ -264,6 +264,23 @@ try {
             });
             const send = cmd => cdp.evaluate(optionsSession,
                 'probe.send(' + tabId + ',' + JSON.stringify(cmd) + ')');
+            // Read the real HTMLMediaElement volume from a separate browser
+            // execution world. MAIN-world .volume is patched by the extension.
+            await cdp.send('Page.enable', {}, fixtureSession);
+            const { frameTree } = await cdp.send('Page.getFrameTree', {}, fixtureSession);
+            const { executionContextId: nativeContextId } = await cdp.send(
+                'Page.createIsolatedWorld',
+                { frameId: frameTree.frame.id, worldName: 'volume-control-native-probe' },
+                fixtureSession
+            );
+            const readNativeVolume = async id => {
+                const value = await cdp.send('Runtime.evaluate', {
+                    expression: 'document.getElementById(' + JSON.stringify(id) + ')?.volume',
+                    contextId: nativeContextId, returnByValue: true
+                }, fixtureSession);
+                if (value.exceptionDetails) throw Error(value.exceptionDetails.text);
+                return value.result?.value;
+            };
             for (const s of downloaded) {
                 const kind = s.path === '/video.mp4' ? 'video' : 'audio';
                 // Start analysis BEFORE the short MP3 begins. Previously
@@ -316,6 +333,246 @@ try {
                 await send({ command: 'setVolume', dB: 0 }).catch(() => {});
                 await cdp.evaluate(fixtureSession,
                     '(()=>{const m=document.getElementById(' + JSON.stringify(kind) + ');m.pause();return true})()');
+            }
+            // Run against a genuinely decoded MP4, not a mocked media
+            // element. Check the JS-facing site volume AND browser-native
+            // HTMLMediaElement.volume separately: a player slider can appear
+            // enabled while extension attenuation makes it snap back.
+            if (downloaded.some(x => x.path === '/video.mp4')) {
+                const entry = { site: 'Real MP4 native slider, pause, boost and mute',
+                    status: 'failed' };
+                results.push(entry);
+                const nativeState = '(()=>{const m=document.getElementById("native-player");' +
+                    'const p=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,"volume");' +
+                    'return {site:m.volume,muted:m.muted,' +
+                    'paused:m.paused,ready:m.readyState,time:m.currentTime,' +
+                    'managed:m.dataset.vcPageAudioManaged||null}})()';
+                const closeTo = (a,b) => Number.isFinite(a) && Math.abs(a-b) < 0.015;
+                const nativeSnapshot = async () => ({
+                    ...(await cdp.evaluate(fixtureSession,nativeState)),
+                    physical: await readNativeVolume('native-player')
+                });
+                try {
+                    await send({ command: 'setNormalizer', enabled: false });
+                    await send({ command: 'setVolume', dB: 0 });
+                    await send({ command: 'setMute', muted: false });
+                    await cdp.evaluate(fixtureSession, '(()=>{' +
+                        'const m=document.createElement("video");m.id="native-player";' +
+                        'm.controls=true;m.preload="auto";m.volume=.7;' +
+                        'm.src="/video.mp4?native-player-test";' +
+                        'document.body.appendChild(m);m.play()?.catch?.(()=>{});return true})()');
+                    const playing = await waitFor(async () => {
+                        const v = await nativeSnapshot();
+                        return v.ready >= 2 && !v.paused ? v : null;
+                    }, 12000);
+                    await send({ command: 'setVolume', dB: -12 });
+                    const attenuation = 10 ** (-12 / 20);
+                    const down = await waitFor(async () => {
+                        const v = await nativeSnapshot();
+                        return closeTo(v.site,.7) && closeTo(v.physical,.7*attenuation) ? v : null;
+                    }, 2500);
+                    await cdp.evaluate(fixtureSession,
+                        'document.getElementById("native-player").volume=.71;true');
+                    const fineStep = await waitFor(async () => {
+                        const v = await nativeSnapshot();
+                        return closeTo(v.site,.71) && closeTo(v.physical,.71*attenuation) ? v : null;
+                    }, 2500);
+                    // Browser-native volume controls do NOT go through the
+                    // MAIN-world patched setter. Simulate that exact boundary
+                    // from Chromium's isolated world, as native video controls
+                    // do, then verify the page hook adopts and attenuates it.
+                    const nativeSlider = await cdp.send('Runtime.evaluate', {
+                        expression: 'document.getElementById("native-player").volume=.5',
+                        contextId: nativeContextId, returnByValue: true
+                    }, fixtureSession);
+                    if (nativeSlider.exceptionDetails) throw Error('Native volume slider failed');
+                    const browserSlider = await waitFor(async () => {
+                        const v = await nativeSnapshot();
+                        return closeTo(v.site,.5) && closeTo(v.physical,.5*attenuation) ? v : null;
+                    },2500);
+                    await cdp.evaluate(fixtureSession,
+                        '(()=>{const m=document.getElementById("native-player");' +
+                        'm.pause();m.volume=.34;return true})()');
+                    const pausedStep = await waitFor(async () => {
+                        const v = await nativeSnapshot();
+                        return v.paused && closeTo(v.site,.34) &&
+                            closeTo(v.physical,.34*attenuation) ? v : null;
+                    }, 2500);
+                    await send({ command: 'setVolume', dB: 0 });
+                    const restored = await waitFor(async () => {
+                        const v = await nativeSnapshot();
+                        return closeTo(v.site,.34) && closeTo(v.physical,.34) ? v : null;
+                    }, 2500);
+                    // A positive dB setting requires WebAudio. Its media
+                    // route must not reset the site's saved 34% slider.
+                    await cdp.evaluate(fixtureSession,
+                        'document.getElementById("native-player").play()?.catch?.(()=>{});true');
+                    await send({ command: 'setVolume', dB: 6 });
+                    await sleep(450);
+                    const boosted = await nativeSnapshot();
+                    await cdp.evaluate(fixtureSession,
+                        'document.getElementById("native-player").muted=true;true');
+                    await sleep(150);
+                    const siteMuted = await nativeSnapshot();
+                    await cdp.evaluate(fixtureSession,
+                        'document.getElementById("native-player").muted=false;true');
+                    await send({ command: 'setMute', muted: true });
+                    const extensionMuted = (await send({ command: 'getAudioControlState' }))?.response;
+                    await send({ command: 'setMute', muted: false });
+                    await sleep(350);
+                    const unmuted = await nativeSnapshot();
+                    entry.playing = playing; entry.down = down; entry.fineStep = fineStep;
+                    entry.browserSlider = browserSlider; entry.pausedStep = pausedStep; entry.restored = restored;
+                    entry.boosted = boosted; entry.siteMuted = siteMuted;
+                    entry.extensionMuted = extensionMuted?.muted; entry.unmuted = unmuted;
+                    entry.status = closeTo(boosted.site,.34) && closeTo(boosted.physical,.34) &&
+                        siteMuted.muted === true && extensionMuted?.muted === true &&
+                        unmuted.muted === false && unmuted.time > boosted.time + .1 ?
+                        'passed' : 'failed';
+                    if(entry.status === 'failed')entry.reason='Native slider or mute changed unexpectedly during live WebAudio route';
+                } catch(error) {
+                    entry.reason = error.message;
+                    entry.lastState = await nativeSnapshot().catch(() => null);
+                } finally {
+                    await send({ command: 'setNormalizer', enabled: false }).catch(() => {});
+                    await send({ command: 'setVolume', dB: 0 }).catch(() => {});
+                    await send({ command: 'setMute', muted: false }).catch(() => {});
+                    await cdp.evaluate(fixtureSession,
+                        '(()=>{const m=document.getElementById("native-player");' +
+                        'if(m){m.pause();m.remove()}return true})()').catch(() => {});
+                    console.log('NATIVE_SLIDER_RESULT=' + JSON.stringify(entry));
+                }
+            }
+            // Exercise real MediaStream audio captured from the downloaded MP4.
+            // Force the rarely encountered MediaElementSource rejection, so
+            // our direct MediaStreamSource fallback actually runs in Chromium.
+            // Inspect the real GainNode and native media volume instead of
+            // checking whether the popup merely reports the requested dB.
+            if (downloaded.some(x => x.path === '/video.mp4')) {
+                const entry = { site: 'Decoded MP4 MediaStream direct capture and native player volume',
+                    status: 'inconclusive' };
+                results.push(entry);
+                const streamState = '(()=>{const p=document.getElementById("stream-receiver");' +
+                    'const g=window.__vcStreamGains?.[window.__vcFirstStreamGain];' +
+                    'if(!p)return null;const d=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,"volume");' +
+                    'return {time:p.currentTime,paused:p.paused,ready:p.readyState,' +
+                    'siteVolume:p.volume,muted:p.muted,' +
+                    'gain:g?.gain?.value??null}})()';
+                const approx = (x,y) => Number.isFinite(x) && Math.abs(x-y) < .04;
+                const streamSnapshot = async () => ({
+                    ...(await cdp.evaluate(fixtureSession,streamState)),
+                    nativeVolume: await readNativeVolume('stream-receiver')
+                });
+                try {
+                    await send({ command: 'setNormalizer', enabled: false });
+                    await send({ command: 'setVolume', dB: 6 });
+                    await cdp.evaluate(fixtureSession, '(()=>{' +
+                        'const src=document.createElement("video");src.id="stream-source";' +
+                        'src.muted=true;src.loop=true;src.src="/video.mp4?stream-source";' +
+                        'src.preload="auto";document.body.appendChild(src);' +
+                        'src.play()?.catch?.(()=>{});return true})()');
+                    await waitFor(async () => {
+                        const v=await cdp.evaluate(fixtureSession,
+                            '(()=>{const m=document.getElementById("stream-source");' +
+                            'return {ready:m.readyState,paused:m.paused,t:m.currentTime,' +
+                            'capture:typeof m.captureStream==="function"}})()');
+                        return v.ready >= 2 && !v.paused && v.capture ? v : null;
+                    },12000);
+                    const capture = await cdp.evaluate(fixtureSession, '(()=>{' +
+                        'const src=document.getElementById("stream-source");' +
+                        'window.__vcCapturedMedia=src.captureStream();' +
+                        'return {audio:window.__vcCapturedMedia.getAudioTracks().length,' +
+                        'video:window.__vcCapturedMedia.getVideoTracks().length}})()');
+                    entry.capture = capture;
+                    if (!capture.audio) {
+                        entry.reason = 'Chromium did not expose an audio track in the MP4 captureStream';
+                    } else {
+                        await cdp.evaluate(fixtureSession, '(()=>{' +
+                            'const p=AudioContext.prototype;' +
+                            'const originalSource=p.createMediaElementSource;' +
+                            'const originalGain=p.createGain;' +
+                            'window.__vcStreamGains=[];' +
+                            'window.__vcStreamRestore=()=>{' +
+                            'p.createMediaElementSource=originalSource;p.createGain=originalGain};' +
+                            'p.createMediaElementSource=function(el){' +
+                            'if(el.id==="stream-receiver")throw new DOMException("Forced unsupported media element","NotSupportedError");' +
+                            'return originalSource.call(this,el)};' +
+                            'p.createGain=function(...args){const node=originalGain.apply(this,args);' +
+                            'window.__vcStreamGains.push(node);return node};' +
+                            'window.__vcFirstStreamGain=window.__vcStreamGains.length;' +
+                            'const m=document.createElement("audio");m.id="stream-receiver";' +
+                            'm.controls=true;m.volume=.45;m.srcObject=window.__vcCapturedMedia;' +
+                            'document.body.appendChild(m);m.play()?.catch?.(()=>{});return true})()');
+                        const routed = await waitFor(async () => {
+                            const s=await streamSnapshot();
+                            return s && s.ready >= 2 && !s.paused &&
+                                approx(s.siteVolume,.45) && approx(s.nativeVolume,0) &&
+                                approx(s.gain,.45 * 10 ** (6/20)) ? s : null;
+                        },5000);
+                        await cdp.evaluate(fixtureSession,
+                            'document.getElementById("stream-receiver").volume=.2;true');
+                        const lowered=await waitFor(async () => {
+                            const s=await streamSnapshot();
+                            return s && approx(s.siteVolume,.2) && approx(s.nativeVolume,0) &&
+                                approx(s.gain,.2 * 10 ** (6/20)) ? s : null;
+                        },2500);
+                        await cdp.evaluate(fixtureSession,
+                            'document.getElementById("stream-receiver").muted=true;true');
+                        const muted=await waitFor(async () => {
+                            const s=await streamSnapshot();
+                            return s && s.muted && approx(s.gain,0) ? s : null;
+                        },2500);
+                        await cdp.evaluate(fixtureSession,
+                            'document.getElementById("stream-receiver").muted=false;true');
+                        const unmuted=await waitFor(async () => {
+                            const s=await streamSnapshot();
+                            return s && !s.muted && approx(s.gain,.2 * 10 ** (6/20)) ? s : null;
+                        },2500);
+                        entry.routed=routed;entry.lowered=lowered;
+                        entry.muted=muted;entry.unmuted=unmuted;
+                        // Disable only this site (the same operation as the
+                        // popup Active toggle), without reloading the player.
+                        // A direct-stream fallback must restore the native
+                        // HTMLMediaElement output, or call audio goes silent.
+                        const setActive = active => cdp.evaluate(optionsSession,
+                            'new Promise((ok,fail)=>chrome.runtime.sendMessage(' +
+                            JSON.stringify({ command:'mutateAccessLists', mutation: {
+                                type:'setSiteActive',url:localPage,active
+                            } }) + ',x=>chrome.runtime.lastError?' +
+                            'fail(Error(chrome.runtime.lastError.message)):ok(x)))');
+                        try {
+                            const blocked = await setActive(false);
+                            if (!blocked?.ok) throw Error('Site disable failed: ' + JSON.stringify(blocked));
+                            entry.disabled = await waitFor(async () => {
+                                const snap = await streamSnapshot();
+                                return snap && approx(snap.nativeVolume,.2) &&
+                                    snap.siteVolume === .2 ? snap : null;
+                            },6000);
+                        } finally {
+                            const restored = await setActive(true);
+                            if (!restored?.ok) throw Error('Site re-enable failed: ' + JSON.stringify(restored));
+                        }
+                        entry.status = unmuted.time > routed.time + .1 &&
+                            entry.disabled?.nativeVolume > .15 ? 'passed' : 'failed';
+                        if(entry.status==='failed')entry.reason='Direct MediaStream route failed to restore native controls';
+                    }
+                } catch(error) {
+                    entry.status = 'failed';entry.reason=error.message;
+                } finally {
+                    await cdp.evaluate(fixtureSession, '(()=>{' +
+                        'for(const id of ["stream-source","stream-receiver"]){' +
+                        'const m=document.getElementById(id);if(m){m.pause();m.remove()}}' +
+                        'window.__vcStreamRestore?.();' +
+                        'window.__vcCapturedMedia?.getTracks().forEach(t=>t.stop());return true})()').catch(()=>{});
+                    await cdp.evaluate(optionsSession,
+                        'new Promise((ok,fail)=>chrome.runtime.sendMessage(' +
+                        JSON.stringify({command:'mutateAccessLists', mutation:{
+                            type:'setSiteActive',url:localPage,active:true
+                        }}) + ',x=>chrome.runtime.lastError?' +
+                        'fail(Error(chrome.runtime.lastError.message)):ok(x)))').catch(()=>{});
+                    await send({ command: 'setVolume', dB: 0 }).catch(()=>{});
+                    console.log('DIRECT_STREAM_RESULT=' + JSON.stringify(entry));
+                }
             }
             // Play two real compressed sources together, and change
             // normalization while both are actively decoding.
@@ -663,6 +920,8 @@ try {
     const required = [
         'Downloaded real audio',
         'Downloaded real video',
+        'Real MP4 native slider, pause, boost and mute',
+        'Decoded MP4 MediaStream direct capture and native player volume',
         'Concurrent decoded MP3 and MP4',
         'Real MP4 same-element playlist transition'
     ];

@@ -3,6 +3,8 @@ name: Real streaming-site playback probes
 on:
   workflow_dispatch:
   push:
+    branches:
+      - master
     paths:
       - 'cs.js'
       - 'page-audio-hook.js'
