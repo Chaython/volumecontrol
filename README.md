@@ -8,20 +8,6 @@
 ***
 
 
-## Version 6.24 – Patch Notes (since 6.16)
-
-This release consolidates the changes made since **V6.16**, including audio-routing reliability, normalization, per-tab behavior, browser compatibility, and automated regression coverage.
-
-- **Audio normalization:** Added an opt-in per-site Normalize control, independent of manual volume; added source-loudness analysis, output peak metering, configurable normalization behavior, and safer gain/limiter transitions.
-- **Safer audio routing:** Prevented fallback reconnects from exposing unprotected gain, clamped boosted gain before direct fallback, and made routing failures retryable without risking sudden volume spikes.
-- **Native player compatibility:** Fixed native volume sliders and mute-only changes under fallback attenuation; preserve paused-player edits, startup mute intent, and native WebRTC player controls.
-- **Mute and fallback behavior:** Preserve a website's own mute state, keep extension mute separate, reassert extension mute when necessary, and restore inactive fallback volume safely.
-- **Per-tab state:** When Remember is off, volume, mono, and mute now persist through SPA navigation and playlist/source transitions within the same tab, while reloads and new tabs start from defaults.
-- **Site settings and exclusions:** Improved remembered-site isolation, path-aware blocklist behavior and migration cleanup, and made exclusion handling more robust.
-- **Controls and usability:** Added volume changes via mouse wheel, fixed pause/play behavior, improved popup/options controls, and refined hotkey and state synchronization behavior.
-- **Browser and media coverage:** Expanded Chromium and Firefox checks to cover real decoded MP3/MP4 playback, native sliders, mute, paused media, WebAudio, WebRTC, playlist-like source changes, and extension-installed behavior. CI distinguishes genuine playback verification from inconclusive public-site/headless failures.
-- **Build and release automation:** Added reproducible minified package builds, separate Chrome/Firefox artifacts, daily prereleases, stable Firefox/AMO publishing validation, and clearer CI summaries.
-
 \n## Description
 
 Volume Control adds a simple per-site volume control to your browser. It can lower volume, boost HTML5 audio and video above the normal browser limit, and optionally play stereo audio as mono. The extension is useful for quiet videos, uneven site volume, embedded players, and pages that do not provide enough audio control on their own.
@@ -216,7 +202,7 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 # Changelog
 
-## Changes since 6.11 (through 6.23)
+## Changes since V6.16 (through V6.23)
 
 **Post-6.23 updates on `master`:** opt-in Normalize per site/path and a separately controlled global default; collapsible popup meter/Options controls; pre-fader source analysis independent of the slider; noise-floor gate, peak-aware automatic boost headroom and faster gain reduction; sampled output peak meter; and CPU-saving compressor/timer bypasses while disabled. See [signal flow](#signal-flow) and [limitations](#unsupported-media-and-practical-limits).
 
