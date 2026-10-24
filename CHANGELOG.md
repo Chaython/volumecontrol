@@ -1,8 +1,8 @@
 # Changelog
 
-All notable changes to Volume Control are documented here. This changelog summarizes the changes from **V6.16 onward**; see the Git history for individual commits.
+This changelog summarizes the changes from **V6.16 through V6.23**. Individual commits provide implementation detail.
 
-## V6.24 — October 2026 (changes since V6.16)
+## V6.16–V6.23 — Changes through October 2026
 
 ### Audio engine and normalization
 - Added opt-in per-site audio normalization with a global default and independent site overrides.
