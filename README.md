@@ -290,6 +290,9 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 
 # 📝 Changelog
 
+<details>
+<summary>📝 View complete changelog (Versions 6.0–6.23)</summary>
+
 ## 🚀 Changes since V6.16 (through V6.23)
 
 **Post-6.23 updates on `master`:** opt-in Normalize per site/path and a separately controlled global default; collapsible popup meter/Options controls; pre-fader source analysis independent of the slider; noise-floor gate, peak-aware automatic boost headroom and faster gain reduction; sampled output peak meter; and CPU-saving compressor/timer bypasses while disabled. See [signal flow](#signal-flow) and [limitations](#unsupported-media-and-practical-limits).
@@ -548,6 +551,8 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 </details>
 
 ---
+
+</details>
 
 <details>
 <summary>📁 Complete file reference</summary>
