@@ -39,12 +39,29 @@ function bars(id,labelId,items) {
  for(const item of items){const wrap=document.createElement("div");wrap.className="bar-wrap";const bar=document.createElement("div");bar.className="bar";const count=Number(item.count)||0;bar.style.height=Math.max(2,count/max*100)+"%";bar.title=new Date(item.timestamp).toLocaleDateString()+": "+num(count);bar.setAttribute("aria-label",bar.title);wrap.append(bar);host.append(wrap);}
  txt(labelId,new Date(items[0].timestamp).toLocaleDateString()+" — "+new Date(items[items.length-1].timestamp).toLocaleDateString());
 }
+async function fetchStatsSnapshot(){
+ const candidates=[
+  new URL("stats.json",window.location.href).href,
+  "https://raw.githubusercontent.com/Chaython/volumecontrol/master/docs/stats.json"
+ ];
+ let lastError=null;
+ for(const url of candidates){
+  try{
+   const response=await fetch(url+(url.includes("?")?"&":"?")+"_="+Date.now(),{cache:"no-store",headers:{"Accept":"application/json"}});
+   if(!response.ok)throw new Error("HTTP "+response.status+" loading "+url);
+   const data=await response.json();
+   if(!data||data.schemaVersion!==2||!data.generatedAt||!data.firefox||!data.github)throw new Error("Statistics snapshot has an unexpected or incomplete schema");
+   return data;
+  }catch(error){lastError=error;}
+ }
+ throw lastError||new Error("No statistics source was reachable");
+}
 async function load(){
  $("refresh").disabled=true;
+ $("updated").classList.remove("error");
+ txt("updated","Loading latest statistics…");
  try{
-  const response=await fetch("./stats.json?refresh="+Date.now(),{cache:"no-store"});
-  if(!response.ok)throw new Error("stats.json returned HTTP "+response.status);
-  const d=await response.json(),f=d.firefox||{},g=d.github||{},t=g.traffic||{};
+  const d=await fetchStatsSnapshot(),f=d.firefox||{},g=d.github||{},t=g.traffic||{};
   txt("updated","Snapshot generated "+new Date(d.generatedAt).toLocaleString()+" · refresh runs daily when Actions is enabled.");
   txt("ff-users",num(f.averageDailyUsers));txt("ff-downloads",num(f.weeklyDownloads));
   txt("ff-status",f.status==="available"?"Reported by the public AMO API":(f.error||"AMO data unavailable"));
@@ -78,7 +95,7 @@ async function load(){
   const list=$("referrers");list.replaceChildren();
   if(Array.isArray(t.referrers)&&t.referrers.length){for(const item of t.referrers.slice(0,10)){const li=document.createElement("li");li.textContent=item.referrer+" — "+num(item.count)+" views ("+num(item.uniques)+" unique)";list.append(li);}}
   else{const li=document.createElement("li");li.textContent="No authorized referrer data available.";list.append(li);}
- }catch(e){txt("updated","Could not load stats.json: "+e.message+". Open this page through GitHub Pages, not as a local file.");$("updated").classList.add("error");}
+ }catch(e){txt("updated","Could not load statistics from GitHub Pages or the repository snapshot: "+(e&&e.message?e.message:String(e))+". Try Refresh snapshot in a moment.");$("updated").classList.add("error");}
  finally{$("refresh").disabled=false;}
 }
 $("refresh").addEventListener("click",load);load();
