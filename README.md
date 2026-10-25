@@ -288,6 +288,54 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 <img width="472" height="182" alt="firefox_6Jn4rh739p" src="https://github.com/user-attachments/assets/f368b636-ac39-4e23-b929-c6f29b34b8b9" />
 
 
+
+## 🛠️ Technicals
+
+<details>
+<summary>Architecture, audio pipeline, and implementation notes</summary>
+
+### Architecture
+
+Volume Control is a browser extension built around separate execution contexts:
+
+| Component | Responsibility |
+|---|---|
+| `page-audio-hook.js` | Runs in the page's **MAIN world** to observe media and WebAudio connections and apply gain where routing is supported. |
+| `cs.js` | Runs in the **ISOLATED world** to handle extension APIs, settings, restriction state, and messaging between the popup and page hook. |
+| `background.js` | Handles extension-wide hotkeys, badge feedback, and serialized settings updates. |
+| `popup.js` / `popup.html` | Provides per-tab volume, mute, mono, Normalize, and status controls. |
+| `options.js` / `options.html` | Manages global normalization defaults, site exclusions, remembered sites, and diagnostics settings. |
+| `shared.js` | Shared helpers for decibels, URL/domain matching, messaging, and error handling. |
+
+The MAIN/ISOLATED split is intentional: page-prototype interception must run in the page's JavaScript realm, while extension storage and runtime APIs belong in the isolated extension context. The contexts communicate through a message bridge.
+
+### Audio processing
+
+For routable media, the general signal path is:
+
+```text
+Media source → input analyser → manual × automatic gain → optional mono
+             → safety compressor when needed → output analyser → speakers
+```
+
+Input analysis occurs before the extension's gain, so lowering the manual slider does not cause Normalize to compensate by increasing automatic gain. The output meter reports sampled post-processor sample peaks, not LUFS or inter-sample true peaks. The compressor is not a guaranteed brick-wall limiter.
+
+Browser restrictions affect which path is available. Chromium DRM and cross-origin media without suitable CORS access use native attenuation/mute fallback; Firefox supports WebAudio routing for DRM audio under the conditions described in [Restricted Media](#restricted-media-drm--cross-origin). See [normalization and signal flow](#normalization-manual-volume--peak-meter) and [known limitations](#known-limitations) for details.
+
+### Build and test
+
+Requirements: **Node.js 18+** and **PowerShell**.
+
+```powershell
+npm ci
+npm test
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1
+```
+
+The build creates separate Firefox and Chromium packages under `dist/`, using the browser-appropriate manifest and icon assets. Regression tests cover shared helpers and build/minification behavior; CI additionally runs browser audio-hook smoke tests against packaged builds. Test fixtures under `scripts/fixtures/` are test inputs, not extension payload.
+
+</details>
+
 # 📝 Changelog
 
 <details>
