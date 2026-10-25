@@ -31,7 +31,7 @@
 
 ## 📈 Live usage & repository statistics
 
-[![Volume Control live statistics](docs/stats.svg?v=1792889914317)](https://chaython.github.io/volumecontrol/stats.html)
+[![Volume Control live statistics](docs/stats.svg?v=1792934093622)](https://chaython.github.io/volumecontrol/stats.html)
 
 
 <details>

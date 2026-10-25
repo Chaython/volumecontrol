@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-25T00:58:34.317Z",
+  "generatedAt": "2026-10-25T13:14:53.622Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
@@ -19,8 +19,8 @@
     "activeInstallCount": 695,
     "rating": 4,
     "ratingCount": 4,
-    "version": "6.16",
-    "lastUpdated": 1789587046.2799704,
+    "version": "7.0",
+    "lastUpdated": 1792902607.092414,
     "message": "Public listing metadata only; weekly users, daily installs, and impressions require Partner Center analytics."
   },
   "github": {
@@ -32,11 +32,6 @@
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-10-10T00:00:00Z",
-          "count": 2,
-          "uniques": 1
-        },
         {
           "timestamp": "2026-10-11T00:00:00Z",
           "count": 8,
@@ -101,16 +96,16 @@
           "timestamp": "2026-10-23T00:00:00Z",
           "count": 2,
           "uniques": 2
+        },
+        {
+          "timestamp": "2026-10-24T00:00:00Z",
+          "count": 7,
+          "uniques": 5
         }
       ],
-      "totalViews": 77,
-      "uniqueVisitors": 44,
+      "totalViews": 82,
+      "uniqueVisitors": 48,
       "clones": [
-        {
-          "timestamp": "2026-10-10T00:00:00Z",
-          "count": 476,
-          "uniques": 342
-        },
         {
           "timestamp": "2026-10-11T00:00:00Z",
           "count": 411,
@@ -175,10 +170,15 @@
           "timestamp": "2026-10-23T00:00:00Z",
           "count": 4,
           "uniques": 4
+        },
+        {
+          "timestamp": "2026-10-24T00:00:00Z",
+          "count": 24,
+          "uniques": 15
         }
       ],
-      "totalClones": 2414,
-      "uniqueCloners": 1236,
+      "totalClones": 1962,
+      "uniqueCloners": 971,
       "referrers": [
         {
           "referrer": "Google",
@@ -191,6 +191,11 @@
           "uniques": 6
         },
         {
+          "referrer": "github.com",
+          "count": 3,
+          "uniques": 3
+        },
+        {
           "referrer": "search.brave.com",
           "count": 3,
           "uniques": 1
@@ -199,11 +204,6 @@
           "referrer": "addons.mozilla.org",
           "count": 2,
           "uniques": 2
-        },
-        {
-          "referrer": "github.com",
-          "count": 1,
-          "uniques": 1
         }
       ],
       "error": null
