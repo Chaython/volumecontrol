@@ -94,7 +94,8 @@ input[type="text"],
 }
 
 button#addFqdn,
-button#addRemembered {
+button#addRemembered,
+button#addDebugSite {
     padding: 8px 15px;
     background-color: #4CAF50;
     color: white;
@@ -106,7 +107,8 @@ button#addRemembered {
 }
 
 button#addFqdn:hover,
-button#addRemembered:hover {
+button#addRemembered:hover,
+button#addDebugSite:hover {
     background-color: #45a049;
 }
 
