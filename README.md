@@ -679,7 +679,9 @@ The script writes clean packages to `dist/`, using `ico.svg` for Firefox and `ch
 
 ### Browser releases
 
-Stable releases are published on GitHub. Download the package for your browser from the [latest release](https://github.com/Chaython/volumecontrol/releases/latest). Firefox and Chromium packages use their respective browser-specific assets and manifests.
+Stable releases are published on GitHub. Download the package for your browser from the [latest stable release](https://github.com/Chaython/volumecontrol/releases/latest). Firefox and Chromium packages use their respective browser-specific assets and manifests.
+
+A **rolling release** is also published as a daily prerelease when releasable code changes are detected. For the newest development build, see the [GitHub releases page](https://github.com/Chaython/volumecontrol/releases) and choose the latest prerelease.
 
 ***
 
