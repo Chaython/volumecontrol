@@ -1,3 +1,5 @@
+**Homepage & live demo:** https://chaython.github.io/volumecontrol/ | [Statistics dashboard](https://chaython.github.io/volumecontrol/stats.html)
+
 ***
 
 <p align="center">

@@ -23,6 +23,7 @@ import {
   Users,
   Download,
   Heart,
+  BarChart3,
 } from "lucide-react";
 import { BrowserFrame } from "@/components/demo/browser-frame";
 import { SignalChain } from "@/components/demo/signal-chain";
@@ -220,6 +221,14 @@ export default function Home() {
                 </strong>
                 GitHub stars
               </span>
+              <a
+                href={asset("/stats.html")}
+                className="flex items-center gap-1.5 text-emerald-300 hover:text-emerald-200 transition-colors"
+                title="Live usage statistics dashboard"
+              >
+                <BarChart3 className="w-4 h-4" />
+                Full statistics
+              </a>
             </div>
           )}
         </div>
@@ -367,6 +376,12 @@ export default function Home() {
             <Link href="/" className="hover:text-zinc-300 transition-colors">
               Home
             </Link>
+            <a
+              href={asset("/stats.html")}
+              className="hover:text-zinc-300 transition-colors"
+            >
+              Statistics
+            </a>
             <a
               href="https://github.com/sponsors/Chaython"
               target="_blank"

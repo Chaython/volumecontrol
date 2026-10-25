@@ -65,11 +65,32 @@ bun run build:static   # static export into out/ (what CI deploys)
 npx serve out          # preview the exported build locally
 ```
 
+## Statistics dashboard (docs/ → /stats.html)
+
+The repo's usage-statistics dashboard lives in `docs/` and is kept fresh by
+the daily `stats.yml` workflow (it commits updated `docs/stats.json` /
+`stats.svg` every night). The website re-publishes it automatically:
+
+- `deploy-website.yml` triggers on `docs/**` **and** `popup.css` changes, and
+  copies `docs/{stats,preview}.html`, `stats.json`, `stats.svg` plus the root
+  `popup.css` into `website/public/` before every build (fixing preview.html's
+  `../popup.css` reference on the fly).
+- Resulting URLs, same as the old dashboard:
+  - `https://chaython.github.io/volumecontrol/stats.html` — statistics
+  - `https://chaython.github.io/volumecontrol/preview.html` — popup preview
+- The homepage links to the dashboard ("Full statistics" in the stats strip
+  and "Statistics" in the footer).
+- Nightly stats refreshes redeploy the site automatically — no manual steps.
+
+`website/public/` contains a committed snapshot of the same files so plain
+local builds work without `docs/` present; CI always overwrites it with the
+latest from `docs/`.
+
 ## Updating the live site
 
-Edit anything under `website/` and push — the workflow only triggers on
-`website/**` changes (or run it manually from the Actions tab:
-*Deploy website to GitHub Pages* → *Run workflow*).
+Edit anything under `website/` and push — the workflow triggers on
+`website/**`, `docs/**` and `popup.css` changes (or run it manually from the
+Actions tab: *Deploy website to GitHub Pages* → *Run workflow*).
 
 ## Troubleshooting
 
