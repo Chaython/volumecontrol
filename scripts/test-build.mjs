@@ -4581,7 +4581,7 @@ test('music normalizer peak protection never adds attenuation and recovers betwe
 
     for (const [source, endMarker] of [
         [page, 'function sampleProcessor(processor) {'],
-        [content, 'function ensureIsolatedNormalizerTimer() {']
+        [content, 'function activeIsolatedMediaCount(pendingElement = null) {']
     ]) {
         const { fn, messages } = loadController(source, endMarker);
         const historyHighPeak = {};
