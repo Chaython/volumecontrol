@@ -677,20 +677,9 @@ Create Firefox and Chrome zip packages:
 
 The script writes clean packages to `dist/`, using `ico.svg` for Firefox and `chrome.png` for Chrome. Release copies are minified with **Terser 5.51.2** for JavaScript, **clean-css 5.3.3** for CSS, and **html-minifier-terser 7.2.0** for HTML. The source files are never rewritten by the build, and the bundled zips exclude repo files and `README.md`. `.github/workflows/ci.yml` runs regression tests, builds first, and then runs the real Chromium and Firefox audio-hook smoke tests against the actual minified files in `dist/chrome` and `dist/firefox`. Downloadable packages are published by the daily prerelease workflow when releasable code changes are detected.
 
-### Stable release publishing (GitHub, Firefox, and Edge)
+### Browser releases
 
-Publishing a **non-prerelease GitHub Release** runs `.github/workflows/publish.yml`. It checks out the exact stable tag, validates that the tag matches `manifest.json`, runs regression and browser smoke tests, and uses the existing `scripts/build.ps1` package logic: **Firefox gets `ico.svg`; Chromium gets `chrome.png`**. It tests the extracted release packages, creates a source archive and SHA-256 checksums, then updates the GitHub release with both browser ZIPs, the source ZIP, checksums, and release notes combining the matching `CHANGELOG.md` section (when available) with GitHub-generated notes.
-
-For store publishing, configure these repository Actions secrets:
-
-- `AMO_JWT_ISSUER` — Mozilla Add-ons API issuer.
-- `AMO_JWT_SECRET` — matching Mozilla Add-ons API secret.
-- `EDGE_CLIENT_ID` — Microsoft Edge Add-ons Publish API client ID.
-- `EDGE_API_KEY` — Microsoft Edge Add-ons Publish API key.
-
-Also add the repository Actions **variable** `EDGE_PRODUCT_ID` with the existing Volume Control product ID from Microsoft Partner Center. The product ID is an identifier, not a credential.
-
-When a stable GitHub Release is published, the workflow attempts to submit the Firefox ZIP to Mozilla Add-ons and the Chromium ZIP to Microsoft Edge Add-ons. Missing store credentials cause the workflow to fail clearly rather than silently reporting a successful release without publishing. Manual `workflow_dispatch` runs require a stable tag such as `V6.23` and default to build/release validation only; enable `publish_stores` to submit to both stores. Store submissions can still require review/certification before becoming available to users.
+Stable releases are published on GitHub. Download the package for your browser from the [latest release](https://github.com/Chaython/volumecontrol/releases/latest). Firefox and Chromium packages use their respective browser-specific assets and manifests.
 
 ***
 
