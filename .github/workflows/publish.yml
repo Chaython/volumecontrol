@@ -147,7 +147,10 @@ jobs:
           $ErrorActionPreference = "Stop"
           $version = "${{ steps.meta.outputs.version }}"
           $text = Get-Content -Raw -LiteralPath tampermonkey/volume-control.user.js
-          if ($text -notmatch (("(?m)^//\s*@version\s+" + [regex]::Escape($version)) + "\s*$")) { throw "Userscript @version does not match manifest v$version." }
+          # @version = manifest version + userscript-edition revision
+          # (USERSCRIPT_REVISION in scripts/build-userscript.mjs), so accept
+          # the manifest version with an optional .N revision suffix.
+          if ($text -notmatch (("(?m)^//\s*@version\s+" + [regex]::Escape($version)) + "(\.\d+)?\s*$")) { throw "Userscript @version does not match manifest v$version (+ userscript revision)." }
           if ($text -match "__ENGINE_SOURCE__|__POPUP_CSS__|__VERSION__") { throw "Userscript contains unsubstituted placeholders." }
           if (-not $text.Contains("__volumeControlPageAudioHook")) { throw "Userscript does not embed the page-audio-hook engine." }
           Copy-Item -LiteralPath tampermonkey/volume-control.user.js -Destination dist/volume-control.user.js

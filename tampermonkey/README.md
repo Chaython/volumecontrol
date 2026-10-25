@@ -30,6 +30,21 @@ Violentmonkey/Greasemonkey via the built-in localStorage fallback).
 `Alt+Shift+↑/↓` volume · `Alt+Shift+0` reset · `Alt+Shift+M` mono ·
 `Alt+Shift+U` mute · `Alt+Shift+P` popup — matching the extension's commands.
 
+## The GUI
+
+Userscripts cannot add toolbar icons, so the GUI is a floating one:
+
+- a round speaker **button** fixed to the bottom-right corner of every page
+  (drag it anywhere — the position is remembered per install),
+- a live **badge** on the button (`+N` green, `−N`/`MUTE` red — the toolbar
+  badge semantics from `background.js`),
+- the **full extension popup** (identical markup and `popup.css` port) opening
+  above the button: slider, mute, Normalize + live peak meter/gain, Mono,
+  Remember, Active, dark mode.
+
+On its **first run after install or update** the popup opens itself once and
+  the button pulses, so the GUI is impossible to miss.
+
 ## How this file stays fresh
 
 - The **Publish** workflow rebuilds it on every release, attaches it to the
@@ -48,10 +63,13 @@ node scripts/build-userscript.mjs
 The build embeds, in order:
 
 1. `page-audio-hook.js` from the repository root (the real engine),
-2. the version from `manifest.json`,
+2. the version from `manifest.json` **plus a userscript-edition revision**
+   (`USERSCRIPT_REVISION` in the build script — bump it whenever the template
+   changes without a manifest bump, so Tampermonkey pushes the update),
 3. the `.vc-popup`-scoped port of `popup.css` from
-   `website/src/components/demo/popup.css` (the raw extension popup.css
-   targets `html, body`, which cannot match inside a shadow root),
+   `website/src/components/demo/popup.css`, with its trailing *preview-only
+   chrome* section stripped (that section styles the website's browser mockup
+   and would fight the userscript's own floating-host CSS),
 4. `userscript-template.js` from this folder.
 
 Output lands at `tampermonkey/volume-control.user.js` and

@@ -360,7 +360,10 @@
     function buildUI() {
         var host = document.createElement('div');
         host.id = 'volume-control-tm-host';
-        host.style.cssText = 'position:fixed;z-index:2147483647;right:18px;bottom:18px;width:0;height:0;';
+        // A real 42x42 box (not a 0x0 point): it is the positioning context
+        // for the absolute button (inset 0) and the popup anchor (52px above
+        // its bottom edge). Dragging rewrites right/bottom on this host.
+        host.style.cssText = 'position:fixed;z-index:2147483647;right:18px;bottom:18px;width:42px;height:42px;';
         var shadow = host.attachShadow({ mode: 'open' });
 
         var style = document.createElement('style');
@@ -489,10 +492,13 @@
         });
 
         // ---- open/close -------------------------------------------------------
+        // The class goes on the ANCHOR (popupWrap): FLOATING_CSS raises the
+        // anchor from opacity:0 — toggling a class on the child popup can
+        // never make it visible (the parent would stay at opacity:0).
         var open = false;
         function setOpen(v) {
             open = v;
-            root.classList.toggle('vc-tm-open', open);
+            popupWrap.classList.toggle('vc-tm-open', open);
             if (open) {
                 refresh();
                 try { slider.focus({ preventScroll: true }); } catch (e) {}
@@ -500,6 +506,7 @@
         }
         btn.addEventListener('click', function (e) {
             e.stopPropagation();
+            if (btn.dataset.dragged) return;   // this click just ended a drag
             setOpen(!open);
         });
         document.addEventListener('click', function (e) {
@@ -536,16 +543,21 @@
             drag = null;
             setTimeout(function () { delete btn.dataset.dragged; }, 50);
         });
-        btn.addEventListener('click', function () {
-            if (btn.dataset.dragged) { e_stop(); }
-            function e_stop() { setOpen(open); }   // swallow click after drag
-        }, true);
+
 
         // restore position
         var pos = store.get('vc-btn-pos', null);
         if (pos && typeof pos.right === 'number' && typeof pos.bottom === 'number') {
             host.style.right = Math.max(4, pos.right) + 'px';
             host.style.bottom = Math.max(4, pos.bottom) + 'px';
+        }
+
+        // ---- one-time attention pulse (first run after install/update) -----
+        function pulseButton() {
+            btn.classList.remove('vc-tm-pulse');
+            void btn.offsetWidth;            // restart the animation
+            btn.classList.add('vc-tm-pulse');
+            setTimeout(function () { btn.classList.remove('vc-tm-pulse'); }, 1700);
         }
 
         // ---- meter (125 ms paint throttle, like popup.js) ---------------------
@@ -618,7 +630,7 @@
         refresh();
 
         document.documentElement.appendChild(host);
-        return { refresh: refresh, setOpen: setOpen };
+        return { refresh: refresh, setOpen: setOpen, pulse: pulseButton };
     }
 
     // popup.html markup (extension classes, popup.css-driven)
@@ -701,11 +713,19 @@
         '  </div>' +
         '</div>';
 
-    // floating-host additions (button + positioning of the popup itself)
+    // floating-host additions (button + positioning of the popup itself).
+    // The host (0x0, fixed, 18px from the corner, max z-index) is the single
+    // positioning context: the button and the popup anchor are absolute
+    // inside it, so the 18px margin, the saved drag position (host style) and
+    // the popup offset all move together. The open state lives on the ANCHOR
+    // (.vc-popup-anchor.vc-tm-open): a parent with opacity:0 hides the whole
+    // subtree, so the class must raise the anchor itself, and closed-state
+    // pointer-events:none inherits down (an invisible popup must not swallow
+    // page clicks).
     var FLOATING_CSS = [
-        '.vc-tm-btn{position:fixed;right:0;bottom:0;width:42px;height:42px;border-radius:50%;',
+        '.vc-tm-btn{position:absolute;right:0;bottom:0;width:42px;height:42px;border-radius:50%;',
         'border:1px solid rgba(0,0,0,.15);background:#fff;color:#333;box-shadow:0 2px 10px rgba(0,0,0,.25);',
-        'cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:2147483647;',
+        'cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;',
         'transition:transform .12s ease,box-shadow .12s ease;}',
         '.vc-tm-btn:hover{transform:scale(1.06);box-shadow:0 4px 14px rgba(0,0,0,.3);}',
         '.vc-tm-btn:active{transform:scale(.97);}',
@@ -715,14 +735,17 @@
         '.vc-tm-badge-green{background:#2e7d32;}',
         '.vc-tm-badge-red{background:#c62828;}',
         '.vc-tm-badge-gray{background:#5f6368;}',
-        '.vc-popup-anchor{position:fixed;right:0;bottom:52px;width:420px;max-width:calc(100vw - 16px);',
-        'z-index:2147483647;pointer-events:none;opacity:0;transform:translateY(6px) scale(.98);',
+        '.vc-popup-anchor{position:absolute;right:0;bottom:52px;width:420px;max-width:calc(100vw - 24px);',
+        'pointer-events:none;opacity:0;transform:translateY(6px) scale(.98);',
         'transition:opacity .14s ease,transform .14s ease;}',
-        '.vc-popup-anchor .vc-popup{pointer-events:auto;box-shadow:0 12px 40px rgba(0,0,0,.35);',
+        '.vc-popup-anchor.vc-tm-open{opacity:1;transform:translateY(0) scale(1);pointer-events:auto;}',
+        '.vc-popup-anchor .vc-popup{box-shadow:0 12px 40px rgba(0,0,0,.35);',
         'border-radius:8px;overflow:hidden;}',
-        '.vc-popup-anchor .vc-popup.vc-tm-open{opacity:1;transform:translateY(0) scale(1);pointer-events:auto;}',
         '@media (max-width:480px){.vc-popup-anchor{width:calc(100vw - 24px);}}',
-        '@media (prefers-color-scheme:dark){.vc-tm-btn{background:#202124;color:#e8eaed;border-color:rgba(255,255,255,.2);}}'
+        '@media (prefers-color-scheme:dark){.vc-tm-btn{background:#202124;color:#e8eaed;border-color:rgba(255,255,255,.2);}}',
+        '@keyframes vc-tm-pulse{0%{transform:scale(1);}45%{transform:scale(1.16);',
+        'box-shadow:0 6px 26px rgba(0,0,0,.4);}100%{transform:scale(1);}}',
+        '.vc-tm-btn.vc-tm-pulse{animation:vc-tm-pulse 1.3s ease 1;}'
     ].join('');
 
     // ============================================================= hotkeys
@@ -790,6 +813,14 @@
         var startUI = function () {
             if (ui) return;
             try { ui = buildUI(); } catch (e) { /* page blocks DOM insertion */ }
+            // First run after install or update: open the popup once and
+            // pulse the button, so the GUI is impossible to miss.
+            if (ui && store.get('vc-first-run', true)) {
+                store.set('vc-first-run', false);
+                setTimeout(function () {
+                    try { ui.pulse(); ui.setOpen(true); } catch (e) {}
+                }, 650);
+            }
         };
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', startUI, { once: true });

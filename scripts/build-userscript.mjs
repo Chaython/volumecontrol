@@ -79,13 +79,22 @@ if (!cssPath) {
 const enginePath = firstExisting(engineCandidates);
 const engineSource = enginePath ? readFileSync(enginePath, "utf8") : null;
 
+// Userscript-edition revision: appended to the manifest version so that
+// Tampermonkey updates the userscript when ONLY the userscript template
+// changes (the extension's own version stays untouched). Bump this whenever
+// the template is edited without a matching manifest bump.
+const USERSCRIPT_REVISION = 1;
+
 let version = "7.1.0";
+let manifestVersion = null;
 const manifestPath = firstExisting(manifestCandidates);
 if (manifestPath) {
     try {
-        version = String(JSON.parse(readFileSync(manifestPath, "utf8")).version || "7.1.0");
+        manifestVersion = String(JSON.parse(readFileSync(manifestPath, "utf8")).version || "7.1.0");
+        version = manifestVersion;
     } catch { /* keep default */ }
 }
+version = `${version}.${USERSCRIPT_REVISION}`;
 
 if (engineSource === null) {
     // Website-only checkout (no extension sources around): keep the committed
@@ -111,7 +120,17 @@ if (!engineSource.includes("__volumeControlPageAudioHook") || !engineSource.incl
 }
 
 const template = readFileSync(templatePath, "utf8");
-const css = readFileSync(cssPath, "utf8");
+let css = readFileSync(cssPath, "utf8");
+
+// The demo css ends with a "Preview-only chrome" section (browser-mockup
+// positioning for the website demo: .vc-popup-anchor{top:calc(100% + 10px)},
+// .vc-popup-frame, mockup animations). Those rules fight the userscript's own
+// floating-host CSS inside the shadow root, so everything from that marker
+// to EOF is dropped. All extension-popup rules (incl. .vc-popup-dark) live
+// above it; if the marker is ever missing, the full file is kept.
+const chromeMarker = "/* --- Preview-only chrome";
+const chromeAt = css.indexOf(chromeMarker);
+if (chromeAt !== -1) css = css.slice(0, chromeAt).trimEnd() + "\n";
 
 const out = template
     .replace("__VERSION__", version)
@@ -128,7 +147,7 @@ writeFileSync(outRoot, out, "utf8");
 mkdirSync(dirname(outWebsite), { recursive: true });
 writeFileSync(outWebsite, out, "utf8");
 console.log(`[userscript] engine   ${enginePath}`);
-console.log(`[userscript] css      ${cssPath}`);
-console.log(`[userscript] version  v${version} (manifest)`);
+console.log(`[userscript] css      ${cssPath} (${css.length} bytes after stripping preview-only chrome)`);
+console.log(`[userscript] version  v${version} (manifest ${manifestVersion ?? "n/a"} + userscript revision ${USERSCRIPT_REVISION})`);
 console.log(`[userscript] wrote    ${outRoot} (${(out.length / 1024).toFixed(1)} KB)`);
 console.log(`[userscript] wrote    ${outWebsite}`);
