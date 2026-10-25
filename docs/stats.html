@@ -84,8 +84,7 @@ async function load(){
     if(timestamp<1e12)timestamp*=1000;
     date=new Date(timestamp);
    }else{
-    const microsoftDate=String(value).match(/^\\/Date\\((-?\\d+)(?:[+-]\\d{4})?\\)\\/$/);
-    date=new Date(microsoftDate?Number(microsoftDate[1]):value);
+    date=new Date(value);
    }
    return Number.isNaN(date.getTime())||date.getTime()<=0||date.getTime()>Date.now()+86400000?null:date.toLocaleDateString();
   }
