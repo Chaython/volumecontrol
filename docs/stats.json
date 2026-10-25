@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-25T00:45:29.700Z",
+  "generatedAt": "2026-10-25T00:51:15.637Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
@@ -11,6 +11,17 @@
     "weeklyDownloads": 3476,
     "rating": 3.8263,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
+  },
+  "edge": {
+    "status": "available",
+    "extensionId": "ipbghdjdmefdioebhaneohmkidjakfbc",
+    "url": "https://microsoftedge.microsoft.com/addons/detail/ipbghdjdmefdioebhaneohmkidjakfbc",
+    "activeInstallCount": 695,
+    "rating": 4,
+    "ratingCount": 4,
+    "version": "6.16",
+    "lastUpdated": 1789587046.2799704,
+    "message": "Public listing metadata only; weekly users, daily installs, and impressions require Partner Center analytics."
   },
   "github": {
     "status": "available",
@@ -197,16 +208,5 @@
       ],
       "error": null
     }
-  },
-  "edge": {
-    "status": "pending_refresh",
-    "extensionId": "ipbghdjdmefdioebhaneohmkidjakfbc",
-    "url": "https://microsoftedge.microsoft.com/addons/detail/ipbghdjdmefdioebhaneohmkidjakfbc",
-    "activeInstallCount": null,
-    "rating": null,
-    "ratingCount": null,
-    "version": null,
-    "lastUpdated": null,
-    "message": "Edge listing metrics will populate on the next stats workflow run. Weekly users, daily installs, and impressions require Partner Center analytics."
   }
 }
