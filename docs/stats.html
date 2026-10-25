@@ -17,12 +17,14 @@
 <article class="card"><div class="label">GitHub views · 14 days</div><div class="value" id="gh-views">—</div><div class="detail" id="gh-unique-views">Unique visitors: —</div></article>
 <article class="card"><div class="label">GitHub clones · 14 days</div><div class="value" id="gh-clones">—</div><div class="detail" id="gh-unique-clones">Unique cloners: —</div></article>
 <article class="card"><div class="label">GitHub stars</div><div class="value" id="gh-stars">—</div><div class="detail" id="gh-forks">Forks: —</div></article>
-<article class="card"><div class="label">Chrome Web Store users</div><div class="value" id="cws-users">Not available</div><div class="detail" id="cws-status">No supported public analytics API</div></article>
+<article class="card"><div class="label">Edge active users (public listing)</div><div class="value" id="edge-users">—</div><div class="detail" id="edge-users-status">Public listing metadata</div></article>
+<article class="card"><div class="label">Edge rating</div><div class="value" id="edge-rating">—</div><div class="detail" id="edge-rating-count">Public listing rating</div></article>
+<article class="card"><div class="label">Edge version</div><div class="value" id="edge-version">—</div><div class="detail" id="edge-version-status">Published listing version</div></article>
 </section>
 <h2>GitHub views · daily, last 14 days</h2><section class="card"><div id="views-chart" class="bars" role="img" aria-label="Daily GitHub repository views"></div><div id="views-labels" class="labels"></div><p id="traffic-note" class="detail">GitHub traffic requires a token with repository Administration: read permission.</p></section>
 <h2>GitHub clones · daily, last 14 days</h2><section class="card"><div id="clones-chart" class="bars" role="img" aria-label="Daily GitHub repository clones"></div><div id="clones-labels" class="labels"></div></section>
 <h2>Referrers</h2><section class="card"><ul id="referrers" class="list"><li>Waiting for authorized GitHub traffic data.</li></ul></section>
-<footer><p>Firefox daily users are AMO's reported average daily users, not unique humans across browsers. Weekly downloads are not active users. GitHub traffic is retained for only 14 days. The Chrome Web Store's publisher dashboard shows weekly-user analytics, but its supported public API does not expose them; this dashboard does not estimate or scrape private analytics.</p><p>Sources: <a href="https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/">Firefox Add-ons</a> · <a href="https://github.com/Chaython/volumecontrol">GitHub</a> · <a href="https://chrome.google.com/webstore/devconsole/">Chrome Web Store developer dashboard</a></p></footer>
+<footer><p>Firefox daily users are AMO's reported average daily users, not unique humans across browsers. Weekly downloads are not active users. GitHub traffic is retained for only 14 days. Edge public listing fields are best-effort because Microsoft does not document a public analytics API; weekly users, daily installs and impressions must be taken from Edge Partner Center analytics.</p><p>Sources: <a href="https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/">Firefox Add-ons</a> · <a href="https://github.com/Chaython/volumecontrol">GitHub</a> · <a href="https://microsoftedge.microsoft.com/addons/detail/ipbghdjdmefdioebhaneohmkidjakfbc">Microsoft Edge Add-ons</a> · <a href="https://partner.microsoft.com/dashboard/microsoftedge/overview">Edge Partner Center analytics</a></p></footer>
 </main>
 <script>
 (() => {
@@ -50,7 +52,13 @@ async function load(){
   txt("gh-views",num(t.totalViews));txt("gh-unique-views","Unique visitors: "+num(t.uniqueVisitors));
   txt("gh-clones",num(t.totalClones));txt("gh-unique-clones","Unique cloners: "+num(t.uniqueCloners));
   txt("traffic-note",t.status==="available"?"GitHub traffic data is limited to the 14-day retention window.":(t.error||"Authorized traffic data is not configured."));
-  txt("cws-status",d.chrome?.message||"Chrome Web Store analytics unavailable.");
+  const edge=d.edge||{};
+  txt("edge-users",num(edge.activeInstallCount));
+  txt("edge-users-status",edge.message||"Public Edge listing metadata");
+  txt("edge-rating",Number.isFinite(edge.rating)?edge.rating.toFixed(2):"Unavailable");
+  txt("edge-rating-count",Number.isFinite(edge.ratingCount)?num(edge.ratingCount)+" ratings":"Public rating count unavailable");
+  txt("edge-version",edge.version||"Unavailable");
+  txt("edge-version-status",edge.lastUpdated?"Last updated: "+new Date(edge.lastUpdated).toLocaleDateString():"Published listing version");
   bars("views-chart","views-labels",t.views||[]);bars("clones-chart","clones-labels",t.clones||[]);
   const list=$("referrers");list.replaceChildren();
   if(Array.isArray(t.referrers)&&t.referrers.length){for(const item of t.referrers.slice(0,10)){const li=document.createElement("li");li.textContent=item.referrer+" — "+num(item.count)+" views ("+num(item.uniques)+" unique)";list.append(li);}}
