@@ -1,0 +1,32 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Remembered per-site audio settings, mirroring the extension's
+// chrome.storage.local "siteSettings" ({ volume, mono, muted } per site key)
+// plus "siteNormalizerSettings" ({ enabled } per site key).
+model SiteSetting {
+  id                String   @id @default(cuid())
+  siteKey           String   @unique
+  volume            Int      @default(0)
+  mono              Boolean  @default(false)
+  muted             Boolean  @default(false)
+  normalizerEnabled Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// Global normalizer configuration, mirroring the extension's
+// chrome.storage.local "normalizerConfig" (mode, targetDb, maxBoostDb,
+// ceilingDb, responseMs) and "normalizerDefaultEnabled".
+model GlobalConfig {
+  id                      String   @id @default("singleton")
+  normalizerConfigJson    String   @default("")
+  normalizerDefaultEnabled Boolean @default(false)
+  updatedAt               DateTime @updatedAt
+}
