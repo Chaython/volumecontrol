@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Volume Control browser extension usage and repository traffic statistics.">
+<meta name="color-scheme" content="dark light"><title>Volume Control — Statistics</title>
+<style>
+:root{color-scheme:dark;--bg:#0b0f17;--panel:#151b27;--line:#30394b;--text:#f2f5fb;--muted:#a9b5c8;--accent:#91b9ff;--warn:#ffd38a}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#17243b 0,var(--bg) 55%);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:1100px;margin:auto;padding:36px 20px 60px}header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}h1{margin:0;font-size:clamp(1.8rem,4vw,2.7rem);letter-spacing:-.04em}h2{margin:32px 0 14px;font-size:1.2rem}p{color:var(--muted)}a{color:var(--accent)}button{padding:8px 12px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer}.updated{font-size:.88rem}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:19px;min-width:0}.label{font-size:.75rem;font-weight:700;letter-spacing:.09em;color:var(--muted);text-transform:uppercase}.value{font-size:2rem;font-weight:750;letter-spacing:-.04em;margin:7px 0;overflow-wrap:anywhere}.detail{font-size:.88rem;color:var(--muted)}.bars{display:flex;align-items:end;gap:5px;height:140px;padding-top:10px}.bar-wrap{flex:1;min-width:0;height:100%;display:flex;align-items:end;justify-content:center}.bar{width:100%;max-width:26px;min-height:2px;border-radius:4px 4px 0 0;background:linear-gradient(#91b9ff,#526eac)}.labels{display:flex;justify-content:space-between;color:var(--muted);font-size:.72rem}.list{margin:0;padding-left:20px;color:var(--muted)}footer{margin-top:28px;border-top:1px solid var(--line);padding-top:18px;font-size:.85rem;color:var(--muted)}.error{color:var(--warn)}
+</style></head>
+<body><main>
+<header><div><h1>📊 Volume Control statistics</h1><p>Browser extension reach and repository activity. Unavailable metrics are clearly marked.</p></div><div><a href="https://github.com/Chaython/volumecontrol">GitHub repository ↗</a><br><button id="refresh" type="button">Refresh snapshot</button></div></header>
+<p id="updated" class="updated">Loading published statistics…</p>
+<section class="grid" aria-label="Summary metrics">
+<article class="card"><div class="label">Firefox average daily users</div><div class="value" id="ff-users">—</div><div class="detail" id="ff-status">AMO public API</div></article>
+<article class="card"><div class="label">Firefox weekly downloads</div><div class="value" id="ff-downloads">—</div><div class="detail">Rolling weekly total reported by AMO</div></article>
+<article class="card"><div class="label">GitHub views · 14 days</div><div class="value" id="gh-views">—</div><div class="detail" id="gh-unique-views">Unique visitors: —</div></article>
+<article class="card"><div class="label">GitHub clones · 14 days</div><div class="value" id="gh-clones">—</div><div class="detail" id="gh-unique-clones">Unique cloners: —</div></article>
+<article class="card"><div class="label">GitHub stars</div><div class="value" id="gh-stars">—</div><div class="detail" id="gh-forks">Forks: —</div></article>
+<article class="card"><div class="label">Chrome Web Store users</div><div class="value" id="cws-users">Not available</div><div class="detail" id="cws-status">No supported public analytics API</div></article>
+</section>
+<h2>GitHub views · daily, last 14 days</h2><section class="card"><div id="views-chart" class="bars" role="img" aria-label="Daily GitHub repository views"></div><div id="views-labels" class="labels"></div><p id="traffic-note" class="detail">GitHub traffic requires a token with repository Administration: read permission.</p></section>
+<h2>GitHub clones · daily, last 14 days</h2><section class="card"><div id="clones-chart" class="bars" role="img" aria-label="Daily GitHub repository clones"></div><div id="clones-labels" class="labels"></div></section>
+<h2>Referrers</h2><section class="card"><ul id="referrers" class="list"><li>Waiting for authorized GitHub traffic data.</li></ul></section>
+<footer><p>Firefox daily users are AMO's reported average daily users, not unique humans across browsers. Weekly downloads are not active users. GitHub traffic is retained for only 14 days. The Chrome Web Store's publisher dashboard shows weekly-user analytics, but its supported public API does not expose them; this dashboard does not estimate or scrape private analytics.</p><p>Sources: <a href="https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/">Firefox Add-ons</a> · <a href="https://github.com/Chaython/volumecontrol">GitHub</a> · <a href="https://chrome.google.com/webstore/devconsole/">Chrome Web Store developer dashboard</a></p></footer>
+</main>
+<script>
+(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const num = v => Number.isFinite(v) ? new Intl.NumberFormat().format(v) : "Unavailable";
+const txt = (id,v) => { $(id).textContent = v; };
+function bars(id,labelId,items) {
+ const host=$(id); host.replaceChildren();
+ if(!Array.isArray(items)||!items.length){const p=document.createElement("p");p.className="detail";p.textContent="No authorized traffic history available.";host.append(p);txt(labelId,"");return;}
+ const max=Math.max(1,...items.map(x=>Number(x.count)||0));
+ for(const item of items){const wrap=document.createElement("div");wrap.className="bar-wrap";const bar=document.createElement("div");bar.className="bar";const count=Number(item.count)||0;bar.style.height=Math.max(2,count/max*100)+"%";bar.title=new Date(item.timestamp).toLocaleDateString()+": "+num(count);bar.setAttribute("aria-label",bar.title);wrap.append(bar);host.append(wrap);}
+ txt(labelId,new Date(items[0].timestamp).toLocaleDateString()+" — "+new Date(items[items.length-1].timestamp).toLocaleDateString());
+}
+async function load(){
+ $("refresh").disabled=true;
+ try{
+  const response=await fetch("./stats.json?refresh="+Date.now(),{cache:"no-store"});
+  if(!response.ok)throw new Error("stats.json returned HTTP "+response.status);
+  const d=await response.json(),f=d.firefox||{},g=d.github||{},t=g.traffic||{};
+  txt("updated","Snapshot generated "+new Date(d.generatedAt).toLocaleString()+" · refresh runs daily when Actions is enabled.");
+  txt("ff-users",num(f.averageDailyUsers));txt("ff-downloads",num(f.weeklyDownloads));
+  txt("ff-status",f.status==="available"?"Reported by the public AMO API":(f.error||"AMO data unavailable"));
+  txt("gh-stars",num(g.stars));txt("gh-forks","Forks: "+num(g.forks));
+  txt("gh-views",num(t.totalViews));txt("gh-unique-views","Unique visitors: "+num(t.uniqueVisitors));
+  txt("gh-clones",num(t.totalClones));txt("gh-unique-clones","Unique cloners: "+num(t.uniqueCloners));
+  txt("traffic-note",t.status==="available"?"GitHub traffic data is limited to the 14-day retention window.":(t.error||"Authorized traffic data is not configured."));
+  txt("cws-status",d.chrome?.message||"Chrome Web Store analytics unavailable.");
+  bars("views-chart","views-labels",t.views||[]);bars("clones-chart","clones-labels",t.clones||[]);
+  const list=$("referrers");list.replaceChildren();
+  if(Array.isArray(t.referrers)&&t.referrers.length){for(const item of t.referrers.slice(0,10)){const li=document.createElement("li");li.textContent=item.referrer+" — "+num(item.count)+" views ("+num(item.uniques)+" unique)";list.append(li);}}
+  else{const li=document.createElement("li");li.textContent="No authorized referrer data available.";list.append(li);}
+ }catch(e){txt("updated","Could not load stats.json: "+e.message+". Open this page through GitHub Pages, not as a local file.");$("updated").classList.add("error");}
+ finally{$("refresh").disabled=false;}
+}
+$("refresh").addEventListener("click",load);load();
+})();
+</script></body></html>
