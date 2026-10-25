@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_stores:
-        description: "Publish to Firefox AMO and Microsoft Edge Add-ons (requires both stores' credentials)"
+        description: "Publish to Firefox AMO and Microsoft Edge Add-ons (each store is validated independently)"
         required: true
         default: false
         type: boolean
@@ -373,6 +373,8 @@ jobs:
           path: dist
       - name: Publish Chromium package to Microsoft Edge Add-ons
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.tag.outputs.tag }}
         run: |
           $ErrorActionPreference = "Stop"
           $version = "${{ needs.build.outputs.version }}"
