@@ -341,17 +341,31 @@ The build creates separate Firefox and Chromium packages under `dist/`, using th
 # 📝 Changelog
 
 <details>
-<summary>📝 View complete changelog (Versions 6.0–6.23)</summary>
+<summary>📝 View complete changelog (Versions 6.0–7.0)</summary>
 
-## 🚀 Changes since V6.16 (through V6.23)
+## 🚀 Changes since V6.16 (through V7.0)
 
-**Post-6.23 updates on `master`:** opt-in Normalize per site/path and a separately controlled global default; collapsible popup meter/Options controls; pre-fader source analysis independent of the slider; noise-floor gate, peak-aware automatic boost headroom and faster gain reduction; sampled output peak meter; and CPU-saving compressor/timer bypasses while disabled. See [signal flow](#signal-flow) and [limitations](#unsupported-media-and-practical-limits).
+**V7.0 highlights:** Music-mode normalization now responds faster when sections get louder, recovers smoothly when they get quieter, and keeps peak headroom from forcing unnecessary negative gain. Debug mode also exposes per-route RMS/peak/gain diagnostics. V7.0 builds on the V6.16–V6.23 audio-engine, native-player, per-site settings, and release-pipeline work. See [signal flow](#signal-flow) and [limitations](#unsupported-media-and-practical-limits).
 
-These updates improve Firefox media compatibility, restore volume after track changes, add path-based site exclusions and per-site debug profiles, and harden release-build minification. See the [full source comparison](https://github.com/Chaython/volumecontrol/compare/V6.11...master).
+These updates improve Firefox media compatibility, restore volume after track changes, add path-based site exclusions and per-site debug profiles, harden release-build minification, and refine automatic loudness response. See the [full source comparison](https://github.com/Chaython/volumecontrol/compare/V6.11...master).
 
 ---
 
 <details open>
+<summary>🚀 Version 7.0 — Patch Notes</summary>
+
+- **Improve Music-mode section response:** RMS tracking now reacts to louder sections with a 350 ms attack and follows quieter sections with a 900 ms release, reducing the lag between the music and automatic gain.
+- **Keep peak headroom from over-attenuating:** the peak envelope limits positive automatic boost only; it cannot independently demand negative gain.
+- **Recover smoothly from attenuation:** after the 2.5-second warm-up, existing attenuation returns toward unity more quickly while preserving protection across dramatic pauses and immediately shedding unsafe positive boost after a fresh peak.
+- **Add focused normalization diagnostics:** debug mode reports input RMS, input sample peak, peak envelope, desired gain, and applied gain per route at approximately 100 ms intervals in both the MAIN-world and isolated fallback controllers.
+- **Expand regression coverage:** add tests for peak independence, quiet-section recovery, diagnostic fields, and attenuation behavior during warm-up and silence.
+- **Release version:** bump the extension from 6.23 to 7.0.
+
+</details>
+
+---
+
+<details>
 <summary>✨ Version 6.23 — Patch Notes</summary>
 
 - **Capture WebRTC/MediaStream call audio:** media assigned through `HTMLMediaElement.srcObject` is now claimed immediately, including streams whose audio tracks are added later. This covers call paths used by sites such as Snapchat Web that do not use a normal URL-backed media source.
