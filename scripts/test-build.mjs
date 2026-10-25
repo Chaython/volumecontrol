@@ -4557,3 +4557,57 @@ test('streaming workflow fails closed when required decoded-media coverage disap
     assert.match(release, /Create SHA-256 checksums/);
     assert.match(ci, /cancel-in-progress:.*github\.ref/);
 });
+
+
+test('music normalizer peak protection never adds attenuation and recovers between sections', () => {
+    const page = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+    const content = readFileSync(join(root, 'cs.js'), 'utf8');
+    const config = { mode: 'music', targetDb: -16, maxBoostDb: 12, ceilingDb: -1, responseMs: 600 };
+    function loadController(source, endMarker) {
+        const start = source.indexOf('function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, config) {');
+        const end = source.indexOf(endMarker, start);
+        assert.ok(start >= 0 && end > start);
+        const messages = [];
+        const fakeDate = class extends Date {
+            static now() { fakeDate.tick += 100; return fakeDate.tick; }
+        };
+        fakeDate.tick = 1000;
+        const fn = runInNewContext('(' + source.slice(start, end).trim() + ')', {
+            console: { debug: (...args) => messages.push(args) },
+            Date: fakeDate
+        });
+        return { fn, messages };
+    }
+
+    for (const [source, endMarker] of [
+        [page, 'function sampleProcessor(processor) {'],
+        [content, 'function ensureIsolatedNormalizerTimer() {']
+    ]) {
+        const { fn, messages } = loadController(source, endMarker);
+        const historyHighPeak = {};
+        const historyLowerPeak = {};
+        let highPeakGain = 0;
+        let lowerPeakGain = 0;
+        for (let i = 0; i < 30; i++) {
+            highPeakGain = fn(highPeakGain, -8, -0.2, config, historyHighPeak, true, 'test');
+            lowerPeakGain = fn(lowerPeakGain, -8, -8, config, historyLowerPeak, true, 'test');
+        }
+        assert.ok(highPeakGain < 0, 'loud RMS can request attenuation to meet the configured target');
+        assert.ok(Math.abs(highPeakGain - lowerPeakGain) < 0.001,
+            'peak headroom must not independently make a negative loudness target more negative');
+
+        // A loud opening is followed by a quiet passage. Once the RMS target permits
+        // unity gain, old attenuation should recover quickly; positive boost stays slow.
+        let gain = highPeakGain;
+        for (let i = 0; i < 35; i++) gain = fn(gain, -25, -15, config, historyHighPeak, true, 'test');
+        assert.ok(gain > -1, 'quiet section should recover previous attenuation toward unity promptly');
+        assert.ok(messages.some(args => args[0] === '[Volume Control][Normalizer]'),
+            'debug mode should emit gain diagnostics');
+        const diagnostic = messages.find(args => args[0] === '[Volume Control][Normalizer]')[1];
+        assert.ok('inputRmsDb' in diagnostic);
+        assert.ok('inputPeakDb' in diagnostic);
+        assert.ok('peakEnvelopeDb' in diagnostic);
+        assert.ok('desiredGainDb' in diagnostic);
+        assert.ok('appliedGainDb' in diagnostic);
+    }
+});
