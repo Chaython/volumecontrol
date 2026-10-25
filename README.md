@@ -13,7 +13,6 @@
 
 **Volume Control** gives you per-site volume control for HTML5 audio and video in Firefox and Chromium-based browsers. Lower quiet audio, boost media beyond the browser's normal volume range, toggle mono, mute, and optionally normalize loudness.
 
-<box>
 <table>
 <tr><th>✨ Feature</th><th>What it does</th></tr>
 <tr><td>🔊 Volume boost</td><td>Adjust media from −32 dB to +32 dB where the browser permits WebAudio routing.</td></tr>
@@ -21,7 +20,6 @@
 <tr><td>🎵 Normalization</td><td>Optional automatic loudness adjustment, with Music and Adaptive modes.</td></tr>
 <tr><td>🚫 Site exclusions</td><td>Exclude domains or path-specific URLs, including wildcard patterns.</td></tr>
 </table>
-</box>
 
 ### 🌐 Compatibility
 
