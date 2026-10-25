@@ -24,14 +24,14 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false }}
     runs-on: windows-latest
     timeout-minutes: 40
+    outputs:
+      version: ${{ needs.build.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      publish_stores: ${{ steps.meta.outputs.publish_stores }}
+      source_sha: ${{ steps.meta.outputs.source_sha }}
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
       PUBLISH_STORES: ${{ github.event_name == 'release' || inputs.publish_stores }}
-      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
-      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
-      EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
-      EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
-      EDGE_PRODUCT_ID: ${{ vars.EDGE_PRODUCT_ID }}
 
     steps:
       - name: Resolve manifest version and checkout source
@@ -85,6 +85,8 @@ jobs:
               throw "Release tag '$($env:RELEASE_TAG)' does not match manifest version '$expectedTag'."
           }
           "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "source_sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
           $publish = $env:PUBLISH_STORES -eq "true"
           "publish_stores=$($publish.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
 
@@ -112,7 +114,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "${{ steps.meta.outputs.version }}"
+          $version = "${{ needs.build.outputs.version }}"
           foreach ($browser in @("chrome", "firefox")) {
               $zip = "dist/volume-control-$browser-v$version.zip"
               if (-not (Test-Path -LiteralPath $zip)) { throw "Missing $browser package: $zip" }
@@ -140,7 +142,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "${{ steps.meta.outputs.version }}"
+          $version = "${{ needs.build.outputs.version }}"
           git archive --format=zip --output="dist/source-v$version.zip" HEAD
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path "dist/source-v$version.zip")) { throw "Could not create source archive." }
           $packages = @(Get-ChildItem -LiteralPath dist -Filter '*.zip' | Where-Object { $_.Name -notlike 'SHA256SUMS*' } | Sort-Object Name)
@@ -150,7 +152,68 @@ jobs:
               "$hash  $($file.Name)"
           }
           $lines | Set-Content -LiteralPath dist/SHA256SUMS.txt -Encoding utf8
+          Copy-Item -LiteralPath manifest.json -Destination dist/manifest.json
 
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: volume-control-release-bundle
+          path: |
+            dist/volume-control-firefox-v*.zip
+            dist/volume-control-chrome-v*.zip
+            dist/source-v*.zip
+            dist/SHA256SUMS.txt
+            dist/manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
+
+  tag:
+    name: Create / Validate Tag
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Create or validate stable tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^V[0-9]+([.][0-9]+)+$ ]] || { echo "::error::Invalid stable tag $TAG"; exit 1; }
+          if git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$TAG" >/dev/null 2>&1; then
+            if [[ "$EVENT_NAME" != "release" ]]; then
+              existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')"
+              [[ "$existing" == "$SOURCE_SHA" ]] || { echo "::error::Tag already exists at another commit; refusing to overwrite."; exit 1; }
+            fi
+          else
+            [[ "$EVENT_NAME" != "release" ]] || { echo "::error::Published release tag $TAG is missing."; exit 1; }
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$SOURCE_SHA"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  github_release:
+    name: GitHub Release
+    needs: [build, tag]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source for changelog
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.source_sha }}
+          fetch-depth: 1
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: volume-control-release-bundle
+          path: dist
       - name: Prepare changelog and release notes
         id: notes
         shell: pwsh
@@ -158,7 +221,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "${{ steps.meta.outputs.version }}"
+          $version = "${{ needs.build.outputs.version }}"
           $tag = "$env:RELEASE_TAG"
           $generated = gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$tag" -f target_commitish="$env:GITHUB_SHA"
           if ($LASTEXITCODE -ne 0) { throw "GitHub release-note generation failed." }
@@ -194,7 +257,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $tag = "$env:RELEASE_TAG"
-          $version = "${{ steps.meta.outputs.version }}"
+          $version = "${{ needs.build.outputs.version }}"
           $release = gh release view $tag --repo "$env:GITHUB_REPOSITORY" --json isDraft,isPrerelease
           if ($LASTEXITCODE -ne 0) {
               # Manual publishing can create the stable release when the manifest version has not been released yet.
@@ -215,14 +278,33 @@ jobs:
           gh release upload $tag @assets --repo "$env:GITHUB_REPOSITORY" --clobber
           if ($LASTEXITCODE -ne 0) { throw "Could not upload all release assets." }
 
+
+  firefox_release:
+    name: Firefox Add-ons
+    needs: [build, tag, github_release]
+    if: ${{ needs.build.outputs.publish_stores == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+    steps:
+      - name: Validate Mozilla credentials
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AMO_JWT_ISSUER) -or [string]::IsNullOrWhiteSpace($env:AMO_JWT_SECRET)) { throw "Firefox publication requires AMO_JWT_ISSUER and AMO_JWT_SECRET." }
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: volume-control-release-bundle
+          path: dist
       - name: Submit Firefox package to Mozilla Add-ons
-        if: steps.meta.outputs.publish_stores == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $api = "https://addons.mozilla.org/api/v5"
-          $version = "${{ steps.meta.outputs.version }}"
-          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+          $version = "${{ needs.build.outputs.version }}"
+          $manifest = Get-Content -Raw -LiteralPath dist/manifest.json | ConvertFrom-Json
           $guid = [string]$manifest.browser_specific_settings.gecko.id
           if ([string]::IsNullOrWhiteSpace($guid)) { throw "Firefox add-on ID missing from manifest.json." }
           $firefoxZip = Get-Item -LiteralPath "dist/volume-control-firefox-v$version.zip"
@@ -260,12 +342,35 @@ jobs:
           if (-not $created) { throw "AMO did not confirm version creation." }
           Write-Host "Submitted Firefox v$version to Mozilla Add-ons."
 
+
+  edge_release:
+    name: Microsoft Edge Add-ons
+    needs: [build, tag, github_release]
+    if: ${{ needs.build.outputs.publish_stores == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+      EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+      EDGE_PRODUCT_ID: ${{ vars.EDGE_PRODUCT_ID }}
+    steps:
+      - name: Validate Edge credentials
+        shell: pwsh
+        run: |
+          $missing = @()
+          foreach ($name in @("EDGE_CLIENT_ID", "EDGE_API_KEY", "EDGE_PRODUCT_ID")) { if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { $missing += $name } }
+          if ($missing.Count -gt 0) { throw "Edge publication requires $($missing -join ', '). Configure EDGE_PRODUCT_ID as the Partner Center product GUID." }
+          if ($env:EDGE_PRODUCT_ID -notmatch '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$') { throw "EDGE_PRODUCT_ID must be a GUID, not a short store listing ID." }
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: volume-control-release-bundle
+          path: dist
       - name: Publish Chromium package to Microsoft Edge Add-ons
-        if: steps.meta.outputs.publish_stores == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "${{ steps.meta.outputs.version }}"
+          $version = "${{ needs.build.outputs.version }}"
           $productId = $env:EDGE_PRODUCT_ID
           $headers = @{ Authorization = "ApiKey $env:EDGE_API_KEY"; "X-ClientID" = $env:EDGE_CLIENT_ID }
           $root = "https://api.addons.microsoftedge.microsoft.com/v1"
@@ -304,3 +409,4 @@ jobs:
           $finalText = ConvertTo-Json -InputObject $final -Compress -Depth 10
           if ($finalText -notmatch '"status"\s*:\s*"(Succeeded|Success|Completed)"') { throw "Timed out waiting for Edge publication: $finalText" }
           Write-Host "Submitted Chromium v$version to Microsoft Edge Add-ons."
+
