@@ -1462,6 +1462,47 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
     return applied;
 }
 
+function activeIsolatedMediaCount(pendingElement = null) {
+    let count = 0;
+    for (const element of tc.vars.mediaElements || []) {
+        const captured = tc.vars.capturedMediaSources && tc.vars.capturedMediaSources.get(element);
+        if (!captured || (!captured.connected && element !== pendingElement) ||
+            !isMediaPlaying(element) || !isAudibleMediaElement(element)) continue;
+        if (++count >= 2) break;
+    }
+    return count;
+}
+
+function guardConcurrentIsolatedNormalizer(pendingElement = null) {
+    if (!tc.vars.normalizerEnabled || activeIsolatedMediaCount(pendingElement) < 2) return false;
+    const previous = Number(tc.vars.normalizerGainDb) || 0;
+    // Keep existing attenuation; removing it could expose a previously
+    // quieted track at full volume. No new gain history from a mixed signal.
+    tc.vars.normalizerGainDb = Math.min(0, previous);
+    tc.vars.musicLevelState = null;
+    if (previous > 0 && tc.vars.gainNode && tc.vars.audioCtx) {
+        try {
+            // Clamp synchronously at the second play event. Waiting for the
+            // 100ms sampler lets boosted audio leak for an audible fragment.
+            const manual = tc.vars.isBlocked ? 1 :
+                tc.vars.muted ? 0 : getGainValue(tc.vars.dB);
+            const safe = tc.vars.isolatedOutputUsesLimiter === true
+                ? manual : Math.min(1, manual);
+            const param = tc.vars.gainNode.gain;
+            const now = tc.vars.audioCtx.currentTime;
+            param.cancelScheduledValues(now);
+            param.setValueAtTime(Math.max(0, safe), now);
+            configureIsolatedLimiter();
+        } catch (e) {
+            if (tc.settings.debugMode) log(`concurrent media gain clamp failed: ${e && e.message}`, 2);
+            // Preserve the attempted zero-auto-gain control state; applyState()
+            // retries restoring the clamped output when the graph recovers.
+        }
+    }
+    return true;
+}
+
+
 function sampleIsolatedNormalizer() {
     if (!tc.vars.normalizerEnabled) return;
     const ctx = tc.vars.audioCtx;
