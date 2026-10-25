@@ -5,6 +5,8 @@ const outDir = path.join(process.cwd(), "docs");
 const generatedAt = new Date().toISOString();
 const repository = process.env.GITHUB_REPOSITORY || "Chaython/volumecontrol";
 const amoSlug = process.env.AMO_ADDON_SLUG || "volume-control-boost-volume";
+const edgeExtensionId = "ipbghdjdmefdioebhaneohmkidjakfbc";
+const edgeUrl = "https://microsoftedge.microsoft.com/addons/detail/ipbghdjdmefdioebhaneohmkidjakfbc";
 const token = process.env.GH_TRAFFIC_TOKEN || "";
 const baseHeaders = { accept: "application/json", "user-agent": "Volume-Control-Stats/1.0" };
 
@@ -23,9 +25,10 @@ function xml(value) {
   return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[ch]);
 }
 
-const [amoResult, repoResult] = await Promise.all([
+const [amoResult, repoResult, edgeResult] = await Promise.all([
   attempt(() => getJson("https://addons.mozilla.org/api/v5/addons/addon/" + encodeURIComponent(amoSlug) + "/")),
-  attempt(() => getJson("https://api.github.com/repos/" + repository))
+  attempt(() => getJson("https://api.github.com/repos/" + repository)),
+  attempt(() => getJson("https://microsoftedge.microsoft.com/addons/getproductdetailsbycrxid/" + edgeExtensionId + "?hl=en-US&gl=US"))
 ]);
 const firefox = amoResult.ok ? {
   status: "available",
@@ -35,6 +38,16 @@ const firefox = amoResult.ok ? {
   rating: numeric(amoResult.data.ratings?.average),
   url: "https://addons.mozilla.org/en-US/firefox/addon/" + amoSlug + "/"
 } : { status: "unavailable", error: amoResult.error, averageDailyUsers: null, weeklyDownloads: null, url: "https://addons.mozilla.org/en-US/firefox/addon/" + amoSlug + "/" };
+
+const edgePayload = edgeResult.ok ? (edgeResult.data?.productDetails || edgeResult.data?.data || edgeResult.data) : null;
+function edgeNumber(...values) {
+  for (const value of values) {
+    const parsed = typeof value === "string" && value.trim() ? Number(value.replace(/,/g, "")) : value;
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return null;
+}
+const edge = { status: edgeResult.ok ? "available" : "unavailable", extensionId: edgeExtensionId, url: edgeUrl, activeInstallCount: edgeNumber(edgePayload?.activeInstallCount, edgePayload?.activeUsers, edgePayload?.userCount, edgePayload?.installCount), rating: edgeNumber(edgePayload?.averageRating, edgePayload?.rating), ratingCount: edgeNumber(edgePayload?.ratingCount, edgePayload?.ratingsCount), version: typeof edgePayload?.version === "string" ? edgePayload.version : null, lastUpdated: edgePayload?.lastUpdateDate || edgePayload?.lastUpdated || null, message: edgeResult.ok ? "Public listing metadata only; weekly users, daily installs, and impressions require Partner Center analytics." : "Public listing metrics could not be retrieved. Weekly users, daily installs, and impressions are available in Partner Center." };
 
 const github = repoResult.ok ? {
   status: "available",
@@ -71,12 +84,7 @@ if (repoResult.ok && token) {
 }
 
 const data = {
-  schemaVersion: 1, generatedAt, repository, firefox,
-  chrome: {
-    status: "not_available_via_public_api", weeklyUsers: null,
-    message: "The supported Chrome Web Store API manages listings and publishing; it does not expose publisher analytics. No public stats API is available for weekly users.",
-    dashboardUrl: "https://chrome.google.com/webstore/devconsole/"
-  },
+  schemaVersion: 2, generatedAt, repository, firefox, edge,
   github
 };
 await fs.mkdir(outDir, { recursive: true });
@@ -88,7 +96,8 @@ const cards = [
   ["GITHUB VIEWS · 14 DAYS", fmt(github.traffic.totalViews), github.traffic.status === "available" ? fmt(github.traffic.uniqueVisitors) + " unique visitors" : "Requires GH_TRAFFIC_TOKEN"],
   ["GITHUB CLONES · 14 DAYS", fmt(github.traffic.totalClones), github.traffic.status === "available" ? fmt(github.traffic.uniqueCloners) + " unique cloners" : "Requires GH_TRAFFIC_TOKEN"],
   ["GITHUB STARS", fmt(github.stars), "Public repository metadata"],
-  ["CHROME WEB STORE", "Dashboard only", "No supported public analytics API"]
+  ["EDGE ACTIVE USERS", fmt(edge.activeInstallCount), "Public listing metadata; may be unavailable"],
+  ["EDGE RATING", edge.rating === null ? "Unavailable" : String(edge.rating), edge.ratingCount === null ? "Public listing rating" : fmt(edge.ratingCount) + " ratings"]
 ];
 const cardSvg = cards.map((c, i) => {
   const x = 18 + (i % 3) * 300;
@@ -96,6 +105,6 @@ const cardSvg = cards.map((c, i) => {
   return '<g><rect x="' + x + '" y="' + y + '" width="282" height="118" rx="14" fill="#151b27" stroke="#30394b"/><text x="' + (x+18) + '" y="' + (y+25) + '" font-size="11" letter-spacing="1.1" fill="#9ca9bd">' + xml(c[0]) + '</text><text x="' + (x+18) + '" y="' + (y+65) + '" font-size="25" font-weight="700" fill="#f2f5fb">' + xml(c[1]) + '</text><text x="' + (x+18) + '" y="' + (y+91) + '" font-size="12" fill="#a9b5c8">' + xml(c[2]) + '</text></g>';
 }).join("");
 const stamp = generatedAt.replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
-const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="920" height="390" viewBox="0 0 920 390" role="img" aria-labelledby="title desc"><title id="title">Volume Control live statistics</title><desc id="desc">Firefox usage, GitHub traffic and repository activity. Last refreshed ' + xml(generatedAt) + '.</desc><rect width="100%" height="100%" rx="20" fill="#0b0f17"/><text x="22" y="34" font-size="22" font-weight="700" fill="#f2f5fb">Volume Control · Live statistics</text><text x="22" y="58" font-size="12" fill="#a9b5c8">Updated ' + xml(stamp) + ' · GitHub traffic covers the last 14 days</text>' + cardSvg + '<text x="22" y="365" font-size="11" fill="#9ca9bd">Chrome Web Store analytics require publisher-dashboard access. Unavailable metrics are never estimated.</text></svg>\n';
+const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="920" height="526" viewBox="0 0 920 526" role="img" aria-labelledby="title desc"><title id="title">Volume Control live statistics</title><desc id="desc">Firefox usage, GitHub traffic and repository activity. Last refreshed ' + xml(generatedAt) + '.</desc><rect width="100%" height="100%" rx="20" fill="#0b0f17"/><text x="22" y="34" font-size="22" font-weight="700" fill="#f2f5fb">Volume Control · Live statistics</text><text x="22" y="58" font-size="12" fill="#a9b5c8">Updated ' + xml(stamp) + ' · GitHub traffic covers the last 14 days</text>' + cardSvg + '<text x="22" y="365" font-size="11" fill="#9ca9bd">Edge public listing data may be incomplete. Weekly users, daily installs and impressions require Partner Center analytics.</text></svg>\n';
 await fs.writeFile(path.join(outDir, "stats.svg"), svg, "utf8");
 console.log(JSON.stringify({ generatedAt, firefox: firefox.status, githubMetadata: github.status, githubTraffic: github.traffic.status, chrome: data.chrome.status }, null, 2));
