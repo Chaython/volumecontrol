@@ -685,12 +685,6 @@ A **rolling release** is also published as a daily prerelease when releasable co
 
 ***
 
-Other Useful Extensions: 
-https://github.com/Chaython/TogglePIP (Allow a site to run PIP consistently with an [Left Alt]+[P] toggle.)
-https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colors, search providers....)
-
-***
-
 
 <!-- chaython-funding:start -->
 ## Support development
