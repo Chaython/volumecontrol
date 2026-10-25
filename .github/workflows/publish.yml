@@ -5,10 +5,6 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: "Stable tag to build and publish (for example V6.23)"
-        required: true
-        type: string
       publish_stores:
         description: "Publish to Firefox AMO and Microsoft Edge Add-ons (requires both stores' credentials)"
         required: true
@@ -19,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: publish-${{ github.event.release.tag_name || inputs.release_tag || github.ref_name }}
+  group: publish-${{ github.event.release.tag_name || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -28,7 +24,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
       PUBLISH_STORES: ${{ github.event_name == 'release' || inputs.publish_stores }}
       AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
       AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
@@ -37,19 +33,33 @@ jobs:
       EDGE_PRODUCT_ID: ${{ vars.EDGE_PRODUCT_ID }}
 
     steps:
-      - name: Checkout exact release tag
+      - name: Resolve manifest version and checkout release tag
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          if ($env:RELEASE_TAG -notmatch '^V\d+(?:\.\d+)+$') {
-              throw "Publishing requires a stable Vx.xx-style tag; got '$($env:RELEASE_TAG)'."
-          }
           git init .
           git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
-          git fetch --force --depth=1 origin "refs/tags/$($env:RELEASE_TAG)"
-          if ($LASTEXITCODE -ne 0) { throw "Could not fetch release tag $($env:RELEASE_TAG)." }
+
+          $tag = $env:RELEASE_TAG
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+              # Manual runs derive the stable tag from the manifest on the selected branch.
+              git fetch --force --depth=1 origin "$env:GITHUB_REF"
+              if ($LASTEXITCODE -ne 0) { throw "Could not fetch selected branch '$env:GITHUB_REF'." }
+              git checkout --detach FETCH_HEAD
+              if ($LASTEXITCODE -ne 0) { throw "Could not check out selected branch to read manifest.json." }
+              $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+              if ([string]::IsNullOrWhiteSpace([string]$manifest.version)) { throw "manifest.json has no version." }
+              $tag = "V$($manifest.version)"
+              "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+          }
+
+          if ($tag -notmatch '^V\d+(?:\.\d+)+$') {
+              throw "Publishing requires a stable Vx.xx-style tag; resolved '$tag'."
+          }
+          git fetch --force --depth=1 origin "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { throw "Could not fetch release tag $tag. Ensure the manifest version has a matching stable tag." }
           git checkout --detach FETCH_HEAD
-          if ($LASTEXITCODE -ne 0) { throw "Could not check out release tag." }
+          if ($LASTEXITCODE -ne 0) { throw "Could not check out release tag $tag." }
 
       - name: Install pinned build dependencies
         run: npm ci
