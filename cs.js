@@ -1462,6 +1462,91 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
     return applied;
 }
 
+function sampleIsolatedNormalizer() {
+    if (!tc.vars.normalizerEnabled) return;
+    const ctx = tc.vars.audioCtx;
+    const analyser = tc.vars.analyserNode;
+    const sourceAnalyser = tc.vars.inputAnalyserNode;
+    const gainNode = tc.vars.gainNode;
+    if (!ctx || !analyser || !sourceAnalyser || !gainNode || ctx.state !== "running") return;
+
+    if (!tc.vars.analyserBuffer || tc.vars.analyserBuffer.length !== analyser.fftSize) {
+        tc.vars.analyserBuffer = new Float32Array(analyser.fftSize);
+    }
+
+    try {
+        analyser.getFloatTimeDomainData(tc.vars.analyserBuffer);
+    } catch (e) {
+        return;
+    }
+
+    let peak = 0;
+    for (let i = 0; i < tc.vars.analyserBuffer.length; i++) {
+        const sample = tc.vars.analyserBuffer[i];
+        const abs = Math.abs(sample);
+        if (abs > peak) peak = abs;
+    }
+    tc.vars.normalizerPeakDb = peak > 0.000001 ? 20 * Math.log10(peak) : -Infinity;
+
+    // Read loudness before manual volume, automatic gain, and output limiting.
+    // The final output analyser remains dedicated to peak-meter feedback.
+    if (!tc.vars.inputAnalyserBuffer || tc.vars.inputAnalyserBuffer.length !== sourceAnalyser.fftSize) {
+        tc.vars.inputAnalyserBuffer = new Float32Array(sourceAnalyser.fftSize);
+    }
+    let sourceRmsDb = -120;
+    let sourcePeakDb = -Infinity;
+    let sourceReadValid = false;
+    try {
+        sourceAnalyser.getFloatTimeDomainData(tc.vars.inputAnalyserBuffer);
+        let sourceSum = 0;
+        let sourcePeak = 0;
+        for (let i = 0; i < tc.vars.inputAnalyserBuffer.length; i++) {
+            const sample = tc.vars.inputAnalyserBuffer[i];
+            if (!Number.isFinite(sample)) throw new Error("invalid source sample");
+            sourceSum += sample * sample;
+            sourcePeak = Math.max(sourcePeak, Math.abs(sample));
+        }
+        const sourceRms = Math.sqrt(sourceSum / Math.max(1, tc.vars.inputAnalyserBuffer.length));
+        sourceRmsDb = sourceRms > 0.000001 ? 20 * Math.log10(sourceRms) : -120;
+        sourcePeakDb = sourcePeak > 0.000001 ? 20 * Math.log10(sourcePeak) : -Infinity;
+        sourceReadValid = true;
+    } catch (e) {}
+
+    const config = normalizeNormalizerConfig(tc.settings.normalizerConfig);
+    // This fallback measures a mixed source. Never normalize two active
+    // captured elements as though they were one song.
+    const concurrent = guardConcurrentIsolatedNormalizer();
+    let gainDb = Number(tc.vars.normalizerGainDb) || 0;
+    const previousGainDb = gainDb;
+    if (concurrent) {
+        gainDb = Math.min(0, gainDb);
+    } else if (tc.vars.normalizerEnabled && !tc.vars.muted && !tc.vars.isBlocked &&
+        tc.vars.isolatedOutputUsesLimiter === true) {
+        gainDb = computeSafeNormalizerGainDb(gainDb, sourceReadValid ? sourceRmsDb : NaN,
+            sourceReadValid ? sourcePeakDb : NaN, config,
+            tc.vars.musicLevelState || (tc.vars.musicLevelState = {}), tc.settings.debugMode, "isolated-fallback");
+    } else {
+        gainDb = 0;
+    }
+    if (Math.abs(gainDb) < 0.01) gainDb = 0;
+    tc.vars.normalizerGainDb = gainDb;
+
+    configureIsolatedLimiter();
+    try {
+        const now = ctx.currentTime;
+        const manualGain = tc.vars.isBlocked || tc.vars.muted ? (tc.vars.isBlocked ? 1 : 0) : getGainValue(tc.vars.dB);
+        // A 100 ms meter update cannot reinstate boost on an unprotected
+        // direct fallback. Retry limiter routing on the next state change.
+        const protectedOutput = tc.vars.isolatedOutputUsesLimiter === true;
+        const target = protectedOutput
+            ? manualGain * (tc.vars.normalizerEnabled ? Math.pow(10, gainDb / 20) : 1)
+            : Math.min(1, manualGain);
+        gainNode.gain.cancelScheduledValues(now);
+        gainNode.gain.setTargetAtTime(target, now, gainDb < previousGainDb ? 0.008 : 0.035);
+    } catch (e) {}
+}
+
+
 function ensureIsolatedNormalizerTimer() {
     // Even an empty 100ms interval keeps waking background tabs. Only sample
     // when an actual isolated route needs automatic gain control.
