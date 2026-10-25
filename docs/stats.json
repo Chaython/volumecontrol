@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-25T00:30:40.580Z",
+  "repository": "Chaython/volumecontrol",
+  "firefox": {
+    "status": "pending_first_refresh",
+    "averageDailyUsers": null,
+    "weeklyDownloads": null,
+    "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
+  },
+  "chrome": {
+    "status": "not_available_via_public_api",
+    "weeklyUsers": null,
+    "message": "The supported Chrome Web Store API manages listings and publishing; it does not expose publisher analytics. No public stats API is available for weekly users.",
+    "dashboardUrl": "https://chrome.google.com/webstore/devconsole/"
+  },
+  "github": {
+    "status": "pending_first_refresh",
+    "stars": 99,
+    "forks": 16,
+    "traffic": {
+      "status": "needs_token",
+      "views": [],
+      "totalViews": null,
+      "uniqueVisitors": null,
+      "clones": [],
+      "totalClones": null,
+      "uniqueCloners": null,
+      "referrers": [],
+      "error": "Configure GH_TRAFFIC_TOKEN with repository Administration: read permission."
+    }
+  }
+}
