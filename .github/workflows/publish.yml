@@ -33,7 +33,7 @@ jobs:
       EDGE_PRODUCT_ID: ${{ vars.EDGE_PRODUCT_ID }}
 
     steps:
-      - name: Resolve manifest version and checkout release tag
+      - name: Resolve manifest version and checkout source
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -42,24 +42,33 @@ jobs:
 
           $tag = $env:RELEASE_TAG
           if ([string]::IsNullOrWhiteSpace($tag)) {
-              # Manual runs derive the stable tag from the manifest on the selected branch.
+              # Manual runs build the selected branch and derive the stable tag from its manifest.
               git fetch --force --depth=1 origin "$env:GITHUB_REF"
-              if ($LASTEXITCODE -ne 0) { throw "Could not fetch selected branch '$env:GITHUB_REF'." }
+              if ($LASTEXITCODE -ne 0) { throw "Could not fetch selected ref '$env:GITHUB_REF'." }
               git checkout --detach FETCH_HEAD
-              if ($LASTEXITCODE -ne 0) { throw "Could not check out selected branch to read manifest.json." }
+              if ($LASTEXITCODE -ne 0) { throw "Could not check out selected ref to read manifest.json." }
               $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
               if ([string]::IsNullOrWhiteSpace([string]$manifest.version)) { throw "manifest.json has no version." }
               $tag = "V$($manifest.version)"
               "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+          } else {
+              if ($tag -notmatch '^V\d+(?:\.\d+)+$') {
+                  throw "Publishing requires a stable Vx.xx-style tag; got '$tag'."
+              }
+              git fetch --force --depth=1 origin "refs/tags/$tag"
+              if ($LASTEXITCODE -ne 0) { throw "Could not fetch release tag $tag." }
+              git checkout --detach FETCH_HEAD
+              if ($LASTEXITCODE -ne 0) { throw "Could not check out release tag $tag." }
           }
 
           if ($tag -notmatch '^V\d+(?:\.\d+)+$') {
               throw "Publishing requires a stable Vx.xx-style tag; resolved '$tag'."
           }
-          git fetch --force --depth=1 origin "refs/tags/$tag"
-          if ($LASTEXITCODE -ne 0) { throw "Could not fetch release tag $tag. Ensure the manifest version has a matching stable tag." }
-          git checkout --detach FETCH_HEAD
-          if ($LASTEXITCODE -ne 0) { throw "Could not check out release tag $tag." }
+          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+          $expectedTag = "V$($manifest.version)"
+          if ($tag -ne $expectedTag) {
+              throw "Resolved tag '$tag' does not match checked-out manifest version '$expectedTag'."
+          }
 
       - name: Install pinned build dependencies
         run: npm ci
@@ -193,11 +202,16 @@ jobs:
           $tag = "$env:RELEASE_TAG"
           $version = "${{ steps.meta.outputs.version }}"
           $release = gh release view $tag --repo "$env:GITHUB_REPOSITORY" --json isDraft,isPrerelease
-          if ($LASTEXITCODE -ne 0) { throw "A GitHub Release for $tag must exist before this workflow runs." }
-          $releaseInfo = $release | ConvertFrom-Json
-          if ($releaseInfo.isDraft -or $releaseInfo.isPrerelease) { throw "Only published stable GitHub releases may be updated by this workflow." }
-          gh release edit $tag --repo "$env:GITHUB_REPOSITORY" --title "$tag: Volume Control" --notes-file dist/release-notes.md
-          if ($LASTEXITCODE -ne 0) { throw "Could not update GitHub release notes." }
+          if ($LASTEXITCODE -ne 0) {
+              # Manual publishing can create the stable release when the manifest version has not been released yet.
+              gh release create $tag --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "$tag: Volume Control" --notes-file dist/release-notes.md
+              if ($LASTEXITCODE -ne 0) { throw "Could not create GitHub Release $tag." }
+          } else {
+              $releaseInfo = $release | ConvertFrom-Json
+              if ($releaseInfo.isDraft -or $releaseInfo.isPrerelease) { throw "Only published stable GitHub releases may be updated by this workflow." }
+              gh release edit $tag --repo "$env:GITHUB_REPOSITORY" --title "$tag: Volume Control" --notes-file dist/release-notes.md
+              if ($LASTEXITCODE -ne 0) { throw "Could not update GitHub release notes." }
+          }
           $assets = @(
               "dist/volume-control-firefox-v$version.zip",
               "dist/volume-control-chrome-v$version.zip",
