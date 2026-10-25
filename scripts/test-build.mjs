@@ -64,18 +64,14 @@ for (const browser of ['chrome', 'firefox']) {
             assert.equal('scripts' in packageManifest.background, false);
             assert.equal('browser_specific_settings' in packageManifest, false);
             assert.deepEqual(packageManifest.icons, { '128': 'chrome.png' });
-            assert.deepEqual(packageManifest.web_accessible_resources, [{
-                resources: ['true-peak-worklet.js'], matches: ['<all_urls>']
-            }]);
+            assert.equal('web_accessible_resources' in packageManifest, false);
         } else {
             assert.equal('minimum_chrome_version' in packageManifest, false);
             assert.equal('service_worker' in packageManifest.background, false);
             assert.deepEqual(packageManifest.background.scripts, ['shared.js', 'background.js']);
             assert.ok(packageManifest.browser_specific_settings?.gecko);
             assert.deepEqual(packageManifest.icons, { '96': 'ico.svg' });
-            assert.deepEqual(packageManifest.web_accessible_resources, [{
-                resources: ['true-peak-worklet.js'], matches: ['<all_urls>']
-            }]);
+            assert.equal('web_accessible_resources' in packageManifest, false);
         }
     });
 
@@ -86,7 +82,7 @@ for (const browser of ['chrome', 'firefox']) {
             'dist',
             `volume-control-${browser}-v${baseManifest.version}.zip`
         );
-        const expected = [...assets, 'true-peak-worklet.js', 'build-regression.js', 'manifest.json', icon].sort();
+        const expected = [...assets, 'build-regression.js', 'manifest.json', icon].sort();
         assert.deepEqual(listZipEntries(zipPath), expected);
     });
 
@@ -101,14 +97,7 @@ for (const browser of ['chrome', 'firefox']) {
         assert.equal(context.buildRegression.unicode, '× − → café 🎵');
     });
 
-    test(`${browser}: packaged experimental worklet is self-contained`, () => {
-        const code = readFileSync(join(packageDir, 'true-peak-worklet.js'), 'utf8');
-        assert.match(code, /volume-control-true-peak/);
-        assert.match(code, /LookaheadTruePeakLimiter/);
-        assert.doesNotMatch(code, /\bimport\s*\{/);
-        assert.doesNotMatch(code, /\bexport\s+class/);
-        assert.match(code, /limiter-error/);
-    });
+
 
     test(`${browser}: JavaScript is minified without changing source files`, () => {
         for (const name of [...assets.filter(name => name.endsWith('.js')), 'build-regression.js']) {
