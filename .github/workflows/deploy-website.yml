@@ -24,19 +24,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
 
       - name: Install dependencies
         working-directory: website
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Build static site
         working-directory: website
+        env:
+          NEXT_PUBLIC_STATIC_MODE: "1"
+          NEXT_PUBLIC_BASE_PATH: "/volumecontrol"
+          NEXT_TELEMETRY_DISABLED: "1"
         run: bun run build:static
 
-      - name: Ensure .nojekyll
-        run: touch website/out/.nojekyll
+      - name: Verify static export
+        working-directory: website
+        run: |
+          test -f out/index.html || { echo "::error::Static export did not produce out/index.html"; exit 1; }
+          touch out/.nojekyll
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
