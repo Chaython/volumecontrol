@@ -33,7 +33,9 @@
 
 ## 🧩 Tampermonkey (userscript) edition
 
-No store, no extension install — the complete engine as a single userscript. It embeds the extension's real `page-audio-hook.js` **verbatim**, adds a floating button with the same badge semantics, the same popup design (slider, normalizer, mono, live peak meter), per-site memory via Tampermonkey storage, and the same hotkeys (`Alt+Shift+↑/↓` volume, `Alt+Shift+0` reset, `Alt+Shift+M` mono, `Alt+Shift+U` mute, `Alt+Shift+P` popup).
+No store, no extension install — the complete engine as a single userscript. It embeds the extension's real `page-audio-hook.js` **verbatim** and gives you the full GUI as a floating widget: a round speaker button pinned to the bottom-right corner of every page (drag it anywhere — the position sticks), a live badge (`+N` green, `−N`/`MUTE` red), and the complete extension popup above the button — slider, mute, Normalize with live peak meter and gain readout, Mono, Remember, Active, dark mode. On the first run after install or update the popup opens itself once so the GUI is impossible to miss. Per-site memory via Tampermonkey storage, and the same hotkeys (`Alt+Shift+↑/↓` volume, `Alt+Shift+0` reset, `Alt+Shift+M` mono, `Alt+Shift+U` mute, `Alt+Shift+P` popup).
+
+The userscript's `@version` is the extension version plus a userscript-edition revision (`7.1.1` right now), so Tampermonkey picks up fixes even when the extension itself does not change.
 
 **Install:** [volume-control.user.js](https://chaython.github.io/volumecontrol/tampermonkey/volume-control.user.js) · [from the repo (`tampermonkey/`)](https://raw.githubusercontent.com/Chaython/volumecontrol/master/tampermonkey/volume-control.user.js) · attached to every [GitHub release](https://github.com/Chaython/volumecontrol/releases)
 
