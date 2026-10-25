@@ -507,3 +507,15 @@ input:checked + .slider:before { transform: translateX(16px); }
 .normalizer-panel.is-unavailable .normalizer-note {
     opacity: 1;
 }
+
+
+.popup-footer {
+    display: flex;
+    justify-content: center;
+    padding: 9px 12px 11px;
+    border-top: 1px solid rgba(127, 127, 127, 0.28);
+    font-size: 13px;
+}
+.popup-footer a { color: #188038; text-decoration: none; font-weight: 500; }
+.popup-footer a:hover { text-decoration: underline; }
+@media (prefers-color-scheme: dark) { .popup-footer a { color: #8ab4f8; } }
