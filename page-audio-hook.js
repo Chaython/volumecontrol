@@ -3115,7 +3115,7 @@
         logDiagnostic(desired, applied);
         return applied;
     }
-    
+
     function sampleProcessor(processor) {
         if (!processor || !processor.analyser || !processor.context || processor.context.state !== "running") {
             return { peakDb: -Infinity, gainDb: processor && Number(processor.normalizerGainDb) || 0 };
