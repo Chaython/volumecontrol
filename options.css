@@ -584,11 +584,42 @@ button#openShortcutsPage:hover {
     gap: 7px;
 }
 .normalizer-mode-setting label { font-weight: 600; }
-.normalizer-mode-setting select {
+/* Keep settings dropdowns visually consistent and readable in light/dark mode. */
+#normalizerMode,
+#debugRouteMode {
     max-width: 100%;
-    padding: 6px 8px;
-    color: inherit;
-    background: transparent;
+    min-height: 36px;
+    padding: 6px 30px 6px 10px;
+    font: inherit;
+    color: #333;
+    background-color: #fff;
     border: 1px solid #888;
     border-radius: 4px;
+    color-scheme: light;
+}
+
+.normalizer-mode-setting select {
+    width: 100%;
+}
+
+#normalizerMode option,
+#debugRouteMode option {
+    color: #333;
+    background-color: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+    #normalizerMode,
+    #debugRouteMode {
+        color: #e8eaed;
+        background-color: #333;
+        border-color: #666;
+        color-scheme: dark;
+    }
+
+    #normalizerMode option,
+    #debugRouteMode option {
+        color: #e8eaed;
+        background-color: #333;
+    }
 }
