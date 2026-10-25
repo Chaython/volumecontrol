@@ -1462,7 +1462,7 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
     return applied;
 }
 
-    function ensureIsolatedNormalizerTimer() {
+function ensureIsolatedNormalizerTimer() {
     // Even an empty 100ms interval keeps waking background tabs. Only sample
     // when an actual isolated route needs automatic gain control.
     const shouldRun = !tc.vars.isBlocked && tc.vars.normalizerEnabled &&
