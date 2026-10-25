@@ -3,11 +3,189 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="0; url=stats.html">
-<title>Volume Control statistics</title>
-<link rel="canonical" href="stats.html">
+<meta name="theme-color" content="#0b0d12">
+<meta name="description" content="Volume Control gives you per-site volume control, volume boost, mono audio, mute, and optional loudness normalization for Firefox, Chrome, and Edge. Try the interactive audio demo.">
+<title>Volume Control — Take control of your audio</title>
+<link rel="icon" href="../ico.svg" type="image/svg+xml">
+<style>
+:root{color-scheme:dark;--bg:#0b0d12;--panel:#121620;--panel2:#181e2a;--line:#293143;--text:#f3f5fb;--muted:#a6afc2;--accent:#8b9dff;--accent2:#6de0c2;--danger:#ff8191;--radius:20px}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(ellipse at 78% 4%,#20294a 0,transparent 32rem),radial-gradient(ellipse at 8% 35%,#142b2c 0,transparent 30rem),var(--bg);color:var(--text);font:16px/1.6 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:inherit}button,input{font:inherit}button,a{ -webkit-tap-highlight-color:transparent}.wrap{width:min(1120px,calc(100% - 40px));margin:auto}.nav{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:24px 0}.brand{display:flex;align-items:center;gap:12px;font-weight:750;letter-spacing:-.03em;text-decoration:none}.brand img{width:34px;height:34px}.navlinks{display:flex;align-items:center;gap:22px;color:var(--muted);font-size:14px}.navlinks a{text-decoration:none}.navlinks a:hover,.textlink:hover{color:var(--text)}.button{display:inline-flex;align-items:center;justify-content:center;gap:9px;border:1px solid var(--line);border-radius:12px;padding:11px 16px;background:#171d29;color:var(--text);text-decoration:none;font-weight:650;transition:transform .15s,border-color .15s}.button:hover{transform:translateY(-1px);border-color:#6474a1}.button.primary{background:var(--accent);border-color:var(--accent);color:#0c1020}.button.subtle{background:transparent}.hero{display:grid;grid-template-columns:1.02fr .98fr;gap:64px;align-items:center;padding:76px 0 88px}.eyebrow{display:inline-flex;align-items:center;gap:8px;color:var(--accent2);font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.dot{width:7px;height:7px;border-radius:50%;background:var(--accent2);box-shadow:0 0 16px #6de0c2}.hero h1{font-size:clamp(42px,6vw,70px);line-height:1.02;letter-spacing:-.065em;margin:20px 0}.hero h1 span{color:var(--accent)}.hero p{font-size:18px;color:var(--muted);max-width:560px}.actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}.fineprint{font-size:12px!important;margin-top:18px}.preview-shell{border:1px solid #333d53;background:linear-gradient(150deg,#1a2030,#10131b 75%);border-radius:26px;padding:15px;box-shadow:0 28px 90px #0008;position:relative}.windowbar{display:flex;align-items:center;justify-content:space-between;padding:3px 4px 14px;color:#9ba6bc;font-size:12px}.windowdots{display:flex;gap:5px}.windowdots i{display:block;width:7px;height:7px;background:#46506a;border-radius:50%}.demo{border:1px solid var(--line);border-radius:18px;background:#0d1119;padding:20px}.demo-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}.demo-title{font-size:14px;font-weight:750}.demo-status{font-size:11px;color:var(--accent2);border:1px solid #2c6359;background:#122823;padding:4px 8px;border-radius:20px}.demo-range{width:100%;accent-color:var(--accent);cursor:pointer}.db-row{display:flex;align-items:center;justify-content:space-between;margin:8px 0 20px}.db-number{font-size:28px;font-weight:800;letter-spacing:-.04em}.db-number small{font-size:12px;color:var(--muted);letter-spacing:0;font-weight:600}.mute-row{display:flex;gap:10px;align-items:center}.iconbutton{border:1px solid var(--line);background:#171d29;color:var(--text);border-radius:10px;padding:9px 12px;cursor:pointer}.iconbutton[aria-pressed=true]{background:#3a202c;border-color:#a44b66;color:#ffb8c2}.toggle-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:18px}.toggle{display:flex;align-items:center;justify-content:center;gap:7px;background:#151b26;border:1px solid var(--line);border-radius:10px;padding:10px 5px;color:#cbd2e1;font-size:12px;cursor:pointer}.toggle .lamp{width:7px;height:7px;border-radius:50%;background:#596277}.toggle[aria-pressed=true]{border-color:#596aab;background:#1c2340;color:#fff}.toggle[aria-pressed=true] .lamp{background:var(--accent);box-shadow:0 0 8px #8b9dff88}.demo-divider{height:1px;background:var(--line);margin:18px 0}.demo-bottom{display:flex;align-items:center;justify-content:space-between;gap:10px}.small-muted{font-size:11px;color:var(--muted)}.meter{height:7px;border-radius:10px;background:#242b39;overflow:hidden;margin-top:10px}.meter span{display:block;height:100%;width:16%;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .12s}.section{padding:66px 0}.section-head{max-width:680px;margin-bottom:28px}.section h2{font-size:clamp(30px,4vw,44px);line-height:1.1;letter-spacing:-.045em;margin:12px 0}.section-head p,.muted{color:var(--muted)}.feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.feature{background:#121722d9;border:1px solid var(--line);border-radius:var(--radius);padding:22px}.feature-icon{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:#242b43;color:var(--accent);font-size:20px}.feature h3{margin:17px 0 7px;font-size:17px}.feature p{margin:0;color:var(--muted);font-size:14px}.demo-guide{display:grid;grid-template-columns:.85fr 1.15fr;gap:24px;align-items:start}.guide-panel{padding:24px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}.guide-panel h3{margin-top:0}.guide-panel li{color:var(--muted);padding:5px 0}.notice{border-left:3px solid var(--accent2);padding:12px 15px;background:#14201f;color:#c5d8d4;border-radius:0 10px 10px 0;font-size:13px}.browser-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.browser{display:flex;flex-direction:column;gap:8px;padding:20px;border:1px solid var(--line);background:var(--panel);border-radius:16px;text-decoration:none}.browser strong{font-size:16px}.browser span{color:var(--muted);font-size:13px}.browser:hover{border-color:#6577a8}.stats-link{margin-top:24px;display:inline-flex;gap:8px;color:var(--accent);text-decoration:none}.footer{margin-top:56px;border-top:1px solid var(--line);padding:28px 0 38px;display:flex;justify-content:space-between;gap:20px;color:var(--muted);font-size:13px}.footer a{color:var(--muted)}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:820px){.hero{grid-template-columns:1fr;gap:36px;padding:48px 0 64px}.hero-copy{max-width:680px}.feature-grid{grid-template-columns:repeat(2,1fr)}.demo-guide{grid-template-columns:1fr}.navlinks{gap:12px}.navlinks .hide-small{display:none}}
+@media(max-width:520px){.wrap{width:min(100% - 28px,1120px)}.nav{padding:17px 0}.navlinks{font-size:12px}.navlinks .button{padding:8px 10px}.hero h1{font-size:44px}.hero p{font-size:16px}.preview-shell{padding:9px}.demo{padding:14px}.feature-grid,.browser-grid{grid-template-columns:1fr}.section{padding:48px 0}.footer{flex-direction:column}.toggle-grid{gap:5px}.toggle{font-size:11px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
+</style>
 </head>
 <body>
-<p>Opening the <a href="stats.html">Volume Control statistics dashboard</a>…</p>
+<header class="wrap nav">
+  <a class="brand" href="./" aria-label="Volume Control home"><img src="../ico.svg" alt=""><span>Volume Control</span></a>
+  <nav class="navlinks" aria-label="Main navigation"><a href="#features">Features</a><a href="#demo">Live demo</a><a href="stats.html">Stats</a><a class="button subtle" href="https://github.com/Chaython/volumecontrol">GitHub ↗</a></nav>
+</header>
+<main>
+<section class="wrap hero">
+  <div class="hero-copy">
+    <div class="eyebrow"><span class="dot"></span> Version 7.1 · Free & open source</div>
+    <h1>Your audio.<br><span>Your rules.</span></h1>
+    <p>Take control of volume on every site. Boost quiet videos, tame loud streams, switch to mono, and optionally normalize audio — right from your browser toolbar.</p>
+    <div class="actions"><a class="button primary" href="#install">Get the extension <span aria-hidden="true">↗</span></a><a class="button" href="#demo">Try the live demo ↓</a></div>
+    <p class="fineprint">Firefox 128+ · Chrome, Edge and other Chromium browsers 121+</p>
+  </div>
+  <div class="preview-shell" aria-label="Interactive preview of the extension popup">
+    <div class="windowbar"><span>VOLUME CONTROL <span style="color:#6d7890">/ POPUP PREVIEW</span></span><span class="windowdots"><i></i><i></i><i></i></span></div>
+    <div class="demo">
+      <div class="demo-head"><span class="demo-title">Volume Control</span><span class="demo-status" id="preview-status">● ACTIVE</span></div>
+      <label class="sr-only" for="preview-volume">Preview volume in decibels</label>
+      <input class="demo-range" id="preview-volume" type="range" min="-32" max="32" step="1" value="8">
+      <div class="db-row"><span class="small-muted">Site volume</span><span class="db-number"><span id="preview-db">+8</span><small> dB</small></span></div>
+      <div class="mute-row"><button class="iconbutton" id="preview-mute" type="button" aria-pressed="false">◖)) &nbsp; Mute</button><span class="small-muted" id="preview-mute-state">Audio enabled</span></div>
+      <div class="toggle-grid">
+        <button class="toggle" id="preview-normalize" type="button" aria-pressed="false"><span class="lamp"></span> Normalize</button>
+        <button class="toggle" id="preview-mono" type="button" aria-pressed="false"><span class="lamp"></span> Mono</button>
+        <button class="toggle" id="preview-remember" type="button" aria-pressed="true"><span class="lamp"></span> Remember</button>
+      </div>
+      <div class="demo-divider"></div>
+      <div class="demo-bottom"><span class="small-muted">Output peak · demo signal</span><span class="small-muted" id="preview-peak">−18 dBFS</span></div>
+      <div class="meter" role="meter" aria-label="Demo signal level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="35" id="preview-meter"><span id="preview-meter-fill"></span></div>
+      <p class="small-muted" style="margin:12px 0 0">Interactive UI preview. Controls below play a real test tone in your browser.</p>
+    </div>
+  </div>
+</section>
+<section class="section" id="demo" style="background:#0f131bd9;border-block:1px solid #202738">
+  <div class="wrap demo-guide">
+    <div class="section-head">
+      <div class="eyebrow">Try it yourself</div>
+      <h2>A tiny sound lab, right here.</h2>
+      <p>Play a generated test tone and hear how the volume slider, mute, mono and normalization-style compression affect it. Your browser asks for a click before audio can start.</p>
+      <div class="notice">This demo uses a generated tone, not audio from another website. It demonstrates the controls safely; it does not install or run the extension in this page.</div>
+    </div>
+    <div class="guide-panel">
+      <div class="demo-head"><span class="demo-title">Live audio playground</span><span class="demo-status" id="audio-state" style="color:#b4bed0;background:#1a2030;border-color:#30394d">● STOPPED</span></div>
+      <div class="actions" style="margin:0 0 18px"><button class="button primary" id="play-tone" type="button">▶ Play test tone</button><button class="button" id="stop-tone" type="button" disabled>■ Stop</button></div>
+      <label for="audio-volume"><strong>Volume</strong> <span class="muted" id="audio-db">+0 dB</span></label>
+      <input class="demo-range" id="audio-volume" type="range" min="-32" max="12" value="0" step="1" style="margin:12px 0 20px">
+      <div class="toggle-grid" style="margin-top:0">
+        <button class="toggle" id="audio-mute" type="button" aria-pressed="false"><span class="lamp"></span> Mute</button>
+        <button class="toggle" id="audio-mono" type="button" aria-pressed="false"><span class="lamp"></span> Mono</button>
+        <button class="toggle" id="audio-normalize" type="button" aria-pressed="false"><span class="lamp"></span> Normalize</button>
+      </div>
+      <div class="demo-divider"></div>
+      <p class="small-muted" id="audio-help">Click Play to start a gentle 440 Hz test tone. Keep your system volume low before trying audio demos.</p>
+    </div>
+  </div>
+</section>
+<section class="wrap section" id="features">
+  <div class="section-head"><div class="eyebrow">More than a volume slider</div><h2>The controls you want, where you need them.</h2><p>Built for day-to-day listening, with controls and options for different sites and listening habits.</p></div>
+  <div class="feature-grid">
+    <article class="feature"><div class="feature-icon">↗</div><h3>Boost quiet media</h3><p>Adjust site audio from −32 dB to +32 dB where the browser allows Web Audio routing. Positive boosts can distort loud material.</p></article>
+    <article class="feature"><div class="feature-icon">≋</div><h3>Optional normalization</h3><p>Automatically even out loud and quiet passages with Music and Adaptive modes, plus gain and peak-level feedback.</p></article>
+    <article class="feature"><div class="feature-icon">◖))</div><h3>Mute & mono</h3><p>Mute a site or combine stereo channels into mono for your preferred listening setup.</p></article>
+    <article class="feature"><div class="feature-icon">⌁</div><h3>Remember per site</h3><p>Keep volume and playback preferences for sites or URL paths when Remember is enabled.</p></article>
+    <article class="feature"><div class="feature-icon">⏻</div><h3>Site-level controls</h3><p>Toggle the extension on or off for the current site, and manage exclusions for domains or matching paths.</p></article>
+    <article class="feature"><div class="feature-icon">⚙</div><h3>Fine-tune in Options</h3><p>Configure normalization behavior, site exclusions, and other preferences from the full settings page.</p></article>
+  </div>
+</section>
+<section class="wrap section" id="install">
+  <div class="section-head"><div class="eyebrow">Get started</div><h2>Choose your browser.</h2><p>Install from the browser's official extension store, or inspect the source and report issues on GitHub.</p></div>
+  <div class="browser-grid">
+    <a class="browser" href="https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"><strong>Firefox ↗</strong><span>Install from Firefox Add-ons · Firefox 128+</span></a>
+    <a class="browser" href="https://microsoftedge.microsoft.com/addons/detail/ipbghdjdmefdioebhaneohmkidjakfbc"><strong>Microsoft Edge ↗</strong><span>Install from Microsoft Edge Add-ons</span></a>
+    <a class="browser" href="https://github.com/Chaython/volumecontrol"><strong>Chrome & Chromium ↗</strong><span>See the source and installation instructions on GitHub</span></a>
+  </div>
+  <a class="stats-link" href="stats.html">Explore live usage and repository statistics <span aria-hidden="true">→</span></a>
+</section>
+</main>
+<footer class="wrap footer"><span>© Volume Control · Open source · Version 7.1</span><span><a href="https://github.com/Chaython/volumecontrol">Source code</a> · <a href="https://github.com/Chaython/volumecontrol/issues">Report a bug</a> · <a href="stats.html">Statistics</a></span></footer>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const previewVolume = $('preview-volume');
+  const previewDb = $('preview-db');
+  const previewMute = $('preview-mute');
+  const previewMuteState = $('preview-mute-state');
+  const previewStatus = $('preview-status');
+  const previewMeter = $('preview-meter');
+  const previewMeterFill = $('preview-meter-fill');
+  const previewPeak = $('preview-peak');
+  const toggles = ['preview-normalize','preview-mono','preview-remember'];
+  function formatDb(value){return (value > 0 ? '+' : '') + value;}
+  function updatePreview(){
+    const db = Number(previewVolume.value);
+    previewDb.textContent = formatDb(db);
+    const muted = previewMute.getAttribute('aria-pressed') === 'true';
+    previewMuteState.textContent = muted ? 'Muted' : 'Audio enabled';
+    previewStatus.textContent = muted ? '● MUTED' : '● ACTIVE';
+    const normalize = $('preview-normalize').getAttribute('aria-pressed') === 'true';
+    const level = muted ? 0 : Math.max(3, Math.min(100, 35 * Math.pow(10, db / 24) * (normalize ? .75 : 1)));
+    previewMeterFill.style.width = level + '%';
+    previewMeter.setAttribute('aria-valuenow', String(Math.round(level)));
+    previewPeak.textContent = muted ? '−∞ dBFS' : (db > 0 ? '+' : '') + (Math.round(-18 + db * .7 - (normalize ? 3 : 0))) + ' dBFS';
+  }
+  previewVolume.addEventListener('input', updatePreview);
+  previewMute.addEventListener('click', () => {previewMute.setAttribute('aria-pressed', String(previewMute.getAttribute('aria-pressed') !== 'true')); previewMute.textContent = previewMute.getAttribute('aria-pressed') === 'true' ? '◖))  Unmute' : '◖))  Mute'; updatePreview();});
+  toggles.forEach(id => $(id).addEventListener('click', () => {const el=$(id);el.setAttribute('aria-pressed',String(el.getAttribute('aria-pressed')!=='true'));updatePreview();}));
+  updatePreview();
+
+  let context=null, oscillator=null, gain=null, compressor=null, merger=null, splitter=null, leftGain=null, rightGain=null, analyser=null, raf=0;
+  let toneMuted=false, toneMono=false, toneNormalize=false;
+  const volume=$('audio-volume');
+  function setAudioUi(){
+    $('audio-db').textContent=formatDb(Number(volume.value))+' dB';
+    $('audio-mute').setAttribute('aria-pressed',String(toneMuted));
+    $('audio-mono').setAttribute('aria-pressed',String(toneMono));
+    $('audio-normalize').setAttribute('aria-pressed',String(toneNormalize));
+    [$('audio-mute'),$('audio-mono'),$('audio-normalize')].forEach(b=>b.style.color=b.getAttribute('aria-pressed')==='true'?'#fff':'');
+    if(gain&&context){
+      const g=toneMuted?0:Math.pow(10,Number(volume.value)/20);
+      gain.gain.setTargetAtTime(g,context.currentTime,.025);
+      if(splitter&&leftGain&&rightGain){
+        leftGain.gain.setTargetAtTime(toneMono?Math.SQRT1_2:1,context.currentTime,.025);
+        rightGain.gain.setTargetAtTime(toneMono?Math.SQRT1_2:1,context.currentTime,.025);
+      }
+      if(compressor) compressor.threshold.setTargetAtTime(toneNormalize?-24:0,context.currentTime,.05);
+    }
+  }
+  function meterLoop(){
+    if(!analyser||!context||context.state==='closed')return;
+    const data=new Uint8Array(analyser.fftSize);analyser.getByteTimeDomainData(data);
+    let sum=0;for(let i=0;i<data.length;i++){const v=(data[i]-128)/128;sum+=v*v;}
+    const rms=Math.sqrt(sum/data.length);const db=rms>0?20*Math.log10(rms):-60;
+    $('audio-help').textContent='Live signal level: '+db.toFixed(1)+' dBFS. Normalize '+(toneNormalize?'is on (demo compressor active).':'is off.')+' This generated tone is not site audio.';
+    raf=requestAnimationFrame(meterLoop);
+  }
+  function stopTone(){
+    cancelAnimationFrame(raf);
+    if(oscillator){try{oscillator.stop()}catch{};try{oscillator.disconnect()}catch{};oscillator=null;}
+    if(context){const old=context;context=null;old.close().catch(()=>{});}
+    gain=compressor=merger=splitter=leftGain=rightGain=analyser=null;
+    $('audio-state').textContent='● STOPPED';$('audio-state').style.color='#b4bed0';
+    $('play-tone').disabled=false;$('stop-tone').disabled=true;
+    $('audio-help').textContent='Stopped. Click Play to start a gentle 440 Hz test tone. Keep your system volume low before trying audio demos.';
+  }
+  async function startTone(){
+    if(context)return;
+    const AudioContext=window.AudioContext||window.webkitAudioContext;
+    if(!AudioContext){$('audio-help').textContent='This browser does not support the Web Audio API, so the live tone is unavailable.';return;}
+    try{
+      context=new AudioContext();await context.resume();
+      oscillator=context.createOscillator();gain=context.createGain();compressor=context.createDynamicsCompressor();analyser=context.createAnalyser();analyser.fftSize=1024;
+      oscillator.type='sine';oscillator.frequency.value=440;gain.gain.value=0;
+      oscillator.connect(gain);
+      // Explicit stereo split/merge lets the mono switch combine the channels.
+      splitter=context.createChannelSplitter(2);merger=context.createChannelMerger(2);
+      leftGain=context.createGain();rightGain=context.createGain();
+      gain.connect(splitter);splitter.connect(leftGain,0);splitter.connect(rightGain,1);
+      leftGain.connect(merger,0,0);rightGain.connect(merger,0,1);
+      merger.connect(compressor);compressor.connect(analyser);analyser.connect(context.destination);
+      oscillator.start();$('audio-state').textContent='● PLAYING';$('audio-state').style.color='#6de0c2';
+      $('play-tone').disabled=true;$('stop-tone').disabled=false;setAudioUi();meterLoop();
+    }catch(error){stopTone();$('audio-help').textContent='Audio could not start: '+(error&&error.message?error.message:'Web Audio initialization failed')+'. Try another browser or check audio permissions.';}
+  }
+  volume.addEventListener('input',setAudioUi);
+  $('audio-mute').addEventListener('click',()=>{toneMuted=!toneMuted;setAudioUi()});
+  $('audio-mono').addEventListener('click',()=>{toneMono=!toneMono;setAudioUi()});
+  $('audio-normalize').addEventListener('click',()=>{toneNormalize=!toneNormalize;setAudioUi()});
+  $('play-tone').addEventListener('click',startTone);$('stop-tone').addEventListener('click',stopTone);
+  window.addEventListener('pagehide',stopTone);
+})();
+</script>
 </body>
 </html>
