@@ -18,28 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-pages:
-    runs-on: ubuntu-latest
-    outputs:
-      enabled: ${{ steps.check.outputs.enabled }}
-    steps:
-      - name: Check whether GitHub Pages is enabled
-        id: check
-        shell: bash
-        run: |
-          if curl --fail --silent --show-error --max-time 10 \
-            https://api.github.com/repos/Chaython/volumecontrol/pages \
-            -o /tmp/pages.json; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "GitHub Pages is enabled."
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "GitHub Pages is not enabled yet; deployment is skipped without failing."
-          fi
-
   deploy:
-    needs: check-pages
-    if: ${{ needs.check-pages.outputs.enabled == 'true' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
