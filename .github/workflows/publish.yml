@@ -1,0 +1,288 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Stable tag to build and publish (for example V6.23)"
+        required: true
+        type: string
+      publish_stores:
+        description: "Publish to Firefox AMO and Microsoft Edge Add-ons (requires both stores' credentials)"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-\${{ github.event.release.tag_name || inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: \${{ github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      RELEASE_TAG: \${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
+      PUBLISH_STORES: \${{ github.event_name == 'release' || inputs.publish_stores }}
+      AMO_JWT_ISSUER: \${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: \${{ secrets.AMO_JWT_SECRET }}
+      EDGE_CLIENT_ID: \${{ secrets.EDGE_CLIENT_ID }}
+      EDGE_API_KEY: \${{ secrets.EDGE_API_KEY }}
+      EDGE_PRODUCT_ID: \${{ vars.EDGE_PRODUCT_ID }}
+
+    steps:
+      - name: Checkout exact release tag
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:RELEASE_TAG -notmatch '^V\d+(?:\.\d+)+$') {
+              throw "Publishing requires a stable Vx.xx-style tag; got '$($env:RELEASE_TAG)'."
+          }
+          git init .
+          git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
+          git fetch --force --depth=1 origin "refs/tags/$($env:RELEASE_TAG)"
+          if ($LASTEXITCODE -ne 0) { throw "Could not fetch release tag $($env:RELEASE_TAG)." }
+          git checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "Could not check out release tag." }
+
+      - name: Install pinned build dependencies
+        run: npm ci
+
+      - name: Validate release tag and credentials mode
+        id: meta
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+          $expectedTag = "V$($manifest.version)"
+          if ($env:RELEASE_TAG -ne $expectedTag) {
+              throw "Release tag '$($env:RELEASE_TAG)' does not match manifest version '$expectedTag'."
+          }
+          "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
+          $publish = $env:PUBLISH_STORES -eq "true"
+          "publish_stores=$($publish.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          if ($publish) {
+              foreach ($name in @("AMO_JWT_ISSUER","AMO_JWT_SECRET","EDGE_CLIENT_ID","EDGE_API_KEY","EDGE_PRODUCT_ID")) {
+                  if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+                      throw "Store publishing was requested but required credential/configuration '$name' is missing. Add it before publishing."
+                  }
+              }
+          }
+
+      - name: Run regression tests
+        run: npm test
+
+      - name: Validate minifier toolchain
+        run: node scripts/minify.mjs --check
+
+      - name: Run Chromium audio-hook smoke test
+        env:
+          REQUIRE_BROWSER_SMOKE: "1"
+        run: node scripts/browser-smoke.mjs
+
+      - name: Run Firefox audio-hook smoke test
+        env:
+          REQUIRE_BROWSER_SMOKE: "1"
+        run: node scripts/firefox-smoke.mjs
+
+      - name: Build Firefox SVG and Chromium PNG packages
+        shell: powershell
+        run: .\scripts\build.ps1
+
+      - name: Validate extracted release packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "\${{ steps.meta.outputs.version }}"
+          foreach ($browser in @("chrome", "firefox")) {
+              $zip = "dist/volume-control-$browser-v$version.zip"
+              if (-not (Test-Path -LiteralPath $zip)) { throw "Missing $browser package: $zip" }
+              $target = "dist/smoke/$browser"
+              New-Item -ItemType Directory -Path $target -Force | Out-Null
+              Expand-Archive -LiteralPath $zip -DestinationPath $target -Force
+              if (-not (Test-Path -LiteralPath "$target/manifest.json")) { throw "$browser package has no root manifest." }
+              $manifest = Get-Content -Raw -LiteralPath "$target/manifest.json" | ConvertFrom-Json
+              if ([string]$manifest.version -ne $version) { throw "$browser package version mismatch." }
+              if ($browser -eq "firefox" -and -not (Test-Path -LiteralPath "$target/ico.svg")) { throw "Firefox package must contain ico.svg." }
+              if ($browser -eq "chrome" -and -not (Test-Path -LiteralPath "$target/chrome.png")) { throw "Chromium package must contain chrome.png." }
+          }
+
+      - name: Exercise packaged Chromium extension
+        env:
+          VC_EXTENSION_DIR: dist/smoke/chrome
+        run: node scripts/chromium-functional-smoke.mjs
+
+      - name: Temporarily install packaged Firefox extension
+        env:
+          VC_EXTENSION_DIR: dist/smoke/firefox
+        run: node scripts/firefox-extension-smoke.mjs
+
+      - name: Create source archive and SHA-256 checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "\${{ steps.meta.outputs.version }}"
+          git archive --format=zip --output="dist/source-v$version.zip" HEAD
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path "dist/source-v$version.zip")) { throw "Could not create source archive." }
+          $packages = @(Get-ChildItem -LiteralPath dist -Filter '*.zip' | Where-Object { $_.Name -notlike 'SHA256SUMS*' } | Sort-Object Name)
+          if ($packages.Count -ne 3) { throw "Expected Firefox, Chromium, and source ZIPs; found $($packages.Count)." }
+          $lines = foreach ($file in $packages) {
+              $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($file.Name)"
+          }
+          $lines | Set-Content -LiteralPath dist/SHA256SUMS.txt -Encoding utf8
+
+      - name: Prepare changelog and release notes
+        id: notes
+        shell: pwsh
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "\${{ steps.meta.outputs.version }}"
+          $tag = "$env:RELEASE_TAG"
+          $generated = gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$tag" -f target_commitish="$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release-note generation failed." }
+          $generatedNotes = ($generated | ConvertFrom-Json).body
+          $changelogPath = "CHANGELOG.md"
+          $section = ""
+          if (Test-Path -LiteralPath $changelogPath) {
+              $text = Get-Content -Raw -LiteralPath $changelogPath
+              $lines = $text -split "\r?\n"
+              $start = -1
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  if ($lines[$i] -match "^##\s+.*\bV?$([regex]::Escape($version))\b") { $start = $i; break }
+              }
+              if ($start -ge 0) {
+                  $end = $lines.Count
+                  for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+                      if ($lines[$i] -match "^##\s+") { $end = $i; break }
+                  }
+                  $section = ($lines[$start..($end - 1)] -join "\`n").Trim()
+              }
+          }
+          if ([string]::IsNullOrWhiteSpace($section)) {
+              $body = "## Changes\`n\`n$generatedNotes\`n\`n---\`n\`nFull history: https://github.com/$env:GITHUB_REPOSITORY/blob/$tag/CHANGELOG.md"
+          } else {
+              $body = "$section\`n\`n---\`n\`n## Changes in this release\`n\`n$generatedNotes"
+          }
+          $body | Set-Content -LiteralPath dist/release-notes.md -Encoding utf8
+
+      - name: Update GitHub release assets and changelog
+        shell: pwsh
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "$env:RELEASE_TAG"
+          $version = "\${{ steps.meta.outputs.version }}"
+          $release = gh release view $tag --repo "$env:GITHUB_REPOSITORY" --json isDraft,isPrerelease
+          if ($LASTEXITCODE -ne 0) { throw "A GitHub Release for $tag must exist before this workflow runs." }
+          $releaseInfo = $release | ConvertFrom-Json
+          if ($releaseInfo.isDraft -or $releaseInfo.isPrerelease) { throw "Only published stable GitHub releases may be updated by this workflow." }
+          gh release edit $tag --repo "$env:GITHUB_REPOSITORY" --title "$tag: Volume Control" --notes-file dist/release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw "Could not update GitHub release notes." }
+          $assets = @(
+              "dist/volume-control-firefox-v$version.zip",
+              "dist/volume-control-chrome-v$version.zip",
+              "dist/source-v$version.zip",
+              "dist/SHA256SUMS.txt"
+          )
+          gh release upload $tag @assets --repo "$env:GITHUB_REPOSITORY" --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload all release assets." }
+
+      - name: Submit Firefox package to Mozilla Add-ons
+        if: steps.meta.outputs.publish_stores == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $api = "https://addons.mozilla.org/api/v5"
+          $version = "\${{ steps.meta.outputs.version }}"
+          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+          $guid = [string]$manifest.browser_specific_settings.gecko.id
+          if ([string]::IsNullOrWhiteSpace($guid)) { throw "Firefox add-on ID missing from manifest.json." }
+          $firefoxZip = Get-Item -LiteralPath "dist/volume-control-firefox-v$version.zip"
+          $sourceZip = Get-Item -LiteralPath "dist/source-v$version.zip"
+          function ConvertTo-Base64Url([byte[]]$Bytes) { [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+','-').Replace('/','_') }
+          function New-AmoToken {
+              $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+              $payload = @{ iss=$env:AMO_JWT_ISSUER; jti=[guid]::NewGuid().ToString("N"); iat=$now; exp=$now+60 } | ConvertTo-Json -Compress
+              $header = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes('{"alg":"HS256","typ":"JWT"}'))
+              $body = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($payload))
+              $unsigned = "$header.$body"
+              $hmac = [Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($env:AMO_JWT_SECRET))
+              try { $signature = ConvertTo-Base64Url ($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($unsigned))) } finally { $hmac.Dispose() }
+              "$unsigned.$signature"
+          }
+          function Get-AmoHeaders { @{ Authorization = "JWT $(New-AmoToken)" } }
+          $encodedGuid = [Uri]::EscapeDataString($guid)
+          $url = "$api/addons/addon/$encodedGuid/versions/?filter=all_without_unlisted&page_size=50"
+          while ($url) {
+              $page = Invoke-RestMethod -Method Get -Uri $url -Headers (Get-AmoHeaders)
+              $existing = @($page.results) | Where-Object { [string]$_.version -eq $version } | Select-Object -First 1
+              if ($existing) { throw "AMO already has version $version (status '$($existing.file.status)'). Refusing to silently skip an unexpected stable release." }
+              $url = [string]$page.next
+          }
+          $upload = Invoke-RestMethod -Method Post -Uri "$api/addons/upload/" -Headers (Get-AmoHeaders) -Form @{ upload=$firefoxZip; channel="listed" }
+          if (-not $upload.uuid) { throw "AMO upload returned no UUID." }
+          $detail = $upload
+          for ($attempt=0; $attempt -lt 60 -and -not $detail.processed; $attempt++) {
+              Start-Sleep -Seconds 5
+              $detail = Invoke-RestMethod -Method Get -Uri "$api/addons/upload/$($upload.uuid)/" -Headers (Get-AmoHeaders)
+          }
+          if (-not $detail.processed) { throw "AMO validation timed out." }
+          if (-not $detail.valid) { throw "AMO validation failed: $($detail.validation | ConvertTo-Json -Depth 20)" }
+          $created = Invoke-RestMethod -Method Post -Uri "$api/addons/addon/$encodedGuid/versions/" -Headers (Get-AmoHeaders) -Form @{ upload=[string]$upload.uuid; license="ISC"; source=$sourceZip }
+          if (-not $created) { throw "AMO did not confirm version creation." }
+          Write-Host "Submitted Firefox v$version to Mozilla Add-ons."
+
+      - name: Publish Chromium package to Microsoft Edge Add-ons
+        if: steps.meta.outputs.publish_stores == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "\${{ steps.meta.outputs.version }}"
+          $productId = $env:EDGE_PRODUCT_ID
+          $headers = @{ Authorization = "ApiKey $env:EDGE_API_KEY"; "X-ClientID" = $env:EDGE_CLIENT_ID }
+          $root = "https://api.addons.microsoftedge.microsoft.com/v1"
+          $zip = Get-Item -LiteralPath "dist/volume-control-chrome-v$version.zip"
+          $uploadUri = "$root/products/$productId/submissions/draft/package"
+          $response = Invoke-WebRequest -Method Put -Uri $uploadUri -Headers $headers -ContentType "application/zip" -InFile $zip.FullName
+          $operationId = [string]$response.Headers["Location"]
+          if ([string]::IsNullOrWhiteSpace($operationId)) { throw "Edge upload response did not include an operation ID in Location." }
+          $operationId = $operationId.TrimEnd('/').Split('/')[-1]
+          $statusUri = "$root/products/$productId/submissions/draft/package/operations/$operationId"
+          $status = $null
+          for ($attempt=0; $attempt -lt 60; $attempt++) {
+              Start-Sleep -Seconds 5
+              $status = Invoke-RestMethod -Method Get -Uri $statusUri -Headers $headers
+              $statusText = ConvertTo-Json -InputObject $status -Compress -Depth 10
+              if ($statusText -match '"status"\s*:\s*"(Failed|Failure|Rejected)"') { throw "Edge package processing failed: $statusText" }
+              if ($statusText -match '"status"\s*:\s*"(Succeeded|Success|Completed)"') { break }
+          }
+          $statusText = ConvertTo-Json -InputObject $status -Compress -Depth 10
+          if ($statusText -notmatch '"status"\s*:\s*"(Succeeded|Success|Completed)"') { throw "Timed out waiting for Edge package processing: $statusText" }
+          $notes = "Volume Control v$version. Full changelog: https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$env:RELEASE_TAG"
+          $body = @{ notes = $notes } | ConvertTo-Json -Compress
+          $published = Invoke-RestMethod -Method Post -Uri "$root/products/$productId/submissions" -Headers ($headers + @{ "Content-Type"="application/json" }) -Body $body
+          $publishOperation = [string]$published.operationId
+          if ([string]::IsNullOrWhiteSpace($publishOperation)) { $publishOperation = [string]$published.id }
+          if ([string]::IsNullOrWhiteSpace($publishOperation)) { throw "Edge publish returned no operation ID: $(ConvertTo-Json $published -Compress -Depth 10)" }
+          $publishStatusUri = "$root/products/$productId/submissions/operations/$publishOperation"
+          $final = $null
+          for ($attempt=0; $attempt -lt 60; $attempt++) {
+              Start-Sleep -Seconds 5
+              $final = Invoke-RestMethod -Method Get -Uri $publishStatusUri -Headers $headers
+              $finalText = ConvertTo-Json -InputObject $final -Compress -Depth 10
+              if ($finalText -match '"status"\s*:\s*"(Failed|Failure|Rejected)"') { throw "Edge publication failed: $finalText" }
+              if ($finalText -match '"status"\s*:\s*"(Succeeded|Success|Completed)"') { break }
+          }
+          $finalText = ConvertTo-Json -InputObject $final -Compress -Depth 10
+          if ($finalText -notmatch '"status"\s*:\s*"(Succeeded|Success|Completed)"') { throw "Timed out waiting for Edge publication: $finalText" }
+          Write-Host "Submitted Chromium v$version to Microsoft Edge Add-ons."
