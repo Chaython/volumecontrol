@@ -2750,7 +2750,7 @@ test('AMO publishing is stable-tag bound and duplicate-safe', () => {
     assert.match(source, /git fetch --force --depth=1 origin "refs\/tags\/\$tag"/);
     assert.match(source, /publish_stores:/);
     assert.match(source, /PUBLISH_STORES/);
-    assert.match(source, /refs\/tags\/\$\(\$env:RELEASE_TAG\)/);
+    assert.match(source, /git fetch --force --depth=1 origin "refs\/tags\/\$tag"/);
     assert.match(source, /does not match manifest version/);
     assert.match(source, /filter=all_without_unlisted/);
     assert.match(source, /Expand-Archive/);
