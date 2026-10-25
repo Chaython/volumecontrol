@@ -27,14 +27,41 @@ Media that cannot be boosted (DRM-protected or cross-origin streams) is detected
 
 ### Music-preserving normalization
 
-**Normalization style** in Options offers two modes, independent of the per-site Normalize switch:
+**Normalization style** in Options offers two modes, independent of the per-site Normalize switch. Both analyze the source before the manual slider, target **−16 dBFS RMS** by default, respect the configured maximum automatic boost, and use measured sample-peak headroom to constrain unsafe positive boost. They differ in how quickly they react and how they handle a loud passage followed by a quiet one.
 
-- **Music (new default):** follows section changes with a 350 ms RMS attack for louder sections and a 900 ms release for quieter sections, holds transient peaks for four seconds then releases the measured peak envelope by 1.5 dB/s, and waits roughly 2.5 seconds before permitting automatic positive gain. Gain reduction takes about 1.6 seconds; after warm-up, previously applied attenuation recovers toward unity over about 900 ms, while positive boost still builds gradually over about six seconds. Peak headroom caps positive boost only and cannot independently demand negative gain. Short quiet passages preserve the prior gain; after three seconds of silence, positive automatic boost is discarded while protective attenuation is retained. A new media source/track, seeking within a captured media element, and changes in Normalize state discard the old route history to avoid replaying stale boost after a loudness discontinuity. On seeks, already-applied attenuation is preserved while positive automatic boost is immediately discarded, preventing both sudden amplification and a brief return to full-scale playback. A sudden peak can immediately cancel existing positive auto boost, but peak headroom alone does not force additional negative gain on otherwise unboosted music.
-- **Adaptive (legacy behavior):** fast 100 ms RMS/peak decisions intended for uneven speech and video playback. The configurable Response speed affects this mode; Music has purpose-built, slower time constants.
+| Behavior | **Music (default)** | **Adaptive (legacy)** |
+|---|---|---|
+| Best suited for | Songs, albums, continuous music | Speech, videos, streams, and uneven mixed content |
+| Loudness detector | Smoothed RMS envelope: about **350 ms attack** when a section gets louder and **900 ms release** when it gets quieter | Direct, fast RMS/peak decisions; no separate Music-style RMS envelope |
+| Response setting | Uses purpose-built Music timing; the configurable **Response speed** does not control these Music time constants | **Response speed** controls the reaction; default is about **600 ms** |
+| Increasing positive auto gain | Gradual, about **6 seconds**, after roughly **2.5 seconds** of warm-up | Faster, governed by the configured response |
+| Reducing gain | About **1.6 seconds** for a lower desired target; an unsafe existing positive boost can be shed immediately | Direct target updates with the configured response; no Music-style gradual release |
+| Recovering after a loud section | Once warmed up, recovers from prior attenuation toward unity in about **900 ms** when the quieter section calls for it | Follows the current detector target; does not use the Music-specific recovery behavior |
+| Peak handling | Holds transient peak history for **4 seconds**, then releases the envelope at about **1.5 dB/s**. Peak headroom caps **positive boost only**; it cannot independently force extra negative gain on otherwise unboosted music | Peak headroom is part of the direct target calculation and can request negative gain |
+| Silence / discontinuities | Brief quiet passages retain history; after about **3 seconds** of silence, positive automatic boost is discarded while protective attenuation is retained. Source/track changes, seeks, and Normalize changes reset stale history with protective handling | No equivalent Music-specific warm-up, peak hold, or quiet-section recovery policy |
+| Main trade-off | Smoother musical dynamics and less unnecessary attenuation, but it cannot anticipate a sudden loud section | More immediate leveling, but peak changes can affect the requested gain more directly |
+
+Music mode is designed to avoid carrying the attenuation from a loud section unnecessarily into the next quiet section. Peak headroom is a **limit on positive boost**, not an independent reason to turn down audio that is already at or below unity gain. A sudden peak can immediately cancel positive automatic boost for safety; this does not mean peak history should keep pushing otherwise unboosted music farther down.
 
 **Multiple media players (isolated fallback):** The MAIN-world route already levels separately for each captured media element. The isolated-world compatibility fallback has a single shared input analyser, so it cannot reliably distinguish two playing sources. To prevent one quiet source from automatically amplifying another loud source, it temporarily suspends **automatic positive gain** while two captured elements play, immediately shedding old positive boost and preserving existing attenuation. Manual volume remains active. Per-source normalization resumes with fresh history when only one source is playing; this is a safety fallback, not full isolated per-player loudness processing.
 
-With per-site debug mode enabled, the browser console also emits rate-limited (~100 ms) normalizer diagnostics per route: input RMS, input sample peak, peak envelope, desired gain and applied gain. These records contain level measurements only, not audio samples. Both modes sample pre-slider audio so the manual volume control never causes the automatic controller to compensate for slider adjustments. **Music mode avoids unnecessary compressor attenuation of unboosted audio**: when manual dB and auto gain are both nonpositive, its compressor threshold moves to 0 dBFS. Positive manual or automatic boost restores the configured threshold without disconnecting the audio route. Both remain subject to the existing sample-peak-based boost limits and compressor protection; **neither is LUFS/ReplayGain scanning nor true-peak brick-wall limiting**. Music mode prioritizes preserving within-song dynamics over immediately equalizing every passage. No analysis can reliably anticipate a suddenly loud new section; keep manual +dB boosts conservative.
+### Music-mode comparison test and diagnostics
+
+The normalizer regression suite exercises both the MAIN-world controller in `page-audio-hook.js` and the isolated fallback in `cs.js`. It checks that peak headroom does not independently deepen negative gain in Music mode, that attenuation can recover when the detector enters a quieter section, and that debug diagnostics include the values needed to inspect controller behavior.
+
+For an audio excerpt comparison, the useful side-by-side measurements are sampled at **100 ms intervals**:
+
+| Measurement | What it tells you |
+|---|---|
+| Input RMS (dBFS) | Short-window source loudness before the extension's gain |
+| Input sample peak (dBFS) | Highest observed PCM sample in the current analysis window |
+| Peak envelope (dBFS) | Held/releasing peak history used by Music mode |
+| Desired gain (dB) | Controller's current target before the applied-gain ramp |
+| Applied gain (dB) | Automatic gain actually being applied after smoothing |
+
+With per-site debug mode enabled, the browser console emits rate-limited (~100 ms) `[Volume Control][Normalizer]` records containing route, mode, stage, input RMS, input sample peak, peak envelope, desired gain, and applied gain. These are level measurements only; the extension does not log or store audio samples. When comparing old and revised behavior, use the **same decoded excerpt and same sampling windows** for both controllers. An offline comparison describes the gain controller's response to those samples; it is not a measurement of browser speakers, site-side processing, or perceived loudness.
+
+Both modes sample pre-slider audio so the manual volume control never causes the automatic controller to compensate for slider adjustments. Music mode avoids unnecessary compressor attenuation of unboosted audio: when manual dB and auto gain are both nonpositive, its compressor threshold moves to 0 dBFS. Positive manual or automatic boost restores the configured threshold without disconnecting the audio route. Both remain subject to the existing sample-peak-based boost limits and compressor protection; **neither is LUFS/ReplayGain scanning nor true-peak brick-wall limiting**. Music mode prioritizes preserving within-song dynamics over immediately equalizing every passage. No analysis can reliably anticipate a suddenly loud new section; keep manual +dB boosts conservative.
 
 ### True-peak limiter research (not enabled in playback)
 
