@@ -2753,18 +2753,18 @@ test('CI requires both Chromium and Firefox runtime smoke tests', () => {
     assert.match(firefox, /Firefox smoke passed/);
 });
 
-test('AMO manual publishing is stable-tag bound and duplicate-safe', () => {
-    const source = readFileSync(join(root, '.github/workflows/publish-firefox.yml'), 'utf8');
+test('AMO publishing is stable-tag bound and duplicate-safe', () => {
+    const source = readFileSync(join(root, '.github/workflows/publish.yml'), 'utf8');
     assert.match(source, /release_tag:/);
-    assert.match(source, /publish:/);
-    assert.match(source, /MANUAL_PUBLISH/);
+    assert.match(source, /publish_stores:/);
+    assert.match(source, /PUBLISH_STORES/);
     assert.match(source, /refs\/tags\/\$\(\$env:RELEASE_TAG\)/);
     assert.match(source, /does not match manifest version/);
     assert.match(source, /filter=all_without_unlisted/);
     assert.match(source, /Expand-Archive/);
     assert.match(source, /VC_EXTENSION_DIR: dist\/smoke\/firefox/);
     assert.match(source, /node scripts\/firefox-extension-smoke\.mjs/);
-    assert.match(source, /Validation-only manual run/);
+    assert.match(source, /steps\.meta\.outputs\.publish_stores == 'true'/);
     assert.doesNotMatch(source, /git fetch --force --no-tags --depth=1 origin "\$env:GITHUB_SHA"/);
 });
 
