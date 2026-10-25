@@ -28,7 +28,6 @@ import {
 } from "lucide-react";
 import { BrowserFrame } from "@/components/demo/browser-frame";
 import { SignalChain } from "@/components/demo/signal-chain";
-import { SettingsDialog } from "@/components/demo/settings-dialog";
 import { useExtensionShortcuts } from "@/hooks/use-extension-shortcuts";
 import { useExtensionStore } from "@/lib/volume-control/store";
 import { asset, IS_STATIC_EXPORT } from "@/lib/asset-path";
@@ -96,15 +95,18 @@ function formatCount(n: number): string {
 }
 
 export default function Home() {
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const hydrateRemembered = useExtensionStore((s) => s.hydrateRemembered);
   const hydrateNormalizerConfig = useExtensionStore((s) => s.hydrateNormalizerConfig);
+  const hydrateOptionsState = useExtensionStore((s) => s.hydrateOptionsState);
   const applySiteSettings = useExtensionStore((s) => s.applySiteSettings);
   const stats = useRepoStats();
   useExtensionShortcuts();
 
   useEffect(() => {
     let cancelled = false;
+    // The options-page state (blocklists, debug defaults) is synchronous
+    // localStorage — hydrate it first so applySiteSettings sees it.
+    hydrateOptionsState();
     void (async () => {
       await hydrateNormalizerConfig();
       await hydrateRemembered();
@@ -113,7 +115,7 @@ export default function Home() {
       if (!cancelled) applySiteSettings(useExtensionStore.getState().site.key);
     })();
     return () => { cancelled = true; };
-  }, [hydrateRemembered, hydrateNormalizerConfig, applySiteSettings]);
+  }, [hydrateRemembered, hydrateNormalizerConfig, hydrateOptionsState, applySiteSettings]);
 
   return (
     <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100 selection:bg-emerald-500/30">
@@ -254,7 +256,7 @@ export default function Home() {
             </span>
           </div>
 
-          <BrowserFrame onOpenSettings={() => setSettingsOpen(true)} />
+          <BrowserFrame />
 
           <div className="mt-6">
             <SignalChain />
@@ -456,8 +458,6 @@ export default function Home() {
           </div>
         </div>
       </footer>
-
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }

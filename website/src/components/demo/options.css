@@ -1,0 +1,662 @@
+/* =============================================================
+   Volume Control options page — ported from the extension's
+   options.css (v7.1) with two adaptations for the live preview:
+   1. Scoped under .vc-options instead of html/body (the options
+      page renders inside the mock browser's content area).
+   2. Dark mode via the .vc-options-dark class (driven by the
+      browser mockup's theme toggle) instead of
+      prefers-color-scheme, so the demo can show the extension's
+      real light/dark options designs on demand.
+   Everything else — toggle boxes, danger boxes, lists, keycaps,
+   the normalizer grid, responsive rules — is pixel-identical to
+   the extension.
+   ============================================================= */
+
+.vc-options {
+  font-family: "Segoe UI", Tahoma, sans-serif;
+  padding: 20px;
+  min-width: 450px;
+  color: #333;
+  background: #fff;
+  font-weight: normal;
+  box-sizing: border-box;
+}
+
+.vc-options *,
+.vc-options *::before,
+.vc-options *::after {
+  box-sizing: border-box;
+}
+
+.vc-options h2 {
+  margin-top: 0;
+  border-bottom: 2px solid #eee;
+  padding-bottom: 10px;
+}
+
+.vc-options h3 {
+  margin-top: 25px;
+  margin-bottom: 10px;
+  font-size: 1.1em;
+  color: #444;
+}
+
+.vc-options .row {
+  margin-bottom: 15px;
+}
+
+.vc-options .input-group {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+/* v6.15: inline status line under the blocklist input (DRM-note pattern:
+   small, informative, auto-dismissing — set via the `hidden` attribute). */
+.vc-options .add-status {
+  margin: -4px 0 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #666;
+}
+
+.vc-options input,
+.vc-options button {
+  border: 1px solid #888;
+}
+
+.vc-options input[type="text"],
+.vc-options .vol-input,
+.vc-options .domain-input {
+  flex-grow: 1;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  height: 36px;
+  box-sizing: border-box;
+  background: #fff;
+}
+
+.vc-options .vol-input {
+  width: 84px;
+  min-width: 64px;
+  height: 30px;
+  padding: 2px 10px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  text-align: center;
+  line-height: 1;
+  box-sizing: border-box;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-grow: 0;
+}
+
+.vc-options .domain-input {
+  flex: 1 1 auto;
+  font-weight: 500;
+  font-size: 0.95em;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 6px 10px;
+  height: 36px;
+  border-radius: 4px;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.vc-options .domain-input:focus {
+  outline: none;
+  border-color: #4CAF50;
+  background-color: rgba(76, 175, 80, 0.04);
+}
+
+.vc-options button#addFqdn,
+.vc-options button#addRemembered,
+.vc-options button#addDebugSite {
+  padding: 8px 15px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  height: 36px;
+  box-sizing: border-box;
+}
+
+.vc-options button#addFqdn:hover,
+.vc-options button#addRemembered:hover,
+.vc-options button#addDebugSite:hover {
+  background-color: #45a049;
+}
+
+.vc-options .list-container {
+  border: 1px solid #eee;
+  border-radius: 4px;
+  max-height: 250px;
+  overflow-y: auto;
+  background: #fafafa;
+}
+
+.vc-options .list-entry {
+  padding: 8px 10px;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: #fff;
+}
+
+.vc-options .list-entry:last-child {
+  border-bottom: none;
+}
+
+.vc-options .list-entry:hover {
+  background-color: #f0f7ff;
+}
+
+.vc-options .empty-msg {
+  padding: 15px;
+  color: #999;
+  font-style: italic;
+  text-align: center;
+}
+
+.vc-options .domain-info {
+  flex-grow: 1;
+  font-weight: 500;
+  font-size: 0.95em;
+}
+
+.vc-options .controls-container {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.vc-options .setting-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9em;
+  color: #555;
+  background: #f5f5f5;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #e0e0e0;
+  height: 36px;
+  box-sizing: border-box;
+}
+
+.vc-options .site-debug-group {
+  height: auto;
+  min-height: 36px;
+  flex-wrap: wrap;
+}
+
+.vc-options .site-debug-group.is-inherited {
+  opacity: 0.72;
+}
+
+.vc-options .site-debug-enable {
+  font-weight: 600;
+}
+
+.vc-options .site-debug-option {
+  white-space: nowrap;
+}
+
+.vc-options .site-debug-route {
+  max-width: 150px;
+  padding: 4px 6px;
+}
+
+.vc-options .mono-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.vc-options .mono-label input {
+  margin-right: 5px;
+}
+
+.vc-options .remove-btn {
+  background: transparent;
+  color: #ccc;
+  border: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0;
+}
+
+.vc-options .remove-btn:hover {
+  background: #ffebee;
+  color: #d32f2f;
+}
+
+.vc-options .toggle-box {
+  background: #f0f0f0;
+  padding: 15px;
+  border-radius: 5px;
+  margin-bottom: 20px;
+}
+
+.vc-options label {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  font-weight: bold;
+}
+
+.vc-options input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-right: 10px;
+}
+
+.vc-options .hint {
+  display: block;
+  margin-left: 28px;
+  font-weight: normal;
+  font-size: 0.9em;
+  color: #666;
+  margin-top: 5px;
+}
+
+.vc-options .remembered-hint {
+  margin-bottom: 10px;
+  margin-left: 0;
+}
+
+.vc-options .debug-toggle-box {
+  margin-top: 30px;
+}
+
+.vc-options .debug-success-color {
+  color: green;
+  font-weight: bold;
+}
+
+.vc-options .danger-toggle-box {
+  border: 1px solid #d93025;
+  background: #fff4f4;
+}
+
+.vc-options .danger-warning {
+  color: #b3261e;
+}
+
+.vc-options .footer-box {
+  margin-top: 30px;
+  border-top: 1px solid #eee;
+  padding-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vc-options .footer-links {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.vc-options .footer-link {
+  text-decoration: none;
+  color: #4CAF50;
+  font-weight: 500;
+  font-size: 0.95em;
+  display: flex;
+  align-items: center;
+}
+
+.vc-options .footer-link:hover {
+  text-decoration: underline;
+  color: #45a049;
+}
+
+.vc-options .version-info {
+  font-size: 0.85em;
+  color: #888;
+  margin-top: 5px;
+}
+
+.vc-options .remove-entry {
+  color: red;
+  padding-left: 5px;
+  cursor: pointer;
+}
+
+.vc-options .container {
+  display: block;
+  margin-bottom: 8px;
+}
+
+/* Keyboard Shortcuts section */
+
+.vc-options button#openShortcutsPage {
+  padding: 8px 15px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  height: 36px;
+  box-sizing: border-box;
+}
+
+.vc-options button#openShortcutsPage:hover {
+  background-color: #45a049;
+}
+
+.vc-options .shortcut-entry {
+  padding: 10px;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #fff;
+}
+
+.vc-options .shortcut-entry:last-child {
+  border-bottom: none;
+}
+
+.vc-options .shortcut-entry:hover {
+  background-color: #f0f7ff;
+}
+
+.vc-options .shortcut-name {
+  flex-grow: 1;
+  font-weight: 500;
+  font-size: 0.95em;
+}
+
+.vc-options .shortcut-keys {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.vc-options .keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 2px 6px;
+  background: #fff;
+  border: 1px solid #aaa;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #444;
+  box-shadow: 0 1px 0 #ddd;
+  line-height: 1;
+}
+
+.vc-options .keycap-separator {
+  color: #888;
+  font-weight: bold;
+  font-size: 0.85em;
+  user-select: none;
+}
+
+.vc-options .shortcut-unset {
+  color: #999;
+  font-style: italic;
+  font-size: 0.9em;
+}
+
+/* --- dark mode (extension: @media prefers-color-scheme: dark) ------------- */
+
+.vc-options.vc-options-dark {
+  background: #202124;
+  color: #e8eaed;
+}
+
+.vc-options.vc-options-dark h3 {
+  color: #ccc;
+}
+
+.vc-options.vc-options-dark h2 {
+  border-color: #444;
+}
+
+.vc-options.vc-options-dark input[type="text"],
+.vc-options.vc-options-dark .vol-input {
+  background: #333;
+  color: #fff;
+  border-color: #555;
+}
+
+.vc-options.vc-options-dark .list-container {
+  border-color: #444;
+  background: #292a2d;
+}
+
+.vc-options.vc-options-dark .list-entry {
+  background: #202124;
+  border-color: #444;
+}
+
+.vc-options.vc-options-dark .list-entry:hover {
+  background: #333;
+}
+
+.vc-options.vc-options-dark .toggle-box {
+  background: #333;
+}
+
+.vc-options.vc-options-dark .danger-toggle-box {
+  border-color: #f28b82;
+  background: #3a2525;
+}
+
+.vc-options.vc-options-dark .danger-warning {
+  color: #f28b82;
+}
+
+.vc-options.vc-options-dark .hint {
+  color: #aaa;
+}
+
+.vc-options.vc-options-dark .add-status {
+  color: #aaa;
+}
+
+.vc-options.vc-options-dark .setting-group {
+  background: #333;
+  border-color: #444;
+  color: #ccc;
+}
+
+.vc-options.vc-options-dark .remove-btn:hover {
+  background: #555;
+}
+
+.vc-options.vc-options-dark .footer-box {
+  border-top-color: #444;
+}
+
+.vc-options.vc-options-dark .footer-link {
+  color: #8ab4f8;
+}
+
+.vc-options.vc-options-dark .footer-link:hover {
+  color: #aecbfa;
+}
+
+.vc-options.vc-options-dark .shortcut-entry {
+  background: #202124;
+  border-color: #444;
+}
+
+.vc-options.vc-options-dark .shortcut-entry:hover {
+  background: #333;
+}
+
+.vc-options.vc-options-dark .keycap {
+  background: #333;
+  color: #e8eaed;
+  border-color: #666;
+  box-shadow: 0 1px 0 #000;
+}
+
+.vc-options.vc-options-dark .keycap-separator {
+  color: #888;
+}
+
+.vc-options.vc-options-dark .shortcut-unset {
+  color: #888;
+}
+
+/* Normalizer advanced settings */
+.vc-options .normalizer-setting-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 10px 18px;
+}
+
+.vc-options .normalizer-setting-grid label {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) 82px auto;
+  gap: 8px;
+  align-items: center;
+  font-weight: 600;
+}
+
+.vc-options .normalizer-setting-grid input[type="number"] {
+  width: 82px;
+  box-sizing: border-box;
+  padding: 5px 7px;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  background: #fff;
+  color: #222;
+}
+
+.vc-options .setting-unit {
+  font-size: 0.85em;
+  font-weight: normal;
+  color: #666;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .vc-options .normalizer-setting-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.vc-options.vc-options-dark .normalizer-setting-grid input[type="number"] {
+  background: #333;
+  color: #fff;
+  border-color: #555;
+}
+
+.vc-options.vc-options-dark .setting-unit {
+  color: #aaa;
+}
+
+/* Settings also opens as a full browser tab on Firefox for Android. */
+@media (max-width: 600px), (pointer: coarse) {
+  .vc-options {
+    min-width: 0;
+    max-width: 100%;
+    padding: 12px;
+    overflow-wrap: anywhere;
+  }
+  .vc-options .input-group { flex-wrap: wrap; }
+  .vc-options .input-group > input[type="text"] { flex: 1 1 180px; min-width: 0; }
+  .vc-options .list-entry { align-items: flex-start; }
+  .vc-options .domain-info { min-width: 0; overflow-wrap: anywhere; }
+  .vc-options .controls-container { width: 100%; justify-content: flex-start; }
+  .vc-options .setting-group { max-width: 100%; height: auto; min-height: 40px; flex-wrap: wrap; }
+  .vc-options button, .vc-options input[type="checkbox"], .vc-options select { touch-action: manipulation; }
+  .vc-options button { min-height: 40px; }
+  .vc-options .hint { margin-left: 0; }
+}
+
+/* Normalization defaults to off: keep the settings section collapsed. */
+.vc-options #normalizer-options-details[hidden] { display: none !important; }
+.vc-options .normalizer-master-switch { margin-bottom: 10px; }
+.vc-options .normalizer-master-switch label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
+.vc-options .normalizer-mode-setting {
+  display: grid;
+  gap: 7px;
+}
+.vc-options .normalizer-mode-setting label { font-weight: 600; }
+
+/* Keep settings dropdowns visually consistent and readable in light/dark mode. */
+.vc-options #normalizerMode,
+.vc-options #debugRouteMode {
+  max-width: 100%;
+  min-height: 36px;
+  padding: 6px 30px 6px 10px;
+  font: inherit;
+  color: #333;
+  background-color: #fff;
+  border: 1px solid #888;
+  border-radius: 4px;
+  color-scheme: light;
+}
+
+.vc-options .normalizer-mode-setting select {
+  width: 100%;
+}
+
+.vc-options #normalizerMode option,
+.vc-options #debugRouteMode option {
+  color: #333;
+  background-color: #fff;
+}
+
+.vc-options.vc-options-dark #normalizerMode,
+.vc-options.vc-options-dark #debugRouteMode,
+.vc-options.vc-options-dark .site-debug-route {
+  color: #e8eaed;
+  background-color: #333;
+  border-color: #666;
+  color-scheme: dark;
+}
+
+.vc-options.vc-options-dark #normalizerMode option,
+.vc-options.vc-options-dark #debugRouteMode option,
+.vc-options.vc-options-dark .site-debug-route option {
+  color: #e8eaed;
+  background-color: #333;
+}
+
+/* Custom scrollbar styling for the options lists (demo nicety, matches the
+   extension's compact scrollable lists). */
+.vc-options .list-container::-webkit-scrollbar {
+  width: 8px;
+}
+.vc-options .list-container::-webkit-scrollbar-thumb {
+  background: #c8c8c8;
+  border-radius: 4px;
+}
+.vc-options.vc-options-dark .list-container::-webkit-scrollbar-thumb {
+  background: #555;
+}

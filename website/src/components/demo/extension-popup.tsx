@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useExtensionStore } from "@/lib/volume-control/store";
+import { useExtensionStore, effectiveRestricted } from "@/lib/volume-control/store";
 import { VolumeEngine } from "@/lib/volume-control/engine";
 import {
   MIN_DB,
@@ -43,7 +43,10 @@ export function ExtensionPopup({
   const normalizerEnabled = useExtensionStore((s) => s.normalizerEnabled);
   const extensionActive = useExtensionStore((s) => s.extensionActive);
   const remembered = useExtensionStore((s) => s.remembered[s.site.key]);
-  const restricted = useExtensionStore((s) => Boolean(s.restricted[s.site.key]));
+  // The popup mirrors the ENGINE verdict (cs.js pageRestrictionChanged
+  // semantics), not the raw simulation flag — the debug "Force DRM Audio
+  // Capture" override (global or per-site) lifts the restriction live.
+  const restricted = useExtensionStore((s) => effectiveRestricted(s, s.site.key));
   const setVolume = useExtensionStore((s) => s.setVolume);
   const toggleMute = useExtensionStore((s) => s.toggleMute);
   const toggleMono = useExtensionStore((s) => s.toggleMono);

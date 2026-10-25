@@ -9,6 +9,9 @@ export interface NormalizerConfig {
   maxBoostDb: number;
   ceilingDb: number;
   responseMs: number;
+  /** Options page: "Experimental true-peak limiter" — stored with the config
+   *  (shared.js DEFAULT_NORMALIZER_CONFIG.experimentalTruePeak, default off). */
+  experimentalTruePeak?: boolean;
 }
 
 export interface ExtensionState {

@@ -63,6 +63,7 @@ export function normalizeNormalizerConfig(value: Partial<NormalizerConfig> | nul
     maxBoostDb: Math.max(0, Math.min(24, numberOr(input.maxBoostDb, DEFAULT_NORMALIZER_CONFIG.maxBoostDb))),
     ceilingDb: Math.max(-6, Math.min(-0.1, numberOr(input.ceilingDb, DEFAULT_NORMALIZER_CONFIG.ceilingDb))),
     responseMs: Math.max(100, Math.min(3000, Math.round(numberOr(input.responseMs, DEFAULT_NORMALIZER_CONFIG.responseMs)))),
+    experimentalTruePeak: Boolean(input.experimentalTruePeak),
   };
 }
 

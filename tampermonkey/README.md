@@ -12,7 +12,9 @@ way the extension does; only the surrounding machinery is replaced:
 | browser-action popup | floating popup (same ported `popup.css`, Shadow DOM) |
 | toolbar badge + icon | badge on the floating button |
 | browser commands | `Alt+Shift+…` page keybindings |
-| options page | Tampermonkey menu commands |
+| options page (normalizer settings) | the in-popup **Advanced options** view (Settings button) |
+| options page (Blocked/Allowed Sites + Whitelist Mode) | **Site access** section in the Advanced view (`vc-lists` in GM storage) |
+| options page (debug defaults + per-site debug overrides) | **Debug overrides** section in the Advanced view |
 
 ## Install
 
@@ -40,7 +42,32 @@ Userscripts cannot add toolbar icons, so the GUI is a floating one:
   badge semantics from `background.js`),
 - the **full extension popup** (identical markup and `popup.css` port) opening
   above the button: slider, mute, Normalize + live peak meter/gain, Mono,
-  Remember, Active, dark mode.
+  Remember, Active, dark mode,
+- an **Advanced options** view behind the popup's Settings button: the
+  extension's normalizer configuration (style, target loudness, max auto
+  boost, compressor threshold, response speed, experimental true-peak —
+  verbatim `options.html` labels/ranges), a live engine status line, a link to
+  the website, and **Reset all data** (wipes every site's remembered settings
+  via `GM_listValues`; the first-run intro returns after a reset),
+- **Site access** (the options page's whitelist/blacklist): Blacklist mode
+  skips listed sites entirely (native volume only); Whitelist mode runs only
+  on listed sites. Entries match subdomains, the add-field normalizes input
+  (scheme/credentials/port/`www.` stripped, path kept), the popup's **Active**
+  toggle edits the same list for the current site, and the exclusion message
+  tells you exactly which list is blocking. A one-time migration turns the
+  pre-7.1.4 per-site "Active off" flag into a blocklist entry. A
+  **Site access lists (block/allow)** entry in the Tampermonkey menu opens the
+  section directly,
+- **Debug overrides** (the options page's debug section): **Show Debug
+  Highlight** (green outline around hooked `<video>` elements — same rule as
+  the extension), **Force DRM Audio Capture** and **Skip CORS Media Guard**
+  (danger toggles with verbatim warnings), the **HTML media route** override
+  (Auto / WebAudio / native), and a **per-site override** for the current
+  host — all applied live to the engine via the bridge and persisted
+  independently (`vc-debug-defaults`, `vc-debug:<host>`),
+- **fullscreen survival**: when a page enters fullscreen (the YouTube player,
+  any site), the button and popup move into the fullscreen element so they
+  stay usable while watching, and return to the page when fullscreen exits.
 
 On its **first run after install or update** the popup opens itself once and
   the button pulses, so the GUI is impossible to miss.
