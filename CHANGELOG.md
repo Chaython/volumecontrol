@@ -1,6 +1,6 @@
 # Changelog
 
-## Post-V6.23 — Music normalizer section-response fix (unreleased)
+## V7.0 — Music normalizer and audio-engine refinements (October 2026)
 
 - Changed Music-mode RMS tracking from multi-second lag to a 350 ms attack for louder sections and a 900 ms release for quieter sections, while keeping positive automatic boost gradual.
 - Made the peak-headroom rule explicitly limit positive boost only; the peak envelope cannot independently request negative gain.
@@ -8,7 +8,7 @@
 - Added per-route, debug-mode diagnostics at approximately 100 ms intervals for input RMS, input sample peak, peak envelope, desired gain, and applied gain in both the MAIN-world and isolated fallback controllers.
 - Added regression coverage for peak independence, quiet-section recovery, diagnostic fields, and preserving attenuation during warm-up and silence.
 
-This changelog summarizes the changes from **V6.16 through V6.23**. Individual commits provide implementation detail.
+This changelog summarizes the V7.0 release and the changes from **V6.16 through V6.23**. Individual commits provide implementation detail.
 
 ## V6.16–V6.23 — Changes through October 2026
 
