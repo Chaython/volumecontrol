@@ -81,9 +81,20 @@ For an audio excerpt comparison, the useful side-by-side measurements are sample
 
 With per-site debug mode enabled, the browser console emits rate-limited (~100 ms) `[Volume Control][Normalizer]` records containing route, mode, stage, input RMS, input sample peak, peak envelope, desired gain, and applied gain. These are level measurements only; the extension does not log or store audio samples. When comparing old and revised behavior, use the **same decoded excerpt and same sampling windows** for both controllers. An offline comparison describes the gain controller's response to those samples; it is not a measurement of browser speakers, site-side processing, or perceived loudness.
 
-Both modes sample pre-slider audio so the manual volume control never causes the automatic controller to compensate for slider adjustments. Music mode avoids unnecessary compressor attenuation of unboosted audio: when manual dB and auto gain are both nonpositive, its compressor threshold moves to 0 dBFS. Positive manual or automatic boost restores the configured threshold without disconnecting the audio route. Both remain subject to the existing sample-peak-based boost limits and compressor protection; **neither is LUFS/ReplayGain scanning nor true-peak brick-wall limiting**. Music mode prioritizes preserving within-song dynamics over immediately equalizing every passage. No analysis can reliably anticipate a suddenly loud new section; keep manual +dB boosts conservative.
+<details>
+<summary>🛡️ Additional normalization behavior and safety notes</summary>
 
-<details>\n<summary>🔬 True-peak limiter research (offline prototype; not active in normal playback)</summary>\n\n### True-peak limiter research (not enabled in playback)
+- Both modes analyze audio before the manual slider, so changing manual volume does not make the controller compensate.
+- When manual gain and automatic gain are both nonpositive, Music mode moves its compressor threshold to 0 dBFS to avoid unnecessary compression of unboosted audio. Positive boost restores the configured threshold without disconnecting the route.
+- Normalization uses RMS and sample peaks; it is not LUFS/ReplayGain scanning or a guaranteed true-peak brick-wall limiter.
+- Music mode favors preserving within-song dynamics over instantly equalizing every passage. It cannot predict a sudden loud section, so use manual positive gain conservatively.
+
+</details>
+
+<details>
+<summary>🔬 Offline true-peak research (not active in normal playback)</summary>
+
+
 
 `scripts/audio-peak-lab.mjs` implements an **offline 4× windowed-sinc FIR inter-sample peak estimate** for PCM fixtures. It reads each channel separately, rather than using a stereo mono-downmix, and tests signals whose PCM sample peaks are below full-scale while reconstructed peaks exceed it. This test utility is **not** a certified BS.1770 true-peak meter and is **not** connected to the live audio graph; it adds no worklet dependencies, CSP requirements, or playback latency. A production limiter needs verified per-channel real-time oversampling, lookahead, attack/release handling, continuous audio blocks, format/sample-rate coverage, and safe routing transitions. This diagnostic does not make boosted playback clip-free.
 
@@ -91,7 +102,12 @@ A **prototype** `scripts/true-peak-lookahead.mjs` now implements continuous ster
 
 The Chromium functional smoke harness also loads the candidate via a **same-origin OfflineAudioContext AudioWorklet module** and checks real audio output, channel balance and attenuation. This verifies worklet execution in that browser, not cross-origin extension module loading. The DSP still needs harsher audio fixtures, CPU/runtime-budget testing, extension-origin module-loading/CSP verification, channel-layout handling, latency alignment and fail-safe route recovery before live use. **It is not connected to playback and does not limit music in the extension.**
 
-### Experimental isolated true-peak playback (opt-in)
+</details>
+
+<details>
+<summary>🧪 Experimental true-peak playback (isolated fallback only)</summary>
+
+
 
 Options → Normalize → **Experimental true-peak limiter (isolated fallback only)** is **off by default**. On an isolated compatibility WebAudio route, after positive manual boost or Normalize activates the protection path, the extension attempts to load its own packaged `true-peak-worklet.js` module into that AudioContext. Until it loads, the existing compressor continues to protect the output. Once loaded, a 4× FIR lookahead AudioWorklet replaces the compressor on that isolated route only, adding approximately 5 ms of delay and a 0.75 dB internal safety margin below the configured ceiling.
 
@@ -101,7 +117,12 @@ If the module fails to load/connect or the processor reports an error, the captu
 
 When Normalize's live meter is active, the popup warns when the *measured post-compressor sample peak* is within 0.3 dB of full-scale. The popup also shows a separate caution whenever the manual slider is set to +6 dB or above, even when Normalize is off (this is a boost warning, not a detected clipping event). This is a warning, not a true-peak reading or automatic gain clamp. The thin −1 dBFS marker is a fixed visual **reference**, not the configured compressor threshold or a guaranteed ceiling. In Options, “Compressor threshold” replaces the misleading “Limiter ceiling” label without changing saved settings.
 
-### Signal flow
+</details>
+
+<details>
+<summary>🔀 Audio signal flow and gain stages</summary>
+
+
 
 For supported WebAudio routes the MAIN-world page/MediaElement graph and ISOLATED-world fallback follow this signal chain:
 
@@ -124,11 +145,18 @@ Output analyser (post-compressor sampled peak) → speakers
 - **Compressor and peaks:** the WebAudio `DynamicsCompressorNode` processes audio when Normalize is on or manual boost is positive. With Normalize off and no positive boost, the output bypasses it where possible. The default **Limiter ceiling** field sets a **−1 dBFS compressor threshold**, **not** a guaranteed hard ceiling: this is **not** a look-ahead brick-wall true-peak limiter. Sudden attacks, inter-sample peaks, compressor latency, and large manual boosts can still clip or sound distorted.
 - **Output meter and lifecycle:** the live meter displays sampled post-processor **sample peaks** in dBFS, **not** true peaks, LUFS or integrated perceived loudness. The Gain number describes *automatic* gain, not the manual slider value. Normalize enable/disable and reused-media source boundaries clear prior automatic gain; the 100 ms sampling timers stop when Normalize is off. The isolated-world 100 ms sampler also pauses during known DRM/CORS or forced-native fallback **and while its AudioContext is suspended for paused media**. It resumes when compatible playback restarts; an expired iframe restriction can also release the pause automatically.
 
-### Unsupported media and practical limits
+</details>
+
+<details>
+<summary>⚠️ Unsupported media and practical limits</summary>
+
+
 
 DRM-restricted streams on Chromium, cross-origin media without suitable CORS permission, and **Force native** mode cannot use WebAudio normalization; native attenuation/mute still works. A site can have its own audio processing, and some pages combine multiple players in one graph. The input analyser cannot predict sound that has not arrived yet, so sudden loud transients can still be heard before the compressor fully reacts. **Start at a low volume**, especially if you select the +24 dB maximum auto boost; reduce manual boost or disable Normalize if you hear level jumps, pumping, or distortion.
 
-</details>\n\n## 🛡️ Restricted Media (DRM & Cross-Origin)
+</details>
+
+## 🛡️ Restricted Media (DRM & Cross-Origin)
 
 Some media cannot be routed through WebAudio, and whether that applies depends on **both** the media and the browser engine:
 
@@ -149,7 +177,10 @@ Some media cannot be routed through WebAudio, and whether that applies depends o
 - Mono mixing is unavailable on such media.
 - **Force native fallback** (the debug routing override) also caps the displayed/applied volume at **0 dB**, even before playback starts, because native HTML media controls cannot boost. Your higher requested volume remains saved separately, and the normal range returns when WebAudio routing is available again; Mono and Normalize remain disabled while forced native is selected.
 
-<details>\n<summary>🧩 How DRM and cross-origin detection works</summary>\n\n**How detection works**
+<details>
+<summary>🧩 How DRM and cross-origin detection works</summary>
+
+**How detection works**
 
 - Per-element signals (v6.13 — the "restricted" verdict requires **per-element DRM evidence**): an `encrypted` event fired, a `setMediaKeys` call (wrapped), or `element.mediaKeys` set. A page that merely PROBES DRM capability never trips the verdict — app.plex.tv probes all three key systems at startup (verified in its production bundle) while playing clear direct-play content, and since v6.9 that probing alone had wrongly clamped boost to 0 dB on every engine (issue #70).
 - **Pending EME gate — decryption proof** (v6.14): on EME-probed pages, `blob:` (MSE) sources without per-element evidence are not routed until the element's `currentTime` actually **advances** — proof that the content is decodable, i.e. clear (EME content cannot decode a single frame without MediaKeys attached, and every attachment path is visible: patched `setMediaKeys`/`webkitSetMediaKeys`, `element.mediaKeys`, the `encrypted` event). Progress is observed at `timeupdate` cadence (~4 Hz in Chromium, 15–250 ms per spec) plus a 1 s sweep backup, so clear content routes within **~a quarter second of playback** (Plex — v6.13 waited a blind 3-second window; a mid-session boost while already playing also routes at the next timeupdate). DRM-stalled media (playback blocked on a license, `currentTime` frozen) never proves anything and is never routed — the udio.com birth-window safety is preserved by physics rather than by a timer. When the page actually constructs MediaKeys, earned proof is reset (keys are imminent — the `createMediaKeys` patch), and a source change (`emptied`) re-earns proof for the new source. On Gecko, Netflix routes immediately once keys attach.
@@ -160,11 +191,16 @@ Some media cannot be routed through WebAudio, and whether that applies depends o
 - Cross-frame restriction reports use extension messaging rather than page `postMessage`, so page scripts cannot forge another frame's DRM/CORS report. The MAIN↔ISOLATED page bridge also carries a per-document capability token to reject accidental or stale bridge traffic; because MAIN-world code shares the page's JavaScript realm, this token is a compatibility guard rather than a security boundary against hostile page code.
 - Engine detection (v6.13): the UA string is checked **FIRST** — a UA containing `Firefox/` identifies Gecko (DRM media is routable, and routed only after `setMediaKeys()` succeeds) — with `navigator.userAgentData` identifying Chromium-family browsers (protected-audio guard stays) checked second. The order matters: a future Firefox that grows a `userAgentData` shim must still classify as Gecko (issue #68). Unknown or privacy-stripped UAs keep the conservative guard.
 
+</details>
+
+<details>
+<summary>🧪 Browser verification details and test artifacts</summary>
+
 **Verification:** the restriction pipeline was live-tested against real Widevine playback on udio.com and against a real cross-origin CDN audio source replicating detached-player sites (treblo.com pattern), plus a ClearKey EME harness — restricted media is never routed, the verdict is stable, and fallback attenuation is exact. The engine split was confirmed empirically: on Chromium, routing an element with MediaKeys produces graph silence even for clear audio (measured 0.00 RMS through the route vs 3.53 RMS for the same route on a non-DRM element). The Firefox side was additionally verified **live on a real Firefox 155.0.1** (headless, driven via WebDriver with a locally installed real Widevine 4.10.3112.0 CDM): a genuine `com.widevine.alpha` key system access grant, MediaKeys attached to an MSE-backed element, and the element routed by the hook with **audible output measured through the WebAudio destination (2.13 RMS at +20 dB, gain exactly 10.0) — vs 0.00 RMS for the identical keys-attached setup on Chromium**. Same-origin boost, WebAudio graph insertion (exact gain math), and cross-origin refusal were all re-verified in the same Firefox run, and a Widevine-disabled Chromium run (Brave-style) confirmed clear-media boost is unaffected while a granted CDM still engages the guard. **PlayReady parity** was verified twice: deterministically (harness scenario v13 — the exact key system string `com.microsoft.playready.recommendation.3000` flags the page and element identically to Widevine on both engines: Firefox routes + boosts + unrestricted verdict; Chromium/Edge restricted + never routed; a rejected probe never flags the page), and **live on real Firefox** (`mode=firefox-playready`: the genuine native probe rejects with `NotSupportedError` *without* setting the page-EME flag; a PlayReady-shaped grant resolving through the hook's wrapper flags the page, the element gets the sticky restricted flag, and it is still routed with route gain exactly 10.0 and **audible output — 3.54 RMS, identical to the same run's clear-media control**). Since v6.12.1 the **packaged extension itself has also been install-verified on real Firefox 155** (temporary add-on via WebDriver — the v6.12 manifest was rejected at install time before the dual-key background fix): both content-script worlds run, engine detection returns Gecko, and a driven +20 dB boost routed a real element with route gain exactly 10.0. Harness: `analysis/harness/firefox-live.mjs` + `analysis/harness/firefox-playready-live.mjs` + `analysis/harness/firefox-addon-load.mjs` (+ `vc-test.html?engine-test=1`), results in `analysis/harness/firefox-live-result.json`, `analysis/harness/firefox-playready-result.json`, `analysis/harness/firefox-addon-fixed.stderr.log`, and `brave-sim-result.json`.
 
-## Known Limitations
+</details>
 
-- **Release builds must be produced with the fixed pipeline** — see the new **Release Builds** section below. Releases built with the pre-6.16 `build.ps1` from v6.13–v6.15 sources ship a `shared.js` SyntaxError and are completely inert.
+## ⚠️ Known Limitations
 
 - Volume Control cannot run on browser system pages such as `chrome://`, `edge://`, `about:`, extension pages, or other protected browser UI.
 - DRM-protected media on **Chromium browsers** (Chrome/Edge/Brave/Opera/Vivaldi) can only use the native volume fallback: lowering and mute work; boosting and mono do not (the browser silences WebAudio for protected audio). If Widevine is disabled on such a browser (Brave's default), DRM sites simply won't play anything — non-DRM audio is unaffected and boosts identically. On **Firefox**, DRM media is fully boostable since v6.12. See [Restricted Media](#restricted-media-drm--cross-origin).
@@ -508,12 +544,10 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 
 ---
 
-Planned features: Added to Chrome Web Store. [Looking for donations, to buy chrome store developer license](https://github.com/sponsors/Chaython)
-
 <details>
-<summary>📁 File descriptions and architecture</summary>
+<summary>📁 Complete file reference</summary>
 
-### Complete File Reference
+
 
 | File | World / Context | Has `window`? | Has `chrome.*`? | Can Patch Page JS? | Purpose | Why It Must Be Separate |
 |---|---|---|---|---|---|---|
@@ -529,7 +563,12 @@ Planned features: Added to Chrome Web Store. [Looking for donations, to buy chro
 | `options.html` | Options document | ✅ | — | ❌ | Options markup — whitelist mode toggle, blocklist editor, remembered-sites editor, debug mode toggle | Required entry point for `options_ui.open_in_tab` |
 | `ico.svg` | Extension icon | — | — | — | Toolbar icon (96×96 SVG) | Referenced by `manifest.json` `icons` and `action.default_icon` |
 
-### The MAIN / ISOLATED World Wall
+</details>
+
+<details>
+<summary>🌐 MAIN vs. ISOLATED worlds — why the split matters</summary>
+
+
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -561,7 +600,12 @@ Planned features: Added to Chrome Web Store. [Looking for donations, to buy chro
 
 **This split is non-negotiable.** Chrome's MV3 security model strips `chrome.*` from MAIN world scripts, and ISOLATED world scripts can't modify page prototypes. The two scripts communicate via `window.postMessage` — the only bridge between worlds.
 
-### Why `shared.js` Is Special
+</details>
+
+<details>
+<summary>🧩 Why `shared.js` is shared across contexts</summary>
+
+
 
 `shared.js` is **not a context** — it's a library loaded *into* multiple contexts:
 
@@ -580,18 +624,21 @@ Planned features: Added to Chrome Web Store. [Looking for donations, to buy chro
 
 It guards all `chrome.*` calls with optional chaining (`if (!browserApi?.storage) return ...`) so it doesn't crash when loaded in MAIN world where `browser`/`chrome` are undefined.
 
-### Minimum File Count
+</details>
+
+<details>
+<summary>📐 Execution contexts and file boundaries</summary>
+
+
 
 **5 execution contexts → 5 files** (background, page-audio-hook, cs, popup, options)
 **1 shared library → shared.js** (loaded by 4 of the 5 contexts)
 
 This is the minimum possible file count given the WebExtension API's security constraints.
 
-</details>
 
-***
 
-## 🧰 Build packages
+## 🧰 Build and release packages
 
 Install the pinned build tools and run the regression suite before packaging:
 
@@ -621,29 +668,25 @@ If the secrets are absent, the workflow still verifies the release build but ski
 
 ***
 
-<details>
-<summary><h2>Usage statistics</h2></summary>
-Firefox:
-<img width="1088" height="1280" alt="image" src="https://github.com/user-attachments/assets/fc489b2d-ae2c-40c6-8e25-9fe37bda8d16" />
-Edge:
-<img width="1566" height="1029" alt="image" src="https://github.com/user-attachments/assets/5257e49b-eb1e-49c9-95e9-4664a5dff7ca" />
-</details>
-
-***
-
 Other Useful Extensions: 
 https://github.com/Chaython/TogglePIP (Allow a site to run PIP consistently with an [Left Alt]+[P] toggle.)
 https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colors, search providers....)
 
 ***
 
-### 🔧 Source changes & audio-context ownership (October 2026)
+<details>
+<summary>🔧 Audio-context ownership and DRM source transitions</summary>
 
-A reused media element's DRM marker is discarded only when a different, nonempty media source is observed **and no EME MediaKeys remain attached**. Attached keys, unreadable DRM state, and source-less transitions retain the conservative capture guard; this avoids irreversible silence on protected Chromium content. Page-created AudioContexts are never suspended by Volume Control merely because tracked output connections disappear; only its own idle media AudioContext is suspended to release the audio device.
+A reused media element's DRM marker is discarded only when a different, nonempty media source is observed **and no EME MediaKeys remain attached**. Attached keys, unreadable DRM state, and source-less transitions retain the conservative capture guard. Page-created AudioContexts are never suspended merely because tracked output connections disappear; only the extension's own idle media AudioContext is suspended to release the audio device.
 
-### ✅ CI coverage & release checks (October 2026)
+</details>
 
-The streaming-site workflow requires four decoded-media checks to pass before reporting success: downloaded MP3, downloaded MP4, simultaneous MP3+MP4 (including a finite normalization peak), and a reused-element MP4 playlist transition. Public websites, including YouTube, remain separately reported as **inconclusive** when headless playback is blocked; a successful navigation is not evidence that audible output was verified. Each run publishes a GitHub Actions step summary. The daily prerelease job now installs and exercises both packaged extensions before publishing, and streaming checks also run on packaging, manifest, and popup/options UI changes. Superseded non-master CI runs are cancelled.
+<details>
+<summary>✅ CI coverage and release checks</summary>
+
+The streaming-site workflow requires four decoded-media checks to pass before reporting success: downloaded MP3, downloaded MP4, simultaneous MP3+MP4 (including a finite normalization peak), and a reused-element MP4 playlist transition. Public websites, including YouTube, remain separately reported as **inconclusive** when headless playback is blocked; a successful navigation is not evidence that audible output was verified. Each run publishes a GitHub Actions step summary. The daily prerelease job installs and exercises both packaged extensions before publishing, and streaming checks also run on packaging, manifest, and popup/options UI changes.
+
+</details>
 
 <!-- chaython-funding:start -->
 ## Support development
