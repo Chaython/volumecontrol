@@ -37,11 +37,25 @@ jobs:
         run: |
           node --input-type=module -e "import fs from 'node:fs'; const d=JSON.parse(fs.readFileSync('docs/stats.json','utf8')); if(d.schemaVersion!==1 || !d.generatedAt || !d.firefox || !d.github || !d.chrome) process.exit(1);"
           test -s docs/stats.svg
+      - name: Bust GitHub's cached README image
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const stats = JSON.parse(fs.readFileSync('docs/stats.json', 'utf8'));
+          const version = Date.parse(stats.generatedAt);
+          if (!Number.isFinite(version)) throw new Error('Invalid stats generatedAt timestamp');
+          const readme = fs.readFileSync('README.md', 'utf8');
+          const updated = readme.replace(/docs\\/stats\\.svg(?:\\?v=[^)]*)?/g, `docs/stats.svg?v=${version}`);
+          if (updated === readme && !readme.includes(`docs/stats.svg?v=${version}`)) {
+            throw new Error('README stats image reference was not found');
+          }
+          fs.writeFileSync('README.md', updated);
+          NODE
       - name: Commit refreshed statistics
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/stats.json docs/stats.svg
+          git add docs/stats.json docs/stats.svg README.md
           if git diff --cached --quiet; then
             echo "Statistics have not changed; no commit needed."
             exit 0
