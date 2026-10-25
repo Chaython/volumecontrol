@@ -1,0 +1,50 @@
+name: Update usage statistics
+
+on:
+  schedule:
+    - cron: "23 8 * * *"
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "scripts/update-stats.mjs"
+      - ".github/workflows/stats.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: usage-statistics
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: true
+      - name: Collect public and authorized statistics
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TRAFFIC_TOKEN: ${{ secrets.GH_TRAFFIC_TOKEN }}
+          AMO_ADDON_SLUG: volume-control-boost-volume
+        run: node scripts/update-stats.mjs
+      - name: Validate generated data
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; const d=JSON.parse(fs.readFileSync('docs/stats.json','utf8')); if(d.schemaVersion!==1 || !d.generatedAt || !d.firefox || !d.github || !d.chrome) process.exit(1);"
+          test -s docs/stats.svg
+      - name: Commit refreshed statistics
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/stats.json docs/stats.svg
+          if git diff --cached --quiet; then
+            echo "Statistics have not changed; no commit needed."
+            exit 0
+          fi
+          git commit -m "Update published usage statistics"
+          git push
