@@ -65,6 +65,44 @@ bun run build:static   # static export into out/ (what CI deploys)
 npx serve out          # preview the exported build locally
 ```
 
+## Tampermonkey edition (userscript)
+
+`https://chaython.github.io/volumecontrol/tampermonkey/volume-control.user.js`
+
+A userscript build that embeds the extension's **real** `page-audio-hook.js`
+engine verbatim and drives it with a faithful controller + floating popup
+(same bridge protocol, same popup.css, GM storage for per-site settings).
+
+**Canonical home: the `tampermonkey/` folder at the repository root** (sibling
+of `website/`), containing `userscript-template.js`, the committed build
+artifact `volume-control.user.js`, and its own README. The builder lives at
+`scripts/build-userscript.mjs` in the repo's `scripts/` folder.
+
+- **Built automatically (website)**: `deploy-website.yml` runs
+  `node scripts/build-userscript.mjs` (repo root) before every deploy. It
+  reads `page-audio-hook.js` + `manifest.json` from the repo root, the ported
+  `website/src/components/demo/popup.css` and
+  `tampermonkey/userscript-template.js`, and regenerates
+  `tampermonkey/volume-control.user.js` **and**
+  `website/public/tampermonkey/volume-control.user.js`. Pushing a change to
+  `page-audio-hook.js`, `popup.css`, `manifest.json`, or anything under
+  `tampermonkey/` redeploys the site *and* ships an updated userscript —
+  Tampermonkey auto-updates installed copies via `@updateURL`.
+- **Built automatically (releases)**: `publish.yml` also runs the builder,
+  validates the result (`@version` matches the manifest, engine embedded,
+  placeholders substituted), attaches it to every GitHub release as
+  `volume-control.user.js`, then its `userscript_sync` job rebuilds from the
+  default branch and auto-commits the artifact back so the root folder never
+  goes stale.
+- Raw fallback URL (always the last synced version):
+  `https://raw.githubusercontent.com/Chaython/volumecontrol/master/tampermonkey/volume-control.user.js`
+- The homepage's install section links to it (green "Install userscript"
+  button — Tampermonkey intercepts the `.user.js` navigation) plus the repo
+  folder and release pages.
+- `public/tampermonkey/test-harness.html` loads the userscript with GM
+  shims + a demo `<audio>` so you can verify the full stack in any browser
+  without Tampermonkey installed.
+
 ## Statistics dashboard (docs/ → /stats.html)
 
 The repo's usage-statistics dashboard lives in `docs/` and is kept fresh by

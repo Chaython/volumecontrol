@@ -8,6 +8,9 @@ on:
       - ".github/workflows/deploy-website.yml"
       - "docs/**"
       - "popup.css"
+      - "page-audio-hook.js"
+      - "manifest.json"
+      - "tampermonkey/**"
   workflow_dispatch:
 
 permissions:
@@ -42,6 +45,20 @@ jobs:
           cp -f popup.css website/public/
           sed -i 's|\.\./popup\.css|popup.css|g' website/public/preview.html
 
+      - name: Build Tampermonkey userscript
+        run: |
+          if [ -f scripts/build-userscript.mjs ] && [ -f page-audio-hook.js ]; then
+            node scripts/build-userscript.mjs
+          elif [ -f tampermonkey/volume-control.user.js ]; then
+            mkdir -p website/public/tampermonkey
+            cp tampermonkey/volume-control.user.js website/public/tampermonkey/
+            echo "[userscript] used committed root artifact"
+          fi
+          test -f website/public/tampermonkey/volume-control.user.js || {
+            echo "::error::website/public/tampermonkey/volume-control.user.js missing (need scripts/build-userscript.mjs + page-audio-hook.js, a committed tampermonkey/ folder, or the file inside website/public/tampermonkey/)"
+            exit 1
+          }
+
       - name: Install dependencies
         working-directory: website
         run: bun install --frozen-lockfile
@@ -59,6 +76,7 @@ jobs:
         run: |
           test -f out/index.html || { echo "::error::Static export did not produce out/index.html"; exit 1; }
           test -f out/stats.html || { echo "::error::Stats dashboard missing from export"; exit 1; }
+          test -f out/tampermonkey/volume-control.user.js || { echo "::error::Tampermonkey userscript missing from export"; exit 1; }
           touch out/.nojekyll
 
       - name: Upload Pages artifact

@@ -24,6 +24,7 @@ import {
   Download,
   Heart,
   BarChart3,
+  Puzzle,
 } from "lucide-react";
 import { BrowserFrame } from "@/components/demo/browser-frame";
 import { SignalChain } from "@/components/demo/signal-chain";
@@ -349,6 +350,59 @@ export default function Home() {
               <Github className="w-4 h-4" />
               GitHub
             </a>
+          </div>
+        </div>
+
+        {/* ------------------------------------------- tampermonkey edition --- */}
+        <div className="mt-8 max-w-3xl mx-auto rounded-2xl border border-emerald-900/60 bg-emerald-950/30 p-6 sm:p-7 text-left">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="grid place-items-center w-9 h-9 rounded-xl bg-emerald-600/20 border border-emerald-700/50">
+              <Puzzle className="w-5 h-5 text-emerald-400" />
+            </span>
+            <h3 className="text-lg font-bold text-zinc-100">
+              No browser store? Try the Tampermonkey edition
+            </h3>
+          </div>
+          <p className="mt-3 text-sm text-zinc-400 leading-relaxed">
+            The same engine, as a userscript. It embeds the extension&apos;s actual{" "}
+            <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 text-xs">page-audio-hook.js</code>{" "}
+            verbatim and runs it on any site — per-site Remember, the music normalizer, mono
+            down-mix, the safety limiter and the real popup design, driven from a floating
+            button with a live badge. Hotkeys match the add-on:
+            <span className="text-zinc-300"> Alt+Shift+↑/↓</span> volume,{" "}
+            <span className="text-zinc-300">Alt+Shift+0</span> reset,{" "}
+            <span className="text-zinc-300">Alt+Shift+M</span> mono,{" "}
+            <span className="text-zinc-300">Alt+Shift+U</span> mute,{" "}
+            <span className="text-zinc-300">Alt+Shift+P</span> popup.
+          </p>
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <a
+              href={asset("/tampermonkey/volume-control.user.js")}
+              target="_blank"
+              rel="noreferrer"
+              title="Opens the Tampermonkey install prompt"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              Install userscript
+            </a>
+            <a
+              href={asset("/tampermonkey/volume-control.user.js")}
+              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors underline underline-offset-2"
+            >
+              view source
+            </a>
+            <a
+              href="https://github.com/Chaython/volumecontrol/tree/master/tampermonkey"
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors underline underline-offset-2"
+            >
+              repo folder
+            </a>
+            <span className="text-xs text-zinc-500">
+              requires Tampermonkey · auto-updates from this site · also attached to every GitHub release
+            </span>
           </div>
         </div>
       </section>

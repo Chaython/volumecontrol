@@ -204,7 +204,11 @@ try {
     $version = $baseManifest.version
 
     # Validate build tools before removing an existing release.
-    $nodeCommand = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+    # Select-Object -First 1 guards against runner images that expose several
+    # Node.js entries in PATH (Get-Command then returns an array whose .Source
+    # joins all paths with spaces and breaks invocation).
+    $nodeCommand = Get-Command node -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
     if (-not $nodeCommand) {
         throw "Node.js is required for release asset minification. Install Node.js and run npm ci in the repository root."
     }

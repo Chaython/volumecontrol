@@ -1849,7 +1849,7 @@ test('experimental true-peak is off by default and runs only after explicit opt-
     assert.equal(shared.normalizeNormalizerConfig({ experimentalTruePeak: true }).experimentalTruePeak, true);
     const options = readFileSync(join(root, 'options.html'), 'utf8');
     assert.match(options, /id="normalizerTruePeakExperimental"/);
-    assert.match(options, /isolated fallback only/);
+    assert.match(options, /opt-in; isolated fallback route/);
     const src = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
     assert.doesNotMatch(src, /new AudioWorkletNode\(/, 'MAIN routes must keep compressor behavior');
 });

@@ -138,6 +138,20 @@ jobs:
           VC_EXTENSION_DIR: dist/smoke/firefox
         run: node scripts/firefox-extension-smoke.mjs
 
+      - name: Build Tampermonkey userscript
+        run: node scripts/build-userscript.mjs
+
+      - name: Validate and stage Tampermonkey userscript
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ steps.meta.outputs.version }}"
+          $text = Get-Content -Raw -LiteralPath tampermonkey/volume-control.user.js
+          if ($text -notmatch (("(?m)^//\s*@version\s+" + [regex]::Escape($version)) + "\s*$")) { throw "Userscript @version does not match manifest v$version." }
+          if ($text -match "__ENGINE_SOURCE__|__POPUP_CSS__|__VERSION__") { throw "Userscript contains unsubstituted placeholders." }
+          if (-not $text.Contains("__volumeControlPageAudioHook")) { throw "Userscript does not embed the page-audio-hook engine." }
+          Copy-Item -LiteralPath tampermonkey/volume-control.user.js -Destination dist/volume-control.user.js
+
       - name: Create source archive and SHA-256 checksums
         shell: pwsh
         run: |
@@ -164,6 +178,7 @@ jobs:
             dist/source-v*.zip
             dist/SHA256SUMS.txt
             dist/manifest.json
+            dist/volume-control.user.js
           if-no-files-found: error
           retention-days: 7
 
@@ -278,7 +293,8 @@ jobs:
               "dist/volume-control-firefox-v$version.zip",
               "dist/volume-control-chrome-v$version.zip",
               "dist/source-v$version.zip",
-              "dist/SHA256SUMS.txt"
+              "dist/SHA256SUMS.txt",
+              "dist/volume-control.user.js"
           )
           gh release upload $tag @assets --repo "$env:GITHUB_REPOSITORY" --clobber
           if ($LASTEXITCODE -ne 0) { throw "Could not upload all release assets." }
@@ -416,4 +432,47 @@ jobs:
           $finalText = ConvertTo-Json -InputObject $final -Compress -Depth 10
           if ($finalText -notmatch '"status"\s*:\s*"(Succeeded|Success|Completed)"') { throw "Timed out waiting for Edge publication: $finalText" }
           Write-Host "Submitted Chromium v$version to Microsoft Edge Add-ons."
+
+
+  userscript_sync:
+    name: Sync Tampermonkey userscript
+    needs: [build, tag, github_release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Rebuild userscript from current sources
+        run: node scripts/build-userscript.mjs
+
+      - name: Commit updated userscript
+        shell: bash
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- tampermonkey website/public/tampermonkey; then
+            echo "Tampermonkey userscript already in sync — nothing to commit."
+            exit 0
+          fi
+          git add tampermonkey/volume-control.user.js website/public/tampermonkey/volume-control.user.js
+          git commit -m "Update Tampermonkey userscript to v$VERSION (release auto-sync)"
+          for attempt in 1 2 3; do
+            if git push; then echo "Pushed userscript sync."; exit 0; fi
+            echo "Push rejected (attempt $attempt) — rebasing and retrying."
+            git pull --rebase origin "${{ github.event.repository.default_branch }}"
+          done
+          echo "::error::Could not push the Tampermonkey userscript sync after 3 attempts."
+          exit 1
 

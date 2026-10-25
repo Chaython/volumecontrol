@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Userscript test harness — Volume Control</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 40px; color: #222; }
+  audio { display: block; margin: 20px 0; width: 420px; }
+  .note { color: #555; max-width: 640px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <h1>Tampermonkey edition — test harness</h1>
+  <p class="note">
+    This page simulates a Tampermonkey environment (GM_* shims backed by
+    localStorage) and loads the generated volume-control.user.js as a plain
+    script. The floating button, popup, engine bridge and hotkeys must all work
+    against the real &lt;audio&gt; element below.
+  </p>
+  <audio id="track" controls loop></audio>
+  <script>
+    // Resolve the sample relative to this page so it works both at /tampermonkey/
+    // (dev) and /volumecontrol/tampermonkey/ (GitHub Pages sub-path).
+    document.getElementById('track').src =
+      new URL('../samples/quiet-music.mp3', location.href).href;
+  </script>
+  <script>
+    // --- GM shim (must exist before the userscript body runs) ---
+    window.GM_setValue = function (k, v) {
+      try { localStorage.setItem('vc-tm:' + k, JSON.stringify(v)); } catch (e) {}
+    };
+    window.GM_getValue = function (k) {
+      try {
+        const raw = localStorage.getItem('vc-tm:' + k);
+        return raw === null ? undefined : JSON.parse(raw);
+      } catch (e) { return undefined; }
+    };
+    window.GM_deleteValue = function (k) {
+      try { localStorage.removeItem('vc-tm:' + k); } catch (e) {}
+    };
+    window.GM_registerMenuCommand = function () { return 0; };
+  </script>
+  <script src="volume-control.user.js"></script>
+</body>
+</html>

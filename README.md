@@ -31,6 +31,14 @@
 > [!NOTE]
 > Volume Control supports HTML5 audio/video, not Flash. Browser-protected pages such as `chrome://` and extension pages cannot be controlled.
 
+## 🧩 Tampermonkey (userscript) edition
+
+No store, no extension install — the complete engine as a single userscript. It embeds the extension's real `page-audio-hook.js` **verbatim**, adds a floating button with the same badge semantics, the same popup design (slider, normalizer, mono, live peak meter), per-site memory via Tampermonkey storage, and the same hotkeys (`Alt+Shift+↑/↓` volume, `Alt+Shift+0` reset, `Alt+Shift+M` mono, `Alt+Shift+U` mute, `Alt+Shift+P` popup).
+
+**Install:** [volume-control.user.js](https://chaython.github.io/volumecontrol/tampermonkey/volume-control.user.js) · [from the repo (`tampermonkey/`)](https://raw.githubusercontent.com/Chaython/volumecontrol/master/tampermonkey/volume-control.user.js) · attached to every [GitHub release](https://github.com/Chaython/volumecontrol/releases)
+
+Sources live in the [`tampermonkey/`](tampermonkey/) folder at the repository root. The [Publish workflow](.github/workflows/publish.yml) rebuilds the script on every release and attaches it to the release assets, and the website workflow keeps the served copy in sync with the current engine. The browser extension remains the recommended install (options page, native toolbar integration, store auto-updates) — the userscript is the zero-install alternative.
+
 ## 📈 Live usage & repository statistics
 
 [![Volume Control live statistics](docs/stats.svg?v=1792934093622)](https://chaython.github.io/volumecontrol/stats.html)
