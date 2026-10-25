@@ -45,7 +45,7 @@ jobs:
           const version = Date.parse(stats.generatedAt);
           if (!Number.isFinite(version)) throw new Error('Invalid stats generatedAt timestamp');
           const readme = fs.readFileSync('README.md', 'utf8');
-          const updated = readme.replace(/docs\\/stats\\.svg(?:\\?v=[^)]*)?/g, `docs/stats.svg?v=${version}`);
+          const updated = readme.replace(/docs\/stats\.svg(?:\?v=[^)]*)?/g, \`docs/stats.svg?v=\${version}\`);
           if (updated === readme && !readme.includes(`docs/stats.svg?v=${version}`)) {
             throw new Error('README stats image reference was not found');
           }
