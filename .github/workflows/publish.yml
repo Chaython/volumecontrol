@@ -25,7 +25,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     outputs:
-      version: ${{ needs.build.outputs.version }}
+      version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
       publish_stores: ${{ steps.meta.outputs.publish_stores }}
       source_sha: ${{ steps.meta.outputs.source_sha }}
@@ -85,7 +85,7 @@ jobs:
               throw "Release tag '$($env:RELEASE_TAG)' does not match manifest version '$expectedTag'."
           }
           "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
-          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "tag=$env:RELEASE_TAG" >> $env:GITHUB_OUTPUT
           "source_sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
           $publish = $env:PUBLISH_STORES -eq "true"
           "publish_stores=$($publish.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
@@ -114,7 +114,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "${{ needs.build.outputs.version }}"
+          $version = "${{ steps.meta.outputs.version }}"
           foreach ($browser in @("chrome", "firefox")) {
               $zip = "dist/volume-control-$browser-v$version.zip"
               if (-not (Test-Path -LiteralPath $zip)) { throw "Missing $browser package: $zip" }
@@ -142,7 +142,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "${{ needs.build.outputs.version }}"
+          $version = "${{ steps.meta.outputs.version }}"
           git archive --format=zip --output="dist/source-v$version.zip" HEAD
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path "dist/source-v$version.zip")) { throw "Could not create source archive." }
           $packages = @(Get-ChildItem -LiteralPath dist -Filter '*.zip' | Where-Object { $_.Name -notlike 'SHA256SUMS*' } | Sort-Object Name)
@@ -219,11 +219,14 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.tag.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "${{ needs.build.outputs.version }}"
+          $version = "$env:RELEASE_VERSION"
           $tag = "$env:RELEASE_TAG"
-          $generated = gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$tag" -f target_commitish="$env:GITHUB_SHA"
+          $generated = gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$tag" -f target_commitish="$env:SOURCE_SHA"
           if ($LASTEXITCODE -ne 0) { throw "GitHub release-note generation failed." }
           $generatedNotes = ($generated | ConvertFrom-Json).body
           $changelogPath = "CHANGELOG.md"
