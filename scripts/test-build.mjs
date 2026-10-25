@@ -2744,7 +2744,10 @@ test('CI requires both Chromium and Firefox runtime smoke tests', () => {
 
 test('AMO publishing is stable-tag bound and duplicate-safe', () => {
     const source = readFileSync(join(root, '.github/workflows/publish.yml'), 'utf8');
-    assert.match(source, /release_tag:/);
+    assert.doesNotMatch(source, /workflow_dispatch:[\s\S]*?inputs:[\s\S]*?release_tag:/);
+    assert.match(source, /RELEASE_TAG: \$\{\{ github\.event\.release\.tag_name \|\| '' \}\}/);
+    assert.match(source, /\$tag = "V\$\(\$manifest\.version\)"/);
+    assert.match(source, /git fetch --force --depth=1 origin "refs\/tags\/\$tag"/);
     assert.match(source, /publish_stores:/);
     assert.match(source, /PUBLISH_STORES/);
     assert.match(source, /refs\/tags\/\$\(\$env:RELEASE_TAG\)/);
