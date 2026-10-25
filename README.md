@@ -645,6 +645,21 @@ This is the minimum possible file count given the WebExtension API's security co
 
 </details>
 
+<details>
+<summary>🔧 Audio-context ownership and DRM source transitions</summary>
+
+A reused media element's DRM marker is discarded only when a different, nonempty media source is observed **and no EME MediaKeys remain attached**. Attached keys, unreadable DRM state, and source-less transitions retain the conservative capture guard. Page-created AudioContexts are never suspended merely because tracked output connections disappear; only the extension's own idle media AudioContext is suspended to release the audio device.
+
+</details>
+
+<details>
+<summary>✅ CI coverage and release checks</summary>
+
+The streaming-site workflow requires four decoded-media checks to pass before reporting success: downloaded MP3, downloaded MP4, simultaneous MP3+MP4 (including a finite normalization peak), and a reused-element MP4 playlist transition. Public websites, including YouTube, remain separately reported as **inconclusive** when headless playback is blocked; a successful navigation is not evidence that audible output was verified. Each run publishes a GitHub Actions step summary. The daily prerelease job installs and exercises both packaged extensions before publishing, and streaming checks also run on packaging, manifest, and popup/options UI changes.
+
+</details>
+
+
 ## 🧰 Build and release packages
 
 Install the pinned build tools and run the regression suite before packaging:
@@ -681,19 +696,6 @@ https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colo
 
 ***
 
-<details>
-<summary>🔧 Audio-context ownership and DRM source transitions</summary>
-
-A reused media element's DRM marker is discarded only when a different, nonempty media source is observed **and no EME MediaKeys remain attached**. Attached keys, unreadable DRM state, and source-less transitions retain the conservative capture guard. Page-created AudioContexts are never suspended merely because tracked output connections disappear; only the extension's own idle media AudioContext is suspended to release the audio device.
-
-</details>
-
-<details>
-<summary>✅ CI coverage and release checks</summary>
-
-The streaming-site workflow requires four decoded-media checks to pass before reporting success: downloaded MP3, downloaded MP4, simultaneous MP3+MP4 (including a finite normalization peak), and a reused-element MP4 playlist transition. Public websites, including YouTube, remain separately reported as **inconclusive** when headless playback is blocked; a successful navigation is not evidence that audible output was verified. Each run publishes a GitHub Actions step summary. The daily prerelease job installs and exercises both packaged extensions before publishing, and streaming checks also run on packaging, manifest, and popup/options UI changes.
-
-</details>
 
 <!-- chaython-funding:start -->
 ## Support development
