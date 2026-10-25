@@ -638,6 +638,8 @@ This is the minimum possible file count given the WebExtension API's security co
 
 
 
+</details>
+
 ## 🧰 Build and release packages
 
 Install the pinned build tools and run the regression suite before packaging:
