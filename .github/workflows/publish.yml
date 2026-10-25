@@ -19,22 +19,22 @@ permissions:
   contents: write
 
 concurrency:
-  group: publish-\${{ github.event.release.tag_name || inputs.release_tag || github.ref_name }}
+  group: publish-${{ github.event.release.tag_name || inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: \${{ github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false }}
     runs-on: windows-latest
     timeout-minutes: 40
     env:
-      RELEASE_TAG: \${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
-      PUBLISH_STORES: \${{ github.event_name == 'release' || inputs.publish_stores }}
-      AMO_JWT_ISSUER: \${{ secrets.AMO_JWT_ISSUER }}
-      AMO_JWT_SECRET: \${{ secrets.AMO_JWT_SECRET }}
-      EDGE_CLIENT_ID: \${{ secrets.EDGE_CLIENT_ID }}
-      EDGE_API_KEY: \${{ secrets.EDGE_API_KEY }}
-      EDGE_PRODUCT_ID: \${{ vars.EDGE_PRODUCT_ID }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
+      PUBLISH_STORES: ${{ github.event_name == 'release' || inputs.publish_stores }}
+      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+      EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+      EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+      EDGE_PRODUCT_ID: ${{ vars.EDGE_PRODUCT_ID }}
 
     steps:
       - name: Checkout exact release tag
@@ -99,7 +99,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "\${{ steps.meta.outputs.version }}"
+          $version = "${{ steps.meta.outputs.version }}"
           foreach ($browser in @("chrome", "firefox")) {
               $zip = "dist/volume-control-$browser-v$version.zip"
               if (-not (Test-Path -LiteralPath $zip)) { throw "Missing $browser package: $zip" }
@@ -127,7 +127,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "\${{ steps.meta.outputs.version }}"
+          $version = "${{ steps.meta.outputs.version }}"
           git archive --format=zip --output="dist/source-v$version.zip" HEAD
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path "dist/source-v$version.zip")) { throw "Could not create source archive." }
           $packages = @(Get-ChildItem -LiteralPath dist -Filter '*.zip' | Where-Object { $_.Name -notlike 'SHA256SUMS*' } | Sort-Object Name)
@@ -142,10 +142,10 @@ jobs:
         id: notes
         shell: pwsh
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "\${{ steps.meta.outputs.version }}"
+          $version = "${{ steps.meta.outputs.version }}"
           $tag = "$env:RELEASE_TAG"
           $generated = gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$tag" -f target_commitish="$env:GITHUB_SHA"
           if ($LASTEXITCODE -ne 0) { throw "GitHub release-note generation failed." }
@@ -157,31 +157,31 @@ jobs:
               $lines = $text -split "\r?\n"
               $start = -1
               for ($i = 0; $i -lt $lines.Count; $i++) {
-                  if ($lines[$i] -match "^##\s+.*\bV?$([regex]::Escape($version))\b") { $start = $i; break }
+                  if ($lines[$i] -match "^##\s+.*\bV?$([regex]::Escape($version))\b" -and $lines[$i] -notmatch "(?i)unreleased") { $start = $i; break }
               }
               if ($start -ge 0) {
                   $end = $lines.Count
                   for ($i = $start + 1; $i -lt $lines.Count; $i++) {
                       if ($lines[$i] -match "^##\s+") { $end = $i; break }
                   }
-                  $section = ($lines[$start..($end - 1)] -join "\`n").Trim()
+                  $section = ($lines[$start..($end - 1)] -join "`n").Trim()
               }
           }
           if ([string]::IsNullOrWhiteSpace($section)) {
-              $body = "## Changes\`n\`n$generatedNotes\`n\`n---\`n\`nFull history: https://github.com/$env:GITHUB_REPOSITORY/blob/$tag/CHANGELOG.md"
+              $body = "## Changes`n`n$generatedNotes`n`n---`n`nFull history: https://github.com/$env:GITHUB_REPOSITORY/blob/$tag/CHANGELOG.md"
           } else {
-              $body = "$section\`n\`n---\`n\`n## Changes in this release\`n\`n$generatedNotes"
+              $body = "$section`n`n---`n`n## Changes in this release`n`n$generatedNotes"
           }
           $body | Set-Content -LiteralPath dist/release-notes.md -Encoding utf8
 
       - name: Update GitHub release assets and changelog
         shell: pwsh
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
           $tag = "$env:RELEASE_TAG"
-          $version = "\${{ steps.meta.outputs.version }}"
+          $version = "${{ steps.meta.outputs.version }}"
           $release = gh release view $tag --repo "$env:GITHUB_REPOSITORY" --json isDraft,isPrerelease
           if ($LASTEXITCODE -ne 0) { throw "A GitHub Release for $tag must exist before this workflow runs." }
           $releaseInfo = $release | ConvertFrom-Json
@@ -203,7 +203,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $api = "https://addons.mozilla.org/api/v5"
-          $version = "\${{ steps.meta.outputs.version }}"
+          $version = "${{ steps.meta.outputs.version }}"
           $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
           $guid = [string]$manifest.browser_specific_settings.gecko.id
           if ([string]::IsNullOrWhiteSpace($guid)) { throw "Firefox add-on ID missing from manifest.json." }
@@ -226,7 +226,7 @@ jobs:
           while ($url) {
               $page = Invoke-RestMethod -Method Get -Uri $url -Headers (Get-AmoHeaders)
               $existing = @($page.results) | Where-Object { [string]$_.version -eq $version } | Select-Object -First 1
-              if ($existing) { throw "AMO already has version $version (status '$($existing.file.status)'). Refusing to silently skip an unexpected stable release." }
+              if ($existing) { Write-Host "AMO already has version $version (status '$($existing.file.status)'); skipping duplicate submission."; exit 0 }
               $url = [string]$page.next
           }
           $upload = Invoke-RestMethod -Method Post -Uri "$api/addons/upload/" -Headers (Get-AmoHeaders) -Form @{ upload=$firefoxZip; channel="listed" }
@@ -247,7 +247,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $version = "\${{ steps.meta.outputs.version }}"
+          $version = "${{ steps.meta.outputs.version }}"
           $productId = $env:EDGE_PRODUCT_ID
           $headers = @{ Authorization = "ApiKey $env:EDGE_API_KEY"; "X-ClientID" = $env:EDGE_CLIENT_ID }
           $root = "https://api.addons.microsoftedge.microsoft.com/v1"
