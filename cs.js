@@ -1546,7 +1546,6 @@ function sampleIsolatedNormalizer() {
     } catch (e) {}
 }
 
-
 function ensureIsolatedNormalizerTimer() {
     // Even an empty 100ms interval keeps waking background tabs. Only sample
     // when an actual isolated route needs automatic gain control.
