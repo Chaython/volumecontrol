@@ -266,12 +266,12 @@ jobs:
           $release = gh release view $tag --repo "$env:GITHUB_REPOSITORY" --json isDraft,isPrerelease
           if ($LASTEXITCODE -ne 0) {
               # Manual publishing can create the stable release when the manifest version has not been released yet.
-              gh release create $tag --repo "$env:GITHUB_REPOSITORY" --target "$env:SOURCE_SHA" --title "$tag: Volume Control" --notes-file dist/release-notes.md
+              gh release create $tag --repo "$env:GITHUB_REPOSITORY" --target "$env:SOURCE_SHA" --title "${tag}: Volume Control" --notes-file dist/release-notes.md
               if ($LASTEXITCODE -ne 0) { throw "Could not create GitHub Release $tag." }
           } else {
               $releaseInfo = $release | ConvertFrom-Json
               if ($releaseInfo.isDraft -or $releaseInfo.isPrerelease) { throw "Only published stable GitHub releases may be updated by this workflow." }
-              gh release edit $tag --repo "$env:GITHUB_REPOSITORY" --title "$tag: Volume Control" --notes-file dist/release-notes.md
+              gh release edit $tag --repo "$env:GITHUB_REPOSITORY" --title "${tag}: Volume Control" --notes-file dist/release-notes.md
               if ($LASTEXITCODE -ne 0) { throw "Could not update GitHub release notes." }
           }
           $assets = @(
