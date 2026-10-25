@@ -19,7 +19,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  build:
+    name: Build & Test
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false }}
     runs-on: windows-latest
     timeout-minutes: 40
@@ -73,7 +74,7 @@ jobs:
       - name: Install pinned build dependencies
         run: npm ci
 
-      - name: Validate release tag and credentials mode
+      - name: Validate release tag and publication mode
         id: meta
         shell: pwsh
         run: |
@@ -86,13 +87,6 @@ jobs:
           "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
           $publish = $env:PUBLISH_STORES -eq "true"
           "publish_stores=$($publish.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          if ($publish) {
-              foreach ($name in @("AMO_JWT_ISSUER","AMO_JWT_SECRET","EDGE_CLIENT_ID","EDGE_API_KEY","EDGE_PRODUCT_ID")) {
-                  if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-                      throw "Store publishing was requested but required credential/configuration '$name' is missing. Add it before publishing."
-                  }
-              }
-          }
 
       - name: Run regression tests
         run: npm test
