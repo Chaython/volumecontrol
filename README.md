@@ -33,11 +33,11 @@
 
 [![Volume Control live statistics](docs/stats.svg)](docs/stats.html)
 
-The SVG card is refreshed daily by GitHub Actions when the workflow is running. [View the interactive dashboard's HTML source](docs/stats.html) for Firefox average daily users and weekly downloads, GitHub views/clones (14-day window), stars, and referrers where available. GitHub README pages can display the generated SVG but cannot execute an interactive HTML/JavaScript widget inline.
+The SVG card is refreshed daily by GitHub Actions when the workflow is running. The [interactive HTML dashboard](https://chaython.github.io/volumecontrol/stats.html) shows Firefox average daily users and weekly downloads, GitHub views/clones (14-day window), stars, and referrers where available. GitHub README pages can display the generated SVG but cannot execute an interactive HTML/JavaScript widget inline; its source is in [`docs/stats.html`](docs/stats.html).
 
 - **GitHub traffic:** configure the repository Actions secret `GH_TRAFFIC_TOKEN` with a fine-grained token that has **Administration: read** permission for this repository. Without it, GitHub's private traffic endpoints remain unavailable; public star/fork counts still work.
 - **Chrome Web Store:** the supported public API does not expose publisher analytics. Weekly users must be viewed in the [Chrome Web Store developer dashboard](https://chrome.google.com/webstore/devconsole/); the widget deliberately marks this metric unavailable rather than inventing a number.
-- **Interactive page hosting:** `docs/stats.html` is ready to serve through GitHub Pages. The repository currently has Pages disabled, so the HTML file is source-only until Pages is enabled in **Settings → Pages → Build and deployment → GitHub Actions**. After enabling it, the dashboard will be available at `https://chaython.github.io/volumecontrol/stats.html`.
+- **Interactive page hosting:** the repository currently has Pages disabled. Enable **Settings → Pages → Build and deployment → GitHub Actions** once; the guarded deployment workflow will then publish the dashboard and subsequent statistics refreshes automatically. Until then, the HTML source is committed but the hosted dashboard link is not live.
 
 
 <details>
