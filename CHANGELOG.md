@@ -1,5 +1,12 @@
 # Changelog
 
+## V7.1 — Opt-in true-peak AudioWorklet limiter (October 2026)
+
+- Exposed the experimental true-peak limiter as an explicit opt-in setting; it remains disabled by default and applies only to the isolated compatibility audio route.
+- Route through the AudioWorklet only after the module and processor initialize successfully. If module loading, processor creation, or runtime processing fails, mark the experiment failed and recover through the existing compressor-protected route rather than leaving the route disconnected or sending boosted audio unprotected.
+- Keep the MAIN-world/page-managed route on the existing compressor path; the experimental limiter is not advertised as globally active or as certified BS.1770 true-peak protection.
+- Preserve the existing lookahead DSP and regression tests for opt-in defaults, AudioWorklet routing, ceiling updates, and failure fallback.
+
 ## V7.0 — First stable release with audio normalization (October 2026)
 
 **Release status:** V7.0 is the first non-prerelease published build to include audio-normalization functionality. Normalization was developed and refined in earlier prerelease builds; the V6.16–V6.23 notes below describe that development history, not earlier stable releases with normalization.
