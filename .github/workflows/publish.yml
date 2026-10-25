@@ -257,6 +257,8 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.tag.outputs.tag }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
         run: |
           $ErrorActionPreference = "Stop"
           $tag = "$env:RELEASE_TAG"
@@ -264,7 +266,7 @@ jobs:
           $release = gh release view $tag --repo "$env:GITHUB_REPOSITORY" --json isDraft,isPrerelease
           if ($LASTEXITCODE -ne 0) {
               # Manual publishing can create the stable release when the manifest version has not been released yet.
-              gh release create $tag --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "$tag: Volume Control" --notes-file dist/release-notes.md
+              gh release create $tag --repo "$env:GITHUB_REPOSITORY" --target "$env:SOURCE_SHA" --title "$tag: Volume Control" --notes-file dist/release-notes.md
               if ($LASTEXITCODE -ne 0) { throw "Could not create GitHub Release $tag." }
           } else {
               $releaseInfo = $release | ConvertFrom-Json
