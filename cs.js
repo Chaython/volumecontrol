@@ -1445,7 +1445,7 @@ function computeSafeNormalizerGainDb(previousDb, sourceRmsDb, sourcePeakDb, conf
         }
 
         // Recover prior attenuation smoothly, but keep actual positive boost deliberately gradual.
-        const timeMs = desired < previous ? 1600 : previous < 0 && desired > previous ? 900 : 6000;
+        const timeMs = desired < previous ? 1600 : previous < 0 && desired > previous && history.audibleSamples >= 25 ? 900 : 6000;
         const applied = previous + (desired - previous) * (1 - Math.exp(-100 / timeMs));
         logDiagnostic(desired, applied);
         return applied;
