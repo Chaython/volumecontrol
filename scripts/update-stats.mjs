@@ -96,15 +96,14 @@ const cards = [
   ["GITHUB VIEWS · 14 DAYS", fmt(github.traffic.totalViews), github.traffic.status === "available" ? fmt(github.traffic.uniqueVisitors) + " unique visitors" : "Requires GH_TRAFFIC_TOKEN"],
   ["GITHUB CLONES · 14 DAYS", fmt(github.traffic.totalClones), github.traffic.status === "available" ? fmt(github.traffic.uniqueCloners) + " unique cloners" : "Requires GH_TRAFFIC_TOKEN"],
   ["GITHUB STARS", fmt(github.stars), "Public repository metadata"],
-  ["EDGE ACTIVE USERS", fmt(edge.activeInstallCount), "Public listing metadata; may be unavailable"],
-  ["EDGE RATING", edge.rating === null ? "Unavailable" : String(edge.rating), edge.ratingCount === null ? "Public listing rating" : fmt(edge.ratingCount) + " ratings"]
+  ["EDGE ACTIVE USERS", fmt(edge.activeInstallCount), "Public listing metadata"]
 ];
 const cardSvg = cards.map((c, i) => {
-  const x = 18 + (i % 3) * 300;
-  const y = 86 + Math.floor(i / 3) * 136;
-  return '<g><rect x="' + x + '" y="' + y + '" width="282" height="118" rx="14" fill="#151b27" stroke="#30394b"/><text x="' + (x+18) + '" y="' + (y+25) + '" font-size="11" letter-spacing="1.1" fill="#9ca9bd">' + xml(c[0]) + '</text><text x="' + (x+18) + '" y="' + (y+65) + '" font-size="25" font-weight="700" fill="#f2f5fb">' + xml(c[1]) + '</text><text x="' + (x+18) + '" y="' + (y+91) + '" font-size="12" fill="#a9b5c8">' + xml(c[2]) + '</text></g>';
+  const x = 16 + (i % 3) * 248;
+  const y = 68 + Math.floor(i / 3) * 108;
+  return '<g><rect x="' + x + '" y="' + y + '" width="232" height="92" rx="12" fill="#151b27" stroke="#30394b"/><text x="' + (x+14) + '" y="' + (y+22) + '" font-size="10" letter-spacing="0.8" fill="#9ca9bd">' + xml(c[0]) + '</text><text x="' + (x+14) + '" y="' + (y+52) + '" font-size="22" font-weight="700" fill="#f2f5fb">' + xml(c[1]) + '</text><text x="' + (x+14) + '" y="' + (y+74) + '" font-size="11" fill="#a9b5c8">' + xml(c[2]) + '</text></g>';
 }).join("");
-const stamp = generatedAt.replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
-const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="920" height="526" viewBox="0 0 920 526" role="img" aria-labelledby="title desc"><title id="title">Volume Control live statistics</title><desc id="desc">Firefox usage, GitHub traffic and repository activity. Last refreshed ' + xml(generatedAt) + '.</desc><rect width="100%" height="100%" rx="20" fill="#0b0f17"/><text x="22" y="34" font-size="22" font-weight="700" fill="#f2f5fb">Volume Control · Live statistics</text><text x="22" y="58" font-size="12" fill="#a9b5c8">Updated ' + xml(stamp) + ' · GitHub traffic covers the last 14 days</text>' + cardSvg + '<text x="22" y="365" font-size="11" fill="#9ca9bd">Edge public listing data may be incomplete. Weekly users, daily installs and impressions require Partner Center analytics.</text></svg>\n';
+const stamp = generatedAt.replace("T", " ").replace(/\\.\\d{3}Z$/, " UTC");
+const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="760" height="276" viewBox="0 0 760 276" role="img" aria-labelledby="title desc"><title id="title">Volume Control live statistics</title><desc id="desc">Firefox usage, GitHub traffic and repository activity. Last refreshed ' + xml(generatedAt) + '.</desc><rect width="100%" height="100%" rx="16" fill="#0b0f17"/><text x="16" y="27" font-size="18" font-weight="700" fill="#f2f5fb">Volume Control · Live statistics</text><text x="16" y="47" font-size="10" fill="#a9b5c8">Updated ' + xml(stamp) + ' · GitHub traffic covers the last 14 days</text>' + cardSvg + '</svg>\\n';
 await fs.writeFile(path.join(outDir, "stats.svg"), svg, "utf8");
 console.log(JSON.stringify({ generatedAt, firefox: firefox.status, githubMetadata: github.status, githubTraffic: github.traffic.status, edge: data.edge.status }, null, 2));
