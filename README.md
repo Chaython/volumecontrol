@@ -8,24 +8,46 @@
 ***
 
 
-\n## Description
 
-Volume Control adds a simple per-site volume control to your browser. It can lower volume, boost HTML5 audio and video above the normal browser limit, and optionally play stereo audio as mono. The extension is useful for quiet videos, uneven site volume, embedded players, and pages that do not provide enough audio control on their own.
+## 🎧 What is Volume Control?
 
-Settings can be remembered per site or URL path, including volume, mono, mute, and optional debug overrides; you can also exclude sites where you do not want the extension to run. Whitelist authorization is independent from remembered audio settings: with Remember off, each tab keeps its own unsaved volume, mono and mute through playlists and single-page-app navigation; a new tab or full reload starts from defaults. Remember only controls saving settings across sessions. Volume Control supports HTML5 video and audio only; it does not support Flash.
+**Volume Control** gives you per-site volume control for HTML5 audio and video in Firefox and Chromium-based browsers. Lower quiet audio, boost media beyond the browser's normal volume range, toggle mono, mute, and optionally normalize loudness.
 
-Excluded-site entries match by domain, and entries saved **with a path** (such as the legacy V4-era defaults) are wildcard-matched against the full URL — so `www.twitch.tv/*/clip/*` excludes only the clip pages while the rest of Twitch runs. A one-time v6.13 migration removes the legacy Twitch default entries that older builds left in users' stored storage (path and `www.` normalization had turned them into a block on the whole domain — issue #69), and the popup's Active toggle now removes **every** entry that blocks the current page — not just the exact domain match — with a tooltip explaining what it removed. Since v6.14 the **options page also accepts user-typed paths**, so path-scoped exclusions are a first-class feature (`example.com/videos`, wildcards with `*` = any characters except `/` — see the options-page hint); the legacy purge now also runs at install/update/startup so a hand-added path entry can never be swept by a migration that has not run yet. Since v6.15 the popup **tells you when the current page is blocklisted** — an overlay message (styled like the DRM note) names the matching entry and how to re-enable the site, on every engine — and the options-page blocklist input accepts **Enter** to add an entry, with an inline notice when the typed site/wildcard is already in the list.
+<box>
+<table>
+<tr><th>✨ Feature</th><th>What it does</th></tr>
+<tr><td>🔊 Volume boost</td><td>Adjust media from −32 dB to +32 dB where the browser permits WebAudio routing.</td></tr>
+<tr><td>🎚️ Per-site settings</td><td>Remember volume, mute, mono, and normalization choices by site or URL path.</td></tr>
+<tr><td>🎵 Normalization</td><td>Optional automatic loudness adjustment, with Music and Adaptive modes.</td></tr>
+<tr><td>🚫 Site exclusions</td><td>Exclude domains or path-specific URLs, including wildcard patterns.</td></tr>
+</table>
+</box>
 
-**Compatibility:** Firefox 128+ (event-page background) and Chromium 121+ — Chrome, Edge, Brave, Opera, Vivaldi from January 2024 onward (service-worker background). Chromium 120 and older rejects the cross-browser manifest shape at load time, so the manifest declares `minimum_chrome_version: "121"`.
+### 🌐 Compatibility
 
-Media that cannot be boosted (DRM-protected or cross-origin streams) is detected automatically: the popup explains the restriction, the slider clamps at 0 dB, and lowering volume still works through the native fallback. See [Restricted Media](#restricted-media-drm--cross-origin) below. On Firefox, DRM audio **can** be boosted — see the engine note below.
+- **Firefox 128+**
+- **Chromium 121+** — Chrome, Edge, Brave, Opera, and Vivaldi
+
+> [!NOTE]
+> Volume Control supports HTML5 audio/video, not Flash. Browser-protected pages such as `chrome://` and extension pages cannot be controlled.
+
+<details>
+<summary>🧭 Settings, remembering, and site exclusions</summary>
+
+- **Remember** controls whether settings persist across browser sessions. With it off, each tab keeps its own unsaved volume, mono, and mute state through playlists and single-page-app navigation; a new tab or full reload starts from defaults.
+- Whitelist authorization is independent from remembered audio settings.
+- Exclusion entries can match a whole domain or a URL path. For example, `www.twitch.tv/*/clip/*` excludes matching clip pages without blocking all of Twitch. In path patterns, `*` matches any characters except `/`.
+- The options page supports adding path-scoped exclusions, including `example.com/videos`. The popup's Active toggle removes every exclusion entry that currently blocks the page, and the popup explains when the current page is blocklisted.
+- Legacy Twitch exclusions are migrated so old path entries do not accidentally block the entire domain.
+
+</details>
 
 
-## Normalization, Manual Volume, and Peak Meter (6.23+)
+## 🎚️ Normalization, Manual Volume & Peak Meter
 
 **Normalize is opt-in and OFF by default.** Enable it for the current site/path using the **Normalize** switch in the popup. The live **Gain** readout and **output peak meter** expand only when that site's switch is on and WebAudio analysis is available; they fold away when it is off or temporarily unsupported. During Chromium DRM, cross-origin no-CORS, or Force native playback, the switch is **disabled and grayed out**, with an explanation displayed under it even if Normalize is off. A saved enabled preference is not erased: the switch can stay checked-but-disabled and automatically become active again once the page uses routable media. Firefox DRM audio can be normalized when Gecko provides a usable WebAudio route. In **Options → Normalizer**, **Normalize by default on sites without an override** controls the global default, and the target/boost/ceiling/response fields are folded away when the global default is off. A site-specific choice overrides the global default and is saved **separately** in `siteNormalizerSettings`; it does not require **Remember** and does not overwrite remembered volume, mute or mono.
 
-### Music-preserving normalization
+### 🎵 Music vs. Adaptive normalization
 
 **Normalization style** in Options offers two modes, independent of the per-site Normalize switch. Both analyze the source before the manual slider, target **−16 dBFS RMS** by default, respect the configured maximum automatic boost, and use measured sample-peak headroom to constrain unsafe positive boost. They differ in how quickly they react and how they handle a loud passage followed by a quiet one.
 
@@ -45,7 +67,7 @@ Music mode is designed to avoid carrying the attenuation from a loud section unn
 
 **Multiple media players (isolated fallback):** The MAIN-world route already levels separately for each captured media element. The isolated-world compatibility fallback has a single shared input analyser, so it cannot reliably distinguish two playing sources. To prevent one quiet source from automatically amplifying another loud source, it temporarily suspends **automatic positive gain** while two captured elements play, immediately shedding old positive boost and preserving existing attenuation. Manual volume remains active. Per-source normalization resumes with fresh history when only one source is playing; this is a safety fallback, not full isolated per-player loudness processing.
 
-### Music-mode comparison test and diagnostics
+### 🧪 Comparison tests & diagnostics
 
 The normalizer regression suite exercises both the MAIN-world controller in `page-audio-hook.js` and the isolated fallback in `cs.js`. It checks that peak headroom does not independently deepen negative gain in Music mode, that attenuation can recover when the detector enters a quieter section, and that debug diagnostics include the values needed to inspect controller behavior.
 
@@ -63,7 +85,7 @@ With per-site debug mode enabled, the browser console emits rate-limited (~100 m
 
 Both modes sample pre-slider audio so the manual volume control never causes the automatic controller to compensate for slider adjustments. Music mode avoids unnecessary compressor attenuation of unboosted audio: when manual dB and auto gain are both nonpositive, its compressor threshold moves to 0 dBFS. Positive manual or automatic boost restores the configured threshold without disconnecting the audio route. Both remain subject to the existing sample-peak-based boost limits and compressor protection; **neither is LUFS/ReplayGain scanning nor true-peak brick-wall limiting**. Music mode prioritizes preserving within-song dynamics over immediately equalizing every passage. No analysis can reliably anticipate a suddenly loud new section; keep manual +dB boosts conservative.
 
-### True-peak limiter research (not enabled in playback)
+<details>\n<summary>🔬 True-peak limiter research (offline prototype; not active in normal playback)</summary>\n\n### True-peak limiter research (not enabled in playback)
 
 `scripts/audio-peak-lab.mjs` implements an **offline 4× windowed-sinc FIR inter-sample peak estimate** for PCM fixtures. It reads each channel separately, rather than using a stereo mono-downmix, and tests signals whose PCM sample peaks are below full-scale while reconstructed peaks exceed it. This test utility is **not** a certified BS.1770 true-peak meter and is **not** connected to the live audio graph; it adds no worklet dependencies, CSP requirements, or playback latency. A production limiter needs verified per-channel real-time oversampling, lookahead, attack/release handling, continuous audio blocks, format/sample-rate coverage, and safe routing transitions. This diagnostic does not make boosted playback clip-free.
 
@@ -108,7 +130,7 @@ Output analyser (post-compressor sampled peak) → speakers
 
 DRM-restricted streams on Chromium, cross-origin media without suitable CORS permission, and **Force native** mode cannot use WebAudio normalization; native attenuation/mute still works. A site can have its own audio processing, and some pages combine multiple players in one graph. The input analyser cannot predict sound that has not arrived yet, so sudden loud transients can still be heard before the compressor fully reacts. **Start at a low volume**, especially if you select the +24 dB maximum auto boost; reduce manual boost or disable Normalize if you hear level jumps, pumping, or distortion.
 
-## Restricted Media (DRM & Cross-Origin)
+</details>\n\n## 🛡️ Restricted Media (DRM & Cross-Origin)
 
 Some media cannot be routed through WebAudio, and whether that applies depends on **both** the media and the browser engine:
 
@@ -129,7 +151,7 @@ Some media cannot be routed through WebAudio, and whether that applies depends o
 - Mono mixing is unavailable on such media.
 - **Force native fallback** (the debug routing override) also caps the displayed/applied volume at **0 dB**, even before playback starts, because native HTML media controls cannot boost. Your higher requested volume remains saved separately, and the normal range returns when WebAudio routing is available again; Mono and Normalize remain disabled while forced native is selected.
 
-**How detection works**
+<details>\n<summary>🧩 How DRM and cross-origin detection works</summary>\n\n**How detection works**
 
 - Per-element signals (v6.13 — the "restricted" verdict requires **per-element DRM evidence**): an `encrypted` event fired, a `setMediaKeys` call (wrapped), or `element.mediaKeys` set. A page that merely PROBES DRM capability never trips the verdict — app.plex.tv probes all three key systems at startup (verified in its production bundle) while playing clear direct-play content, and since v6.9 that probing alone had wrongly clamped boost to 0 dB on every engine (issue #70).
 - **Pending EME gate — decryption proof** (v6.14): on EME-probed pages, `blob:` (MSE) sources without per-element evidence are not routed until the element's `currentTime` actually **advances** — proof that the content is decodable, i.e. clear (EME content cannot decode a single frame without MediaKeys attached, and every attachment path is visible: patched `setMediaKeys`/`webkitSetMediaKeys`, `element.mediaKeys`, the `encrypted` event). Progress is observed at `timeupdate` cadence (~4 Hz in Chromium, 15–250 ms per spec) plus a 1 s sweep backup, so clear content routes within **~a quarter second of playback** (Plex — v6.13 waited a blind 3-second window; a mid-session boost while already playing also routes at the next timeupdate). DRM-stalled media (playback blocked on a license, `currentTime` frozen) never proves anything and is never routed — the udio.com birth-window safety is preserved by physics rather than by a timer. When the page actually constructs MediaKeys, earned proof is reset (keys are imminent — the `createMediaKeys` patch), and a source change (`emptied`) re-earns proof for the new source. On Gecko, Netflix routes immediately once keys attach.
@@ -154,7 +176,7 @@ Some media cannot be routed through WebAudio, and whether that applies depends o
 - Sites with unusual, heavily customized, or late-changing WebAudio graphs may not be fully controllable in every playback path.
 - Normalization is based on source RMS and sample peaks, **not LUFS or inter-sample true peak**. The compressor is not a brick-wall hard limiter. Fast transients and large manual boosts may still clip; see [Normalization, Manual Volume, and Peak Meter](#normalization-manual-volume-and-peak-meter-623).
 
-## Release Builds (read this before packaging)
+## 📦 Release Builds (read before packaging)
 
 `scripts/build.ps1` creates Chrome and Firefox folders and ZIPs in `dist/`. It
 minifies the packaged JavaScript with [Terser](https://terser.org/), generates each
@@ -189,7 +211,7 @@ source preservation, JavaScript syntax, regexes, templates, Unicode, shared URL
 helpers, and build errors. Run it through `npm test` or directly with
 `node --test scripts/test-build.mjs`.
 
-## Hotkeys
+## ⌨️ Hotkeys
 
 - `Alt+Shift+Up`: Increase volume by 1 dB.
 - `Alt+Shift+Down`: Decrease volume by 1 dB.
@@ -201,7 +223,7 @@ helpers, and build errors. Run it through `npm test` or directly with
 Browser shortcut settings can be used to remap or disable these defaults.
 Pin the extension icon to the toolbar to see native badge feedback while adjusting volume.
 
-## Privacy Policy
+## 🔒 Privacy Policy
 
 Volume Control does not collect, transmit, sell, share, or store any personal information outside your browser.
 
@@ -209,7 +231,7 @@ The extension does not use analytics, telemetry, tracking pixels, remote logging
 
 The extension reads page audio/video elements locally in your browser only so it can apply the volume and mono settings you choose. This processing happens on your device. No browsing history, page content, audio content, media titles, URLs, or settings are sent to the developer or to any third party.
 
-## Permissions
+## 🧩 Permissions
 
 Volume Control asks for the browser permissions needed to control audio reliably across modern websites:
 
@@ -227,9 +249,9 @@ AMO/Chrome Web Store review note: the broad host access, early `document_start` 
 <img width="472" height="182" alt="firefox_6Jn4rh739p" src="https://github.com/user-attachments/assets/f368b636-ac39-4e23-b929-c6f29b34b8b9" />
 
 
-# Changelog
+# 📝 Changelog
 
-## Changes since V6.16 (through V6.23)
+## 🚀 Changes since V6.16 (through V6.23)
 
 **Post-6.23 updates on `master`:** opt-in Normalize per site/path and a separately controlled global default; collapsible popup meter/Options controls; pre-fader source analysis independent of the slider; noise-floor gate, peak-aware automatic boost headroom and faster gain reduction; sampled output peak meter; and CPU-saving compressor/timer bypasses while disabled. See [signal flow](#signal-flow) and [limitations](#unsupported-media-and-practical-limits).
 
@@ -238,7 +260,7 @@ These updates improve Firefox media compatibility, restore volume after track ch
 ---
 
 <details open>
-<summary><strong>Version 6.23 – Patch Notes</strong></summary>
+<summary>✨ Version 6.23 — Patch Notes</summary>
 
 - **Capture WebRTC/MediaStream call audio:** media assigned through `HTMLMediaElement.srcObject` is now claimed immediately, including streams whose audio tracks are added later. This covers call paths used by sites such as Snapchat Web that do not use a normal URL-backed media source.
 - **MediaStream WebAudio fallback:** when a browser rejects `createMediaElementSource()` for a stream-backed call element, Volume Control can fall back to `createMediaStreamSource()` and silence the element's native duplicate while the extension graph is active. The fallback intentionally avoids the "element already owns a MediaElementSource" case so page-owned WebAudio graphs are not doubled.
@@ -256,7 +278,7 @@ These updates improve Firefox media compatibility, restore volume after track ch
 ---
 
 <details>
-<summary><strong>Version 6.22 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.22 — Patch Notes</summary>
 
 - **True URL/path remembered profiles:** remembered settings and whitelist entries may now use paths such as `example.com/videos`; a path applies to itself and descendants, and `*` can match within a path segment. Existing domain-only settings remain backward compatible.
 - **Embedded-player profile consistency:** content scripts in cross-origin iframes now resolve remembered volume, mono, mute, whitelist state, and debug overrides against the top-level tab URL via the background service. CDN/player frames no longer silently use a different profile from the page the user remembered.
@@ -272,7 +294,7 @@ These updates improve Firefox media compatibility, restore volume after track ch
 ---
 
 <details>
-<summary><strong>Version 6.21 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.21 — Patch Notes</summary>
 
 - **Remember debug options per site:** remembered-site profiles can now store Debug Highlight, Force DRM Audio Capture, Skip CORS Media Guard, and HTML Media Route Override. With **Site debug** disabled, a remembered site continues to inherit the global debug defaults.
 - **Preserve per-site debug profiles:** popup volume/mono/mute saves keep the optional debug object instead of replacing the remembered record.
@@ -286,7 +308,7 @@ These updates improve Firefox media compatibility, restore volume after track ch
 ---
 
 <details>
-<summary><strong>Versions 6.15–6.20 – Patch Notes</strong></summary>
+<summary>📚 Versions 6.15–6.20 — Patch Notes</summary>
 
 The 6.15–6.20 line covers exclusion UX, build hardening, debug routing controls, limiter consistency fixes, and mono-availability handling.
 
@@ -307,7 +329,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.14 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.14 — Patch Notes</summary>
 
 - **Faster boosting on clear media:** replaced the fixed three-second routing delay on pages that probe DRM support with playback-progress checks. Clear media, such as Plex direct-play content, can be boosted once playback advances without DRM evidence.
 - **Path-based exclusions in Settings:** add entries such as `example.com/videos` or `example.com/videos/*`. A `*` matches characters within a path segment; entries without a path still block the domain and its subdomains.
@@ -319,7 +341,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.13 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.13 — Patch Notes</summary>
 
 - **More reliable volume across track changes:** retry delayed native-volume corrections and periodically check for volume drift when sites reset their players, addressing playlist transitions and replayed clips.
 - **Fix Firefox DRM startup ordering:** wait for media keys to attach before routing protected audio, addressing player failures caused by capturing audio too early. Firefox identification also takes priority over Chromium-style capability hints.
@@ -332,7 +354,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.12.2 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.12.2 — Patch Notes</summary>
 
 - **Declare Chromium 121 as the minimum version:** make the compatibility requirement for the shared source manifest explicit. Firefox's minimum remains 128.
 
@@ -341,7 +363,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.12.1 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.12.1 — Patch Notes</summary>
 
 - **Fix Firefox loading from the source folder:** declare Firefox background scripts alongside Chromium's service worker, with `shared.js` loaded before `background.js`.
 - **Respect site-controlled mute:** fallback volume handling only clears a native mute applied by the extension, rather than unmuting media the site had muted.
@@ -353,7 +375,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.12 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.12 — Patch Notes</summary>
 
 - **Enable Firefox DRM audio controls:** allow boosting and mono processing for protected audio on Firefox instead of applying Chromium's DRM restriction to every browser.
 - **Keep browser-specific safeguards:** Chromium and unidentified engines continue to use native volume fallback for protected media. Cross-origin media without the required CORS access remains restricted on all engines.
@@ -363,7 +385,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.11 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.11 — Patch Notes</summary>
 
 - Fixed   [HIGH] Extension disable/update or hook heartbeat loss silenced long-playing tracks: routed media's only audio path was disconnected; playing elements now keep their route wired at unity gain
 - Fixed   [HIGH] Page AudioContexts suspended by the Bluetooth idle sweep were never resumed (site SFX/game audio stayed silent); new destination connections now revive them, page-initiated suspensions are respected
@@ -381,7 +403,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.10 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.10 — Patch Notes</summary>
 
 - Fixed   Missing "restricted by DRM" note on sites whose players never live in the page's DOM: detached JS-created players, shadow-DOM players, and iframe-resident media were invisible to the verdict scan — the slider offered +32 dB it could not deliver and boost was silently capped
 - New   Aggregate page-restriction flag: the MAIN-world hook publishes a "restricted"/"cross-origin" verdict over ALL tracked elements (attached, detached, or shadow-DOM), refreshed on media claim, DRM events, element lifecycle events, state applications, and a 1 s interval; changes invalidate the content script's verdict cache immediately
@@ -393,7 +415,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.9 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.9 — Patch Notes</summary>
 
 - Fixed   "Restricted by DRM" note flickering in and out while dragging the volume slider: state queries used unframed messaging, so the top frame (restricted, DRM) raced embedded iframes (unrestricted) and the first responder won on every slider commit. State queries now target the top frame only; apply commands still broadcast so embedded players remain controllable
 - Fixed   Latent DRM mute: routing DRM media through WebAudio succeeds at the API level but detaches the element's native output in real Chrome and feeds the graph silence. The hook now refuses to route restricted media entirely; native fallback volume keeps working
@@ -405,7 +427,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.8 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.8 — Patch Notes</summary>
 
 - Fixed   Random "earrape" volume: media elements detached from the DOM but still playing (site player rebuilds, ad transitions, quality switches, SPA navigations) were dropped from tracking, freezing their WebAudio route gain at the boost level active at detach — up to +32 dB (~40×) — while the popup kept showing the correct value. Detached-but-audible elements are now kept tracked and updated; only quiescent elements are released
 - Fixed   Random silence after returning to 0 dB: idle AudioContext suspension now also counts native (unrouted) connections, so contexts with live audio are never suspended
@@ -418,7 +440,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.4 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.4 — Patch Notes</summary>
 
 - New   Dedicated mute channel (independent of the volume slider)
 - New   Native element.muted for fallback-only media (Bluetooth-friendly)
@@ -433,7 +455,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.3 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.3 — Patch Notes</summary>
 
 📶 **Bluetooth fixes (7)** — context suspension/closing, unrouting at unity gain  
 🔊 **Volume spike fixes (6)** — smoother ramps, skip redundant reconnects, improved transition ordering  
@@ -449,7 +471,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.2 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.2 — Patch Notes</summary>
 
 - Added browser hotkeys for volume up/down, reset, and mono toggle  
 - Added native toolbar‑badge volume feedback for hotkeys and popup adjustments  
@@ -460,7 +482,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.1 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.1 — Patch Notes</summary>
 
 - Removed an unused JS library  
 - Reduced Bluetooth idle power usage by disposing audio sessions more cleanly on stop  
@@ -470,7 +492,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 ---
 
 <details>
-<summary><strong>Version 6.0 – Patch Notes</strong></summary>
+<summary>🛠️ Version 6.0 — Patch Notes</summary>
 
 - Added Manifest V3 page‑world audio integration for stricter CSP sites and app‑style audio  
 - Improved detection for dynamic audio/video elements and detached `Audio` nodes  
@@ -491,7 +513,7 @@ The 6.15–6.20 line covers exclusion UX, build hardening, debug routing control
 Planned features: Added to Chrome Web Store. [Looking for donations, to buy chrome store developer license](https://github.com/sponsors/Chaython)
 
 <details>
-<summary><h2>📁 File Descriptions</h2></summary>
+<summary>📁 File descriptions and architecture</summary>
 
 ### Complete File Reference
 
@@ -571,7 +593,7 @@ This is the minimum possible file count given the WebExtension API's security co
 
 ***
 
-## Build packages
+## 🧰 Build packages
 
 Install the pinned build tools and run the regression suite before packaging:
 
@@ -617,11 +639,11 @@ https://github.com/Chaython/NTP (A NTP extension that offers custom shapes, colo
 
 ***
 
-### Source changes and audio-context ownership (October 2026)
+### 🔧 Source changes & audio-context ownership (October 2026)
 
 A reused media element's DRM marker is discarded only when a different, nonempty media source is observed **and no EME MediaKeys remain attached**. Attached keys, unreadable DRM state, and source-less transitions retain the conservative capture guard; this avoids irreversible silence on protected Chromium content. Page-created AudioContexts are never suspended by Volume Control merely because tracked output connections disappear; only its own idle media AudioContext is suspended to release the audio device.
 
-### CI coverage and release checks (October 2026)
+### ✅ CI coverage & release checks (October 2026)
 
 The streaming-site workflow requires four decoded-media checks to pass before reporting success: downloaded MP3, downloaded MP4, simultaneous MP3+MP4 (including a finite normalization peak), and a reused-element MP4 playlist transition. Public websites, including YouTube, remain separately reported as **inconclusive** when headless playback is blocked; a successful navigation is not evidence that audible output was verified. Each run publishes a GitHub Actions step summary. The daily prerelease job now installs and exercises both packaged extensions before publishing, and streaming checks also run on packaging, manifest, and popup/options UI changes. Superseded non-master CI runs are cancelled.
 
