@@ -528,7 +528,12 @@
             var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
             if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 6) return;
             drag.moved = true;
-            var rect = btn.getBoundingClientRect();
+            // Measure the HOST, not the button: while dragging, the pointer
+            // stays over the button, so its :hover scale(1.06) transform is
+            // active — deriving position from btn.getBoundingClientRect()
+            // accumulates the scale error on every pointermove and the button
+            // drifts away from the pointer. The host is never transformed.
+            var rect = host.getBoundingClientRect();
             var right = window.innerWidth - rect.right - dx;
             var bottom = window.innerHeight - rect.bottom - dy;
             right = Math.max(4, Math.min(window.innerWidth - rect.width - 4, right));
