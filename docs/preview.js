@@ -4,6 +4,8 @@
   const volumeText = $('volume-text');
   const muteButton = $('mute-btn');
   const muteLabel = muteButton && muteButton.querySelector('.mute-label');
+  const banner = $('preview-banner');
+  const originalBanner = banner ? banner.textContent : '';
   const normalize = $('normalizer-checkbox');
   const normalizeDetails = $('normalizer-details');
   const normalizeGain = $('normalizer-gain');
@@ -24,7 +26,7 @@
     const db = getDb();
     volumeText.value = db > 0 ? '+' + db : String(db);
     slider.value = String(db);
-    $('volume-boost-warning').classList.toggle('hidden', db < 12);
+    $('volume-boost-warning').classList.toggle('hidden', db < 6);
     updateMeter();
   }
   function updateMeter() {
@@ -43,7 +45,7 @@
     muteButton.setAttribute('aria-pressed', String(muted));
     muteButton.classList.toggle('muted', muted);
     if (muteLabel) muteLabel.textContent = muted ? 'Unmute' : 'Mute';
-    $('volume-limit-note').classList.toggle('hidden', false);
+    if ($('volume-limit-note')) $('volume-limit-note').classList.toggle('hidden', false);
     updateMeter();
   }
   slider.addEventListener('input', displayDb);
@@ -56,22 +58,23 @@
   muteButton.addEventListener('click', () => { muted = !muted; updateMute(); });
   normalize.addEventListener('change', () => {
     normalizeOn = normalize.checked;
-    normalizeDetails.hidden = !normalizeOn;
+    if (normalizeDetails) normalizeDetails.hidden = !normalizeOn;
+    if (banner) banner.textContent = normalizeOn ? 'Preview mode · Normalize enabled (display is simulated; no site audio)' : originalBanner;
     updateMeter();
   });
   $('mono-checkbox').addEventListener('change', event => {
-    $('preview-banner').textContent = 'Preview mode · Mono ' + (event.target.checked ? 'enabled' : 'disabled') + ' (simulated)';
+    if (banner) banner.textContent = 'Preview mode · Mono ' + (event.target.checked ? 'enabled' : 'disabled') + ' (simulated)';
   });
   $('remember-checkbox').addEventListener('change', event => {
-    $('preview-banner').textContent = 'Preview mode · Remember ' + (event.target.checked ? 'enabled' : 'disabled') + ' (not saved)';
+    if (banner) banner.textContent = 'Preview mode · Remember ' + (event.target.checked ? 'enabled' : 'disabled') + ' (not saved)';
   });
   $('enable-checkbox').addEventListener('change', event => {
     const active = event.target.checked;
     $('popup-content').style.opacity = active ? '1' : '.55';
-    $('preview-banner').textContent = active ? 'Live preview · Real extension popup HTML/CSS · browser services simulated' : 'Preview mode · extension disabled for this simulated site';
+    if (banner) banner.textContent = active ? originalBanner : 'Preview mode · extension disabled for this simulated site';
   });
   $('settings').addEventListener('click', () => {
-    $('preview-banner').textContent = 'Options open in the installed extension. The Pages preview cannot access browser extension settings.';
+    if (banner) banner.textContent = 'Options are available in the installed extension; this website cannot open extension settings.';
   });
   displayDb();
   updateMute();
