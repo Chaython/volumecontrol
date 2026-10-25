@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-25T00:58:34.317Z",
+  "repository": "Chaython/volumecontrol",
+  "firefox": {
+    "status": "available",
+    "addonName": {
+      "en-CA": "Volume Control [Boost volume]"
+    },
+    "averageDailyUsers": 75798,
+    "weeklyDownloads": 3476,
+    "rating": 3.8263,
+    "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
+  },
+  "edge": {
+    "status": "available",
+    "extensionId": "ipbghdjdmefdioebhaneohmkidjakfbc",
+    "url": "https://microsoftedge.microsoft.com/addons/detail/ipbghdjdmefdioebhaneohmkidjakfbc",
+    "activeInstallCount": 695,
+    "rating": 4,
+    "ratingCount": 4,
+    "version": "6.16",
+    "lastUpdated": 1789587046.2799704,
+    "message": "Public listing metadata only; weekly users, daily installs, and impressions require Partner Center analytics."
+  },
+  "github": {
+    "status": "available",
+    "stars": 99,
+    "forks": 16,
+    "watchers": 3,
+    "url": "https://github.com/Chaython/volumecontrol",
+    "traffic": {
+      "status": "available",
+      "views": [
+        {
+          "timestamp": "2026-10-10T00:00:00Z",
+          "count": 2,
+          "uniques": 1
+        },
+        {
+          "timestamp": "2026-10-11T00:00:00Z",
+          "count": 8,
+          "uniques": 6
+        },
+        {
+          "timestamp": "2026-10-12T00:00:00Z",
+          "count": 11,
+          "uniques": 7
+        },
+        {
+          "timestamp": "2026-10-13T00:00:00Z",
+          "count": 1,
+          "uniques": 1
+        },
+        {
+          "timestamp": "2026-10-14T00:00:00Z",
+          "count": 4,
+          "uniques": 3
+        },
+        {
+          "timestamp": "2026-10-15T00:00:00Z",
+          "count": 1,
+          "uniques": 1
+        },
+        {
+          "timestamp": "2026-10-16T00:00:00Z",
+          "count": 25,
+          "uniques": 8
+        },
+        {
+          "timestamp": "2026-10-17T00:00:00Z",
+          "count": 7,
+          "uniques": 5
+        },
+        {
+          "timestamp": "2026-10-18T00:00:00Z",
+          "count": 1,
+          "uniques": 1
+        },
+        {
+          "timestamp": "2026-10-19T00:00:00Z",
+          "count": 5,
+          "uniques": 2
+        },
+        {
+          "timestamp": "2026-10-20T00:00:00Z",
+          "count": 4,
+          "uniques": 3
+        },
+        {
+          "timestamp": "2026-10-21T00:00:00Z",
+          "count": 0,
+          "uniques": 0
+        },
+        {
+          "timestamp": "2026-10-22T00:00:00Z",
+          "count": 6,
+          "uniques": 4
+        },
+        {
+          "timestamp": "2026-10-23T00:00:00Z",
+          "count": 2,
+          "uniques": 2
+        }
+      ],
+      "totalViews": 77,
+      "uniqueVisitors": 44,
+      "clones": [
+        {
+          "timestamp": "2026-10-10T00:00:00Z",
+          "count": 476,
+          "uniques": 342
+        },
+        {
+          "timestamp": "2026-10-11T00:00:00Z",
+          "count": 411,
+          "uniques": 249
+        },
+        {
+          "timestamp": "2026-10-12T00:00:00Z",
+          "count": 246,
+          "uniques": 136
+        },
+        {
+          "timestamp": "2026-10-13T00:00:00Z",
+          "count": 624,
+          "uniques": 378
+        },
+        {
+          "timestamp": "2026-10-14T00:00:00Z",
+          "count": 65,
+          "uniques": 28
+        },
+        {
+          "timestamp": "2026-10-15T00:00:00Z",
+          "count": 308,
+          "uniques": 175
+        },
+        {
+          "timestamp": "2026-10-16T00:00:00Z",
+          "count": 105,
+          "uniques": 48
+        },
+        {
+          "timestamp": "2026-10-17T00:00:00Z",
+          "count": 142,
+          "uniques": 58
+        },
+        {
+          "timestamp": "2026-10-18T00:00:00Z",
+          "count": 10,
+          "uniques": 7
+        },
+        {
+          "timestamp": "2026-10-19T00:00:00Z",
+          "count": 3,
+          "uniques": 3
+        },
+        {
+          "timestamp": "2026-10-20T00:00:00Z",
+          "count": 7,
+          "uniques": 6
+        },
+        {
+          "timestamp": "2026-10-21T00:00:00Z",
+          "count": 8,
+          "uniques": 7
+        },
+        {
+          "timestamp": "2026-10-22T00:00:00Z",
+          "count": 5,
+          "uniques": 4
+        },
+        {
+          "timestamp": "2026-10-23T00:00:00Z",
+          "count": 4,
+          "uniques": 4
+        }
+      ],
+      "totalClones": 2414,
+      "uniqueCloners": 1236,
+      "referrers": [
+        {
+          "referrer": "Google",
+          "count": 10,
+          "uniques": 7
+        },
+        {
+          "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
+          "count": 6,
+          "uniques": 6
+        },
+        {
+          "referrer": "search.brave.com",
+          "count": 3,
+          "uniques": 1
+        },
+        {
+          "referrer": "addons.mozilla.org",
+          "count": 2,
+          "uniques": 2
+        },
+        {
+          "referrer": "github.com",
+          "count": 1,
+          "uniques": 1
+        }
+      ],
+      "error": null
+    }
+  }
+}

@@ -1,0 +1,518 @@
+/* =============================================================
+   Volume Control popup — ported from the extension's popup.css
+   (v7.1) with two adaptations for the live preview:
+   1. Scoped under .vc-popup instead of html/body (420px width kept).
+   2. Dark mode via the .vc-popup-dark class (driven by the browser
+      mockup's theme toggle) instead of prefers-color-scheme, so the
+      demo can show the extension's real light/dark popup designs.
+   Everything else — slider ticks, switches, meter, notes, states —
+   is pixel-identical to the extension.
+   ============================================================= */
+
+.vc-popup {
+  width: 420px;
+  font-size: 18px;
+  margin: 0;
+  padding: 0;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+  background-color: #fff;
+  color: #333;
+  box-sizing: border-box;
+}
+
+.vc-popup .hidden { display: none !important; }
+
+/* --- SLIDER STYLES (Cross-Browser Fix) --- */
+
+.vc-popup input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  --vc-range-steps: 64;
+  width: 100%;
+  height: 24px;
+  margin: 10px 0;
+  padding: 0;
+  background: transparent;
+  display: block;
+  cursor: pointer;
+}
+
+.vc-popup input[type="range"]:focus { outline: none; }
+
+.vc-popup input[type="range"]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 10px;
+  background-color: #e0e0e0;
+  background-image: repeating-linear-gradient(90deg, #bdbdbd, #bdbdbd 1px, transparent 1px, transparent calc(100% / var(--vc-range-steps)));
+  border-radius: 5px;
+  border: 1px solid #d0d0d0;
+  margin-top: 7px;
+}
+
+.vc-popup input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 24px;
+  width: 10px;
+  background: #555;
+  border-radius: 3px;
+  margin-top: -8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.vc-popup input[type="range"]::-moz-range-track {
+  width: 100%;
+  height: 10px;
+  background-color: #e0e0e0;
+  background-image: repeating-linear-gradient(90deg, #bdbdbd, #bdbdbd 1px, transparent 1px, transparent calc(100% / var(--vc-range-steps)));
+  border-radius: 5px;
+  border: 1px solid #d0d0d0;
+}
+
+.vc-popup input[type="range"]::-moz-range-thumb {
+  height: 24px;
+  width: 10px;
+  background: #555;
+  border: none;
+  border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* --- TOGGLE SWITCH --- */
+.vc-popup .switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.vc-popup .switch input { opacity: 0; width: 0; height: 0; }
+
+.vc-popup .slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #ccc;
+  transition: 0.4s;
+  border-radius: 24px;
+}
+
+.vc-popup .slider:before {
+  position: absolute;
+  content: "";
+  height: 16px; width: 16px;
+  left: 4px; bottom: 4px;
+  background-color: white;
+  transition: 0.4s;
+  border-radius: 50%;
+}
+
+.vc-popup input:checked + .slider { background-color: #4CAF50; }
+.vc-popup input:checked + .slider:before { transform: translateX(16px); }
+
+/* --- TEXT & CONTROLS --- */
+.vc-popup #volume-text {
+  width: 3.5ch;
+  border: none;
+  background-color: transparent;
+  text-align: right;
+  font-size: 18px;
+  font-weight: bold;
+  color: #555;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.vc-popup .volume-limit-note {
+  margin: 2px 0 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #666;
+  text-align: center;
+}
+
+.vc-popup .settings {
+  font-size: 14px;
+  font-family: inherit;
+  color: #333;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  margin: 0;
+  font-weight: normal;
+  text-decoration: none;
+  opacity: 0.9;
+  display: flex;
+  align-items: center;
+  height: 24px;
+}
+
+.vc-popup .settings:hover {
+  opacity: 1;
+  text-decoration: underline;
+  color: #000;
+}
+
+/* --- LAYOUT --- */
+.vc-popup .top-controls {
+  flex-direction: column;
+  width: 100%;
+  padding: 0 15px;
+  box-sizing: border-box;
+  margin-bottom: 15px;
+}
+
+.vc-popup #popup-content {
+  padding-top: 12px;
+}
+
+/* --- VOLUME ROW --- */
+.vc-popup .volume-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 100%;
+  min-height: 28px;
+}
+
+.vc-popup .volume-row .volume-display {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  z-index: 1;
+}
+
+.vc-popup .volume-display .volume-unit {
+  font-size: 14px;
+  font-weight: normal;
+  color: #777;
+  margin-left: 2px;
+  user-select: none;
+}
+
+/* --- MUTE BUTTON --- */
+.vc-popup .mute-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  color: #333;
+  height: 28px;
+  flex-shrink: 0;
+  margin-left: 0;
+  margin-right: auto;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.vc-popup .mute-btn:hover {
+  background-color: #f0f0f0;
+  border-color: #999;
+}
+
+.vc-popup .mute-icon {
+  flex-shrink: 0;
+  fill: currentColor;
+}
+
+.vc-popup .mute-icon .wave-shape { display: block; }
+.vc-popup .mute-icon .mute-x { display: none; }
+
+.vc-popup .mute-btn.muted .wave-shape { display: none; }
+.vc-popup .mute-btn.muted .mute-x { display: block; }
+.vc-popup .mute-btn.muted .speaker-shape { fill: currentColor; }
+
+.vc-popup .mute-btn.muted {
+  background-color: #c62828;
+  border-color: #c62828;
+  color: #fff;
+}
+
+.vc-popup .mute-btn.muted:hover {
+  background-color: #d32f2f;
+  border-color: #d32f2f;
+}
+
+.vc-popup .mute-btn:focus-visible {
+  outline: 2px solid #4CAF50;
+  outline-offset: 2px;
+}
+
+.vc-popup .bot-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 15px;
+  margin-bottom: 15px;
+}
+
+.vc-popup .left {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.vc-popup .right {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.vc-popup .switch-container {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.vc-popup .switch-container.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.vc-popup .switch-container.is-disabled .slider,
+.vc-popup .switch-container.is-disabled .label-text {
+  cursor: not-allowed;
+}
+
+.vc-popup .label-text {
+  margin-left: 8px;
+  font-size: 14px;
+  user-select: none;
+  white-space: nowrap;
+  color: #333;
+}
+
+/* --- MESSAGES --- */
+.vc-popup .exclusion-message {
+  text-align: center;
+  padding: 15px;
+  color: #666;
+  width: 100%;
+  box-sizing: border-box;
+  background-color: #f9f9f9;
+  border-bottom: 1px solid #eee;
+  margin-bottom: 10px;
+  font-size: 0.9em;
+}
+
+.vc-popup .exclusion-title {
+  font-weight: 600;
+  color: #333;
+}
+
+.vc-popup .exclusion-detail {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #666;
+}
+
+/* --- MUTED STATE --- */
+.vc-popup #popup-content.is-muted #volume-slider,
+.vc-popup #popup-content.is-muted #volume-text {
+  opacity: 0.45;
+  transition: opacity 0.2s;
+}
+.vc-popup #popup-content.is-muted #volume-slider {
+  cursor: not-allowed;
+}
+
+/* --- Normalizer + live peak meter --- */
+.vc-popup .normalizer-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(127, 127, 127, 0.28);
+}
+
+.vc-popup .normalizer-header,
+.vc-popup .peak-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vc-popup .normalizer-header {
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+
+.vc-popup .normalizer-switch {
+  margin: 0;
+}
+
+.vc-popup .normalizer-gain,
+.vc-popup .peak-meter-text {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.vc-popup .normalizer-gain {
+  opacity: 0.8;
+}
+
+.vc-popup .peak-meter-row {
+  width: 100%;
+}
+
+.vc-popup .peak-meter {
+  position: relative;
+  flex: 1 1 auto;
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.24);
+}
+
+.vc-popup .peak-meter-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  transition: width 90ms linear;
+}
+
+.vc-popup .peak-meter-ceiling {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 98.3333%;
+  width: 1px;
+  background: currentColor;
+  opacity: 0.7;
+}
+
+.vc-popup .peak-meter-text {
+  min-width: 66px;
+  text-align: right;
+}
+
+.vc-popup .normalizer-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.25;
+  opacity: 0.82;
+}
+
+.vc-popup .normalizer-panel.is-unavailable .normalizer-switch {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+.vc-popup .normalizer-panel.is-unavailable .normalizer-switch .slider {
+  cursor: not-allowed;
+}
+.vc-popup .normalizer-panel.is-unavailable .peak-meter-row {
+  opacity: 0.5;
+}
+
+.vc-popup .normalizer-details[hidden] { display: none !important; }
+.vc-popup .normalizer-detail-header { display: flex; justify-content: flex-end; margin: 0 0 6px; }
+.vc-popup .normalizer-panel .normalizer-header { margin-bottom: 0; }
+.vc-popup .normalizer-panel .normalizer-details { padding-top: 8px; }
+.vc-popup .normalizer-panel.is-unavailable .normalizer-note {
+  opacity: 1;
+}
+
+/* --- DARK MODE (class-driven port of the extension's media query) --- */
+.vc-popup.vc-popup-dark {
+  background-color: #202124;
+  color: #e8eaed;
+}
+
+.vc-popup.vc-popup-dark input[type="range"]::-webkit-slider-runnable-track {
+  background-color: #4a4a4a;
+  border-color: #555;
+  background-image: repeating-linear-gradient(90deg, #666, #666 1px, transparent 1px, transparent calc(100% / var(--vc-range-steps)));
+}
+
+.vc-popup.vc-popup-dark input[type="range"]::-moz-range-track {
+  background-color: #4a4a4a;
+  border-color: #555;
+  background-image: repeating-linear-gradient(90deg, #666, #666 1px, transparent 1px, transparent calc(100% / var(--vc-range-steps)));
+}
+
+.vc-popup.vc-popup-dark input[type="range"]::-webkit-slider-thumb { background: #a8c7fa; }
+.vc-popup.vc-popup-dark input[type="range"]::-moz-range-thumb { background: #a8c7fa; }
+
+.vc-popup.vc-popup-dark .exclusion-message { background-color: #333; color: #ccc; border-color: #444; }
+.vc-popup.vc-popup-dark .exclusion-title { color: #e8eaed; }
+.vc-popup.vc-popup-dark .exclusion-detail { color: #bdc1c6; }
+.vc-popup.vc-popup-dark .volume-limit-note { color: #bdc1c6; }
+.vc-popup.vc-popup-dark .slider { background-color: #5f6368; }
+.vc-popup.vc-popup-dark input:checked + .slider { background-color: #8ab4f8; }
+.vc-popup.vc-popup-dark #volume-text { color: #e8eaed; }
+.vc-popup.vc-popup-dark .volume-display .volume-unit { color: #9aa0a6; }
+
+.vc-popup.vc-popup-dark .label-text { color: #e8eaed; }
+.vc-popup.vc-popup-dark .settings { color: #e8eaed; }
+.vc-popup.vc-popup-dark .settings:hover { color: #fff; }
+
+.vc-popup.vc-popup-dark .mute-btn {
+  border-color: #5f6368;
+  color: #e8eaed;
+}
+.vc-popup.vc-popup-dark .mute-btn:hover {
+  background-color: #2d2e31;
+  border-color: #8ab4f8;
+}
+.vc-popup.vc-popup-dark .mute-btn.muted {
+  background-color: #c62828;
+  border-color: #c62828;
+  color: #fff;
+}
+.vc-popup.vc-popup-dark .mute-btn.muted:hover {
+  background-color: #d32f2f;
+  border-color: #d32f2f;
+}
+
+/* --- STATE CLASSES --- */
+.vc-popup .excluded-site .top-controls,
+.vc-popup .excluded-site .left {
+  display: none !important;
+}
+.vc-popup .excluded-site .exclusion-message {
+  display: block !important;
+}
+.vc-popup .excluded-site .bot-controls {
+  justify-content: flex-end;
+}
+
+/* --- Preview-only chrome: the popup container (shadow, radius, arrow) --- */
+.vc-popup-anchor {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 10px);
+  right: 14px;
+}
+
+.vc-popup-frame {
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  animation: vc-popup-in 120ms ease-out;
+}
+
+.vc-popup.vc-popup-dark,
+.vc-popup-dark .vc-popup-frame {
+  background: #202124;
+}
+
+@keyframes vc-popup-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Navigation progress bar inside the browser mockup */
+@keyframes vc-load-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
