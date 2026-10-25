@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "generatedAt": "2026-10-25T00:45:29.700Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
@@ -11,12 +11,6 @@
     "weeklyDownloads": 3476,
     "rating": 3.8263,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
-  },
-  "chrome": {
-    "status": "not_available_via_public_api",
-    "weeklyUsers": null,
-    "message": "The supported Chrome Web Store API manages listings and publishing; it does not expose publisher analytics. No public stats API is available for weekly users.",
-    "dashboardUrl": "https://chrome.google.com/webstore/devconsole/"
   },
   "github": {
     "status": "available",
@@ -203,5 +197,16 @@
       ],
       "error": null
     }
+  },
+  "edge": {
+    "status": "pending_refresh",
+    "extensionId": "ipbghdjdmefdioebhaneohmkidjakfbc",
+    "url": "https://microsoftedge.microsoft.com/addons/detail/ipbghdjdmefdioebhaneohmkidjakfbc",
+    "activeInstallCount": null,
+    "rating": null,
+    "ratingCount": null,
+    "version": null,
+    "lastUpdated": null,
+    "message": "Edge listing metrics will populate on the next stats workflow run. Weekly users, daily installs, and impressions require Partner Center analytics."
   }
 }
