@@ -967,3 +967,16 @@ if (document.readyState === 'loading') {
 } else {
     initOptions();
 }
+
+
+(function renderManifestVersion() {
+    const versionElement = document.getElementById('manifest-version');
+    if (!versionElement) return;
+    try {
+        const manifest = browserApi && browserApi.runtime && browserApi.runtime.getManifest ? browserApi.runtime.getManifest() : null;
+        versionElement.textContent = manifest && manifest.version ? manifest.version : 'Unavailable';
+    } catch (error) {
+        console.warn('Options: could not read extension manifest version', error);
+        versionElement.textContent = 'Unavailable';
+    }
+})();
