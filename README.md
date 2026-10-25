@@ -31,7 +31,7 @@
 
 ## 📈 Live usage & repository statistics
 
-[![Volume Control live statistics](docs/stats.svg)](docs/stats.html)
+[![Volume Control live statistics](docs/stats.svg?v=1792889129700)](docs/stats.html)
 
 The SVG card is refreshed daily by GitHub Actions when the workflow is running. The [interactive HTML dashboard](https://chaython.github.io/volumecontrol/stats.html) shows Firefox average daily users and weekly downloads, GitHub views/clones (14-day window), stars, and referrers where available. GitHub README pages can display the generated SVG but cannot execute an interactive HTML/JavaScript widget inline; its source is in [`docs/stats.html`](docs/stats.html).
 
