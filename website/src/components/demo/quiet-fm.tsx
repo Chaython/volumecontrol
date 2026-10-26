@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { VolumeEngine } from "@/lib/volume-control/engine";
 import type { MediaItem } from "@/lib/volume-control/store";
 import { asset } from "@/lib/asset-path";
+import { SiteNav } from "./playground";
 
 const STREAM: MediaItem = {
   id: "quiet-fm-stream",
@@ -45,6 +46,7 @@ export function QuietFmSite({ browserDark }: { browserDark: boolean }) {
               quiet.fm/radio · broadcasting to insomniacs since 1998
             </p>
           </div>
+          <SiteNav browserDark={browserDark} />
         </div>
       </header>
 
@@ -84,7 +86,10 @@ export function QuietFmSite({ browserDark }: { browserDark: boolean }) {
             <h3 className="text-sm font-semibold mb-1.5">Try this</h3>
             <p className="text-xs text-stone-400 leading-relaxed">
               Enable <span className="text-amber-400">Remember</span> on this site, set a boost,
-              then switch tabs — quiet.fm keeps its settings while demo.local stays at 0 dB.
+              then switch tabs — quiet.fm keeps its settings while demo.local stays at 0 dB. Or
+              create a path-scoped profile in Settings (e.g. <em>quiet.fm/late-night/archive</em>)
+              and use the site menu above: remembered settings follow the URL path, exactly like
+              the real extension.
             </p>
           </div>
         </section>

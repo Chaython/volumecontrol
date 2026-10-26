@@ -485,6 +485,33 @@
   justify-content: flex-end;
 }
 
+/* --- TOUCH DEVICES (popup.css `@media (hover: none) and (pointer: coarse)`) --- */
+/* Action popups are typically ~420px wide on DESKTOP too. A width-only
+   breakpoint incorrectly activates the Android rules there and collapses
+   the fixed desktop popup. Restrict responsive controls to touch-first
+   devices. */
+@media (hover: none) and (pointer: coarse) {
+  .vc-popup { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
+  .vc-popup #popup-content { width: 100%; box-sizing: border-box; }
+  .vc-popup .top-controls { padding: 8px 12px 0; margin-bottom: 12px; }
+  .vc-popup .bot-controls { padding: 0 12px 12px; gap: 12px; flex-wrap: wrap; margin-bottom: 0; }
+  .vc-popup .left, .vc-popup .right { gap: 12px; flex-wrap: wrap; }
+  .vc-popup .right { margin-left: auto; }
+  .vc-popup .switch-container, .vc-popup .settings, .vc-popup .mute-btn { min-height: 44px; }
+  .vc-popup .switch-container { gap: 0; }
+  .vc-popup .switch { width: 44px; height: 28px; }
+  .vc-popup .slider { border-radius: 28px; }
+  .vc-popup .slider:before { width: 20px; height: 20px; }
+  .vc-popup input:checked + .slider:before { transform: translateX(16px); }
+  .vc-popup .settings { padding: 8px; }
+  .vc-popup .mute-btn { padding: 6px 10px; }
+  .vc-popup input[type="range"] { height: 44px; margin: 4px 0 8px; touch-action: pan-y; }
+  .vc-popup input[type="range"]::-moz-range-track { height: 12px; }
+  .vc-popup input[type="range"]::-moz-range-thumb { width: 24px; height: 32px; border-radius: 7px; }
+  .vc-popup input[type="range"]::-webkit-slider-thumb { width: 24px; height: 32px; margin-top: -11px; border-radius: 7px; }
+  .vc-popup #volume-text { font-size: 18px; min-height: 36px; }
+}
+
 /* --- Preview-only chrome: the popup container (shadow, radius, arrow) --- */
 .vc-popup-anchor {
   position: absolute;

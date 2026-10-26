@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { UploadCloud, Music4, Waves, FileVideo, X, ShieldAlert, Radio } from "lucide-react";
+import { UploadCloud, Music4, Waves, FileVideo, X, ShieldAlert, Globe, Radio } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useExtensionStore } from "@/lib/volume-control/store";
 import type { MediaItem } from "@/lib/volume-control/store";
@@ -54,6 +54,46 @@ function EngineMedia({ item }: { item: MediaItem; browserDark?: boolean }) {
 
 export { EngineMedia };
 
+/** The fake site's own navigation — real sites have paths, and Volume
+ *  Control's remembered profiles / access entries / debug overrides can be
+ *  scoped to them (shared.js getSiteSettingsKey ranked matching). */
+export function SiteNav({ browserDark }: { browserDark: boolean }) {
+  const site = useExtensionStore((s) => s.site);
+  const navigating = useExtensionStore((s) => s.navigating);
+  const navigatePath = useExtensionStore((s) => s.navigatePath);
+  let currentPath = "/";
+  try { currentPath = new URL(site.url).pathname; } catch { /* ignore */ }
+  return (
+    <nav
+      aria-label="Site navigation"
+      className={cn(
+        "ml-auto flex items-center gap-1 rounded-full border p-1",
+        browserDark ? "border-zinc-700 bg-[#1b1b1f]" : "border-zinc-200 bg-white",
+      )}
+    >
+      {site.navLinks.map((link) => {
+        const active = link.path === currentPath;
+        return (
+          <button
+            key={link.path}
+            disabled={navigating}
+            onClick={() => void navigatePath(link.path)}
+            className={cn(
+              "px-3 py-1 rounded-full text-xs font-medium transition-colors disabled:opacity-50",
+              active
+                ? browserDark ? "bg-zinc-700 text-zinc-100" : "bg-zinc-900 text-white"
+                : browserDark ? "text-zinc-400 hover:bg-zinc-800" : "text-zinc-500 hover:bg-zinc-100",
+            )}
+            title={`${site.key}${link.path} — path-scoped profiles apply on navigation`}
+          >
+            {link.label}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
 const DEMO_TRACKS: MediaItem[] = [
   {
     id: "demo-quiet-music",
@@ -79,6 +119,8 @@ export function MediaPlayground({ browserDark }: { browserDark: boolean }) {
   const removeMediaItem = useExtensionStore((s) => s.removeMediaItem);
   const restricted = useExtensionStore((s) => Boolean(s.restricted["demo.local"]));
   const setRestricted = useExtensionStore((s) => s.setRestricted);
+  const crossOrigin = useExtensionStore((s) => Boolean(s.crossOrigin["demo.local"]));
+  const setCrossOrigin = useExtensionStore((s) => s.setCrossOrigin);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addFiles = (files: FileList | File[]) => {
@@ -105,7 +147,7 @@ export function MediaPlayground({ browserDark }: { browserDark: boolean }) {
       {/* Fake site header */}
       <header className={cn("border-b px-6 py-4", browserDark ? "border-zinc-800 bg-[#232329]" : "border-zinc-200 bg-[#fafbfc]")}>
         <div className="max-w-3xl mx-auto flex items-center gap-3">
-          <span className={cn("w-9 h-9 rounded-lg grid place-items-center", browserDark ? "bg-emerald-900/40 text-emerald-300" : "bg-emerald-100 text-emerald-700")}>
+          <span className={cn("w-9 h-9 rounded-lg grid place-items-center shrink-0", browserDark ? "bg-emerald-900/40 text-emerald-300" : "bg-emerald-100 text-emerald-700")}>
             <Music4 className="w-5 h-5" />
           </span>
           <div>
@@ -115,6 +157,7 @@ export function MediaPlayground({ browserDark }: { browserDark: boolean }) {
               toolbar to control everything on this page.
             </p>
           </div>
+          <SiteNav browserDark={browserDark} />
         </div>
       </header>
 
@@ -215,25 +258,47 @@ export function MediaPlayground({ browserDark }: { browserDark: boolean }) {
           />
         </section>
 
-        {/* DRM simulation */}
-        <section aria-label="DRM simulation">
-          <div className={cn("rounded-xl border p-4 flex items-start gap-3", restricted ? (browserDark ? "border-amber-700/60 bg-amber-950/30" : "border-amber-300 bg-amber-50") : (browserDark ? "border-zinc-800 bg-[#232329]" : "border-zinc-200 bg-[#fafbfc]"))}>
-            <ShieldAlert className={cn("w-5 h-5 shrink-0 mt-0.5", restricted ? "text-amber-500" : browserDark ? "text-zinc-500" : "text-zinc-400")} />
-            <div className="flex-1">
-              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={restricted}
-                  onChange={(e) => setRestricted(e.target.checked)}
-                  className="accent-amber-500 w-4 h-4"
-                />
-                Serve this page&apos;s media as DRM-protected
-              </label>
-              <p className={cn("text-xs mt-1.5 leading-relaxed", browserDark ? "text-zinc-400" : "text-zinc-500")}>
-                Simulates Netflix/Spotify-style protected streams: the browser blocks WebAudio
-                capture, so Volume Control switches to its fallback — the slider clamps to 0 dB,
-                Mono and Normalize become unavailable, and volume is applied natively.
-              </p>
+        {/* Media restriction simulations (DRM / cross-origin) */}
+        <section aria-label="Media restriction simulation">
+          <div className={cn("rounded-xl border p-4 space-y-4", restricted || crossOrigin ? (browserDark ? "border-amber-700/60 bg-amber-950/30" : "border-amber-300 bg-amber-50") : (browserDark ? "border-zinc-800 bg-[#232329]" : "border-zinc-200 bg-[#fafbfc]"))}>
+            <div className="flex items-start gap-3">
+              <ShieldAlert className={cn("w-5 h-5 shrink-0 mt-0.5", restricted ? "text-amber-500" : browserDark ? "text-zinc-500" : "text-zinc-400")} />
+              <div className="flex-1">
+                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={restricted}
+                    onChange={(e) => setRestricted(e.target.checked)}
+                    className="accent-amber-500 w-4 h-4"
+                  />
+                  Serve this page&apos;s media as DRM-protected
+                </label>
+                <p className={cn("text-xs mt-1.5 leading-relaxed", browserDark ? "text-zinc-400" : "text-zinc-500")}>
+                  Simulates Netflix/Spotify-style protected streams: the browser blocks WebAudio
+                  capture, so Volume Control switches to its fallback — the slider clamps to 0 dB,
+                  Mono and Normalize become unavailable, and volume is applied natively.
+                </p>
+              </div>
+            </div>
+            <div className={cn("flex items-start gap-3 pt-4 border-t", browserDark ? "border-zinc-700/60" : "border-zinc-200")}>
+              <Globe className={cn("w-5 h-5 shrink-0 mt-0.5", crossOrigin ? "text-amber-500" : browserDark ? "text-zinc-500" : "text-zinc-400")} />
+              <div className="flex-1">
+                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={crossOrigin}
+                    onChange={(e) => setCrossOrigin(e.target.checked)}
+                    className="accent-amber-500 w-4 h-4"
+                  />
+                  Serve this page&apos;s media as cross-origin
+                </label>
+                <p className={cn("text-xs mt-1.5 leading-relaxed", browserDark ? "text-zinc-400" : "text-zinc-500")}>
+                  Simulates media served without CORS headers from another origin: WebAudio capture
+                  of tainted media outputs silence, so Volume Control falls back to native volume
+                  — same 0 dB clamp as DRM, with its own cross-origin note. The debug
+                  “Skip CORS Media Guard” override lifts it.
+                </p>
+              </div>
             </div>
           </div>
         </section>

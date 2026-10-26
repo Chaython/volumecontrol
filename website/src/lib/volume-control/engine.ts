@@ -21,10 +21,14 @@
  *    post-limiter peak feeds the popup's dBFS meter.
  *  - 15 ms anti-zipper manual gain ramps; setTargetAtTime 8 ms down / 35 ms up
  *    for automatic gain; seek/track-change AGC resets.
- *  - Simulated DRM restriction: boost limit clamps the slider to 0 dB, mono
- *    and Normalize become unavailable (reason "restricted") and media falls
- *    back to native volume control — the extension's real behavior on
- *    DRM/CORS-protected pages.
+ *  - Simulated media restrictions: boost limit clamps the slider to 0 dB,
+ *    mono and Normalize become unavailable (reason "restricted" for DRM,
+ *    "cross-origin" for tainted media) and media falls back to native volume
+ *    control — the extension's real behavior on DRM/CORS-protected pages.
+ *  - Debug "HTML Media Route Override" (page-audio-hook ~1450-1470):
+ *    "native" keeps HTML media on native volume (no new WebAudio capture,
+ *    boost capped at 0 dB, mono/Normalize unavailable — cs.js 600-605);
+ *    "webaudio" captures eagerly, even for pure attenuation.
  */
 
 import {
@@ -99,9 +103,12 @@ export class VolumeEngine {
     muted: false,
     normalizerEnabled: false,
     normalizerConfig: { ...DEFAULT_NORMALIZER_CONFIG },
+    debugRouteMode: "auto",
   };
-  /** Simulated DRM/restriction for the current site (boost-limit demo). */
-  private restricted = false;
+  /** Simulated DRM/cross-origin restriction for the current site
+   *  ("" | "restricted" | "cross-origin") — the boost-limit verdict the
+   *  store resolves after the debug bypasses (cs.js isBoostLimitReasonBypassed). */
+  private restriction = "";
   private timer: ReturnType<typeof setInterval> | null = null;
   private meterListeners = new Set<(m: MeterState) => void>();
   private chainListeners = new Set<(s: ChainSnapshot) => void>();
@@ -135,17 +142,28 @@ export class VolumeEngine {
     this.notifyChain();
   }
 
-  setRestricted(restricted: boolean): void {
-    if (this.restricted === restricted) return;
-    this.restricted = restricted;
+  /** cs.js verdict layer: the raw DRM/CORS restriction (already bypass
+   *  filtered) plus the native-route route policy — a more informative
+   *  DRM/CORS verdict outranks native-route (cs.js 600-605). */
+  setRestriction(reason: string): void {
+    const next = reason === "restricted" || reason === "cross-origin" ? reason : "";
+    if (this.restriction === next) return;
+    this.restriction = next;
     this.state = { ...this.state, dB: this.clampByLimit(this.state.requestedDb) };
     for (const entry of this.entries.values()) this.syncEntry(entry);
     this.syncTimer();
     this.notifyChain();
   }
 
-  getRestricted(): boolean {
-    return this.restricted;
+  getRestriction(): string {
+    return this.restriction;
+  }
+
+  /** cs.js getBoostLimitInfo: the final limitation reason for the popup. */
+  private limitationReason(): string {
+    if (this.restriction) return this.restriction;
+    if (this.state.debugRouteMode === "native") return "native-route";
+    return "";
   }
 
   private clampByLimit(requestedDb: number): number {
@@ -153,7 +171,7 @@ export class VolumeEngine {
   }
 
   private maxDb(): number {
-    return this.restricted ? 0 : MAX_DB;
+    return this.limitationReason() ? 0 : MAX_DB;
   }
 
   /** page-audio-hook.js effectiveGain. */
@@ -164,10 +182,16 @@ export class VolumeEngine {
   }
 
   /** page-audio-hook.js mediaNeedsAudioRoute — route only when processing is
-   *  actually required. Pure attenuation stays native (fallback volume). */
+   *  actually required. Pure attenuation stays native (fallback volume).
+   *  The debug route override (state.debugRouteMode) sits on top exactly like
+   *  the hook: "native" forbids new capture, "webaudio" captures eagerly;
+   *  a DRM/CORS restriction dominates the forced route (the options-page
+   *  warning: Force WebAudio does not by itself bypass DRM or CORS). */
   private mediaNeedsAudioRoute(): boolean {
     if (!this.state.extensionActive || !this.state.enabled) return false;
-    if (this.restricted) return false;
+    if (this.restriction) return false;
+    if (this.state.debugRouteMode === "native") return false;
+    if (this.state.debugRouteMode === "webaudio") return true;
     return this.state.muted || this.state.mono || this.state.normalizerEnabled ||
       getGainValue(this.state.dB) > 1;
   }
@@ -175,7 +199,7 @@ export class VolumeEngine {
   /** page-audio-hook.js safetyLimiterRequired. */
   private safetyLimiterRequired(): boolean {
     return this.state.extensionActive && this.state.enabled &&
-      !this.restricted &&
+      !this.restriction &&
       (this.state.normalizerEnabled || (!this.state.muted && this.state.dB > 0));
   }
 
@@ -217,6 +241,7 @@ export class VolumeEngine {
     element.removeEventListener("emptied", this.handleTrackChange);
     element.removeEventListener("volumechange", this.handleVolumeChange);
     if (entry.fallbackWriteTimer) clearTimeout(entry.fallbackWriteTimer);
+    try { delete element.dataset.vcHooked; } catch { /* ignore */ }
     // Restore the site's intended volume before releasing the element.
     if (entry.lastAppliedFallback !== null &&
         Math.abs(element.volume - entry.lastAppliedFallback) < 1e-6) {
@@ -339,6 +364,9 @@ export class VolumeEngine {
       source.connect(inputAnalyser);
       inputAnalyser.connect(gain);
       entry.route = route;
+      // page-audio-hook.js marks successfully hooked elements — the debug
+      // highlight (options "Show Debug Highlight") paints exactly these.
+      try { element.dataset.vcHooked = "true"; } catch { /* ignore */ }
     } catch {
       // createMediaElementSource failed (already captured elsewhere) — the
       // element keeps native playback and only fallback volume applies.
@@ -465,7 +493,7 @@ export class VolumeEngine {
     if (entry.route) return false;
     if (!this.state.extensionActive || !this.state.enabled) return false;
     const gain = this.state.muted ? 0 : getGainValue(this.state.dB);
-    return gain < 1 || this.restricted;
+    return gain < 1 || this.restriction !== "";
   }
 
   /** Rate-limited native volume writes (one per 250 ms, trailing correction),
@@ -574,7 +602,7 @@ export class VolumeEngine {
       let gainDb = Number(route.normalizerGainDb) || 0;
       const previousGainDb = gainDb;
       if (this.state.normalizerEnabled && this.state.extensionActive &&
-        this.state.enabled && !this.state.muted && !this.restricted && audible) {
+        this.state.enabled && !this.state.muted && !this.restriction && audible) {
         if (!route.musicLevelState) route.musicLevelState = createMusicLevelState();
         gainDb = computeSafeNormalizerGainDb(
           gainDb,
@@ -616,24 +644,25 @@ export class VolumeEngine {
 
   // ------------------------------------------------------------------ api ---
 
-  /** Mirrors the extension's getAudioControlState response. */
+  /** Mirrors the extension's getAudioControlState response (cs.js):
+   *  availability + reasons fold in the native-route policy. */
   getAudioControlState(): AudioControlState {
-    const limited = this.restricted;
+    const limited = this.limitationReason();
     return {
       volume: this.state.dB,
       requestedVolume: this.state.requestedDb,
       mono: this.state.mono,
       monoAvailable: !limited,
-      monoUnavailableReason: limited ? "restricted" : "",
+      monoUnavailableReason: limited,
       muted: this.state.muted,
       normalizerEnabled: this.state.normalizerEnabled,
       normalizerAvailable: !limited,
-      normalizerUnavailableReason: limited ? "restricted" : "",
+      normalizerUnavailableReason: limited,
       peakDb: this.lastMeter.peakDb,
       normalizerGainDb: this.lastMeter.normalizerGainDb,
-      boostLimited: limited,
+      boostLimited: limited !== "",
       maxDb: this.maxDb(),
-      limitationReason: limited ? "restricted" : "",
+      limitationReason: limited,
     };
   }
 
@@ -674,7 +703,7 @@ export class VolumeEngine {
       gainValue,
       routes: this.entries.size,
       contextState: this.context ? this.context.state : "none",
-      restricted: this.restricted,
+      restricted: this.limitationReason() !== "",
       fallbackVolume,
     };
   }

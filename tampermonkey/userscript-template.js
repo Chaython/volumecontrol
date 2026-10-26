@@ -12,6 +12,7 @@
 // @grant        GM_getValue
 // @grant        GM_deleteValue
 // @grant        GM_listValues
+// @grant        GM_addValueChangeListener
 // @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
 // @icon         https://chaython.github.io/volumecontrol/vc/ico.svg
@@ -57,6 +58,17 @@
     var BRIDGE_TARGET = 'volume-control-page-audio';
     var HEARTBEAT_MS = 3000;          // cs.js PAGE_BRIDGE_HEARTBEAT_MS
     var HOOK_KEY = '__volumeControlPageAudioHook';
+
+    // cs.js BOOST_LIMIT_NOTES (verbatim) — the popup's boost-limit verdict
+    // layer. 'fallback' is shared.js BOOST_LIMIT_NOTE, used for unknown
+    // reasons (and by the mono/normalizer unavailability texts).
+    var BOOST_LIMIT_NOTES = {
+        'cross-origin': 'Limited by cross-origin media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.',
+        'restricted': 'Limited by DRM-protected or otherwise restricted media. Browser security only allows fallback volume control here, so you can lower volume but boosting and mono may be unavailable.',
+        'route-failed': 'WebAudio routing failed or is unavailable. Native media may allow attenuation, but boosting and mono are unavailable; an already-captured element with a closed audio context may stay silent until reload.',
+        'native-route': 'Force native fallback is selected. Native HTML media volume can attenuate or mute, but boosting, mono, and Normalize require WebAudio.',
+        'fallback': 'Boosting, mono, and normalization may be unavailable on this media because the browser only allows fallback volume control. You can still lower volume.'
+    };
 
     var IS_TOP_FRAME = (function () {
         try { return window.self === window.top; } catch (e) { return false; }
@@ -129,12 +141,23 @@
 
     function hostname() { return location.hostname || location.host || 'localhost'; }
     var HOST = hostname();
-    var SITE_KEY = 'vc-site:' + HOST;
+    var PAGE_URL = location.href;
+    // Remembered profiles live under vc-site:<key> where <key> can be a bare
+    // domain, a path ("example.com/videos") or — for manually created or
+    // renamed profiles — a query ("youtube.com/watch?v=abc"). Legacy
+    // host-only vc-site:<host> keys keep working: the ranked matcher treats
+    // them as domain-only entries (canonicalized).
+    var SITE_PREFIX = 'vc-site:';
+    // The per-site Normalize preference is persisted SEPARATELY from
+    // Remembered Audio (extension siteNormalizerSettings — README: "does not
+    // require Remember"), with its own global default.
+    var NORMALIZER_PREFIX = 'vc-normalizer:';
+    var NORMALIZER_DEFAULT_KEY = 'vc-normalizer-default';
     var EXCLUDED_KEY = 'vc-excluded:' + HOST;
 
     // ---- site access lists (options.html "Blocked Sites"/"Allowed Sites") --
     var LISTS_KEY = 'vc-lists';
-    var lists = (function () {
+    function loadLists() {
         var raw = store.get(LISTS_KEY, null);
         var merged = { blocklist: [], whitelist: [], whitelistMode: false };
         if (raw && typeof raw === 'object') {
@@ -143,33 +166,310 @@
             merged.whitelistMode = !!raw.whitelistMode;
         }
         return merged;
-    })();
+    }
+    var lists = loadLists();
     function persistLists() { store.set(LISTS_KEY, lists); }
-    function listEntryMatches(entry, host) {
-        // options.js blocklistMatches(): the domain part decides (any path in
-        // an entry is informational); matches the host and its subdomains.
-        var domain = String(entry || '').split('/')[0].trim().toLowerCase();
-        if (!domain) return false;
-        return domain === host || host.endsWith('.' + domain);
+
+    // shared.js canonicalizeHostname(): lowercased, trailing dot and a
+    // leading "www." stripped. Entries AND the current host are compared
+    // through it, so "www.youtube.com" and "youtube.com" are one site —
+    // the Active toggle and the Add-site input therefore write the same
+    // entry for the same site (extension parity).
+    function canonicalHost(host) {
+        var h = String(host == null ? '' : host).trim().toLowerCase();
+        if (!h) return '';
+        return h.replace(/\.$/, '').replace(/^www\./, '');
     }
-    function siteBlockedByLists() {
-        if (lists.whitelistMode) {
-            for (var i = 0; i < lists.whitelist.length; i++) {
-                if (listEntryMatches(lists.whitelist[i], HOST)) return false;
+    var CANON_HOST = canonicalHost(HOST);
+
+    // shared.js splitBlocklistEntry(): "domain[/path][?query]" → parts, the
+    // domain canonicalized. Paths are NOT informational (extension issue
+    // #69): "twitch.tv/*/clip/*" must scope the entry to clip pages, never
+    // the whole site.
+    function splitEntry(entry) {
+        var v = String(entry == null ? '' : entry).trim().toLowerCase();
+        if (!v) return null;
+        v = v.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');   // scheme, if stored raw
+        v = v.replace(/^[^/@]+@/, '');                   // credentials
+        var query = '';
+        var qi = v.indexOf('?');
+        if (qi !== -1) { query = v.slice(qi + 1); v = v.slice(0, qi); }
+        var si = v.indexOf('/');
+        var domainPart = (si === -1 ? v : v.slice(0, si)).replace(/:\d+$/, '');   // port, if stored raw
+        var domain = canonicalHost(domainPart);
+        var path = si === -1 ? '' : v.slice(si);
+        while (path.length > 1 && path.charAt(path.length - 1) === '/') path = path.slice(0, -1);
+        if (path === '/') path = '';
+        if (!domain) return null;
+        return { domain: domain, path: path, query: query };
+    }
+    function wildcardToRegExp(pattern, seg) {
+        // shared.js: "*" matches any chars except "/" inside a path segment
+        // (and any chars at all in a query).
+        var body = pattern.split('*').map(function (part) {
+            return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }).join(seg);
+        return new RegExp('^' + body + '$');
+    }
+    // shared.js isUrlBlockedByEntry() + saved-entry query semantics: a bare
+    // domain matches the host and its subdomains; a path scopes the entry
+    // ("*" wildcards per segment; a plain path also covers descendants); a
+    // query, when saved, must match exactly or via wildcards.
+    function entryMatchesUrl(entry, url) {
+        var parts = splitEntry(entry);
+        if (!parts) return false;
+        var parsed = null;
+        try { parsed = new URL(String(url)); } catch (e) { parsed = null; }
+        if (!parsed) return false;
+        var host = canonicalHost(parsed.hostname);
+        if (parts.domain !== host && !host.endsWith('.' + parts.domain)) return false;
+        var path = parsed.pathname || '/';
+        if (parts.path) {
+            try {
+                if (parts.path.indexOf('*') !== -1) {
+                    if (!wildcardToRegExp(parts.path, '[^/]*').test(path)) return false;
+                } else if (path !== parts.path && !path.startsWith(parts.path + '/')) {
+                    return false;
+                }
+            } catch (e) { return false; }
+        }
+        if (parts.query) {
+            var q = parsed.search ? parsed.search.slice(1) : '';
+            try {
+                if (parts.query.indexOf('*') !== -1) {
+                    if (!wildcardToRegExp(parts.query, '.*').test(q)) return false;
+                } else if (q !== parts.query) return false;
+            } catch (e) { return false; }
+        }
+        return true;
+    }
+    function entriesMatchingUrl(list, url) {
+        var out = [];
+        for (var i = 0; i < list.length; i++) {
+            if (entryMatchesUrl(list[i], url)) out.push(list[i]);
+        }
+        return out;
+    }
+    function listsBlockUrl(ls, url) {
+        if (ls.whitelistMode) {
+            // whitelist mode: only LISTED sites run (a path-scoped entry
+            // allows exactly those paths, like the extension's allow list)
+            return entriesMatchingUrl(ls.whitelist, url).length === 0;
+        }
+        return entriesMatchingUrl(ls.blocklist, url).length > 0;
+    }
+    function siteBlockedByLists() { return listsBlockUrl(lists, PAGE_URL); }
+    // ---- remembered-profile keys (shared.js ranked settings matching) ----
+    // Remembered profiles — and, since 7.1.6, the per-site Normalize
+    // preference — are keyed by ENTRY, not just host:
+    //   "youtube.com"               whole site (legacy vc-site:<host> keys
+    //                               have this shape; the matcher canonicalizes)
+    //   "youtube.com/music"         path + descendants
+    //   "youtube.com/watch?v=abc"   exact query (manually created/renamed)
+    //   "youtube.com/watch?v=*"     query wildcard
+    // Loading picks the best-ranked match (shared.js getSiteSettingsKey);
+    // saving updates the best-matching entry or creates a path key
+    // (background.js mergeForUrl). Ported from shared.js:176-231, 233-318,
+    // 428-484.
+    function parseSiteLikeInput(value) {
+        // shared.js parseSiteLikeInput
+        var raw = String(value == null ? '' : value).trim();
+        if (!raw) return null;
+        if (/^(?:local file|file)$/i.test(raw) || /^file:/i.test(raw)) {
+            return { file: true, domain: 'file', path: '', query: '' };
+        }
+        var candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : 'http://' + raw;
+        var parsed = null;
+        try { parsed = new URL(candidate); } catch (e) { parsed = null; }
+        if (!parsed || !parsed.hostname) return null;
+        var path = parsed.pathname || '';
+        while (path.length > 1 && path.charAt(path.length - 1) === '/') path = path.slice(0, -1);
+        if (path === '/') path = '';
+        return {
+            file: false,
+            domain: canonicalHost(parsed.hostname),
+            path: path,
+            query: parsed.search ? parsed.search.slice(1) : ''
+        };
+    }
+    function normalizeSiteEntryInput(value, includeQuery) {
+        // shared.js normalizeSiteSettingsEntryInput: query preservation is
+        // opt-in (manual profile input); the popup's Remember/save path
+        // drops it.
+        var parsed = parseSiteLikeInput(value);
+        if (!parsed) return '';
+        if (parsed.file) return 'file';
+        return parsed.domain + parsed.path + (includeQuery && parsed.query ? '?' + parsed.query : '');
+    }
+    function splitSiteEntry(entry) {
+        // shared.js splitSiteSettingsEntry
+        var normalized = normalizeSiteEntryInput(entry, true);
+        if (!normalized) return null;
+        if (normalized === 'file') return { file: true, domain: 'file', path: '', query: '' };
+        var qi = normalized.indexOf('?');
+        var withoutQuery = qi === -1 ? normalized : normalized.slice(0, qi);
+        var query = qi === -1 ? '' : normalized.slice(qi + 1);
+        var si = withoutQuery.indexOf('/');
+        return {
+            file: false,
+            domain: si === -1 ? withoutQuery : withoutQuery.slice(0, si),
+            path: si === -1 ? '' : withoutQuery.slice(si),
+            query: query
+        };
+    }
+    function isUrlRememberedByEntry(url, savedEntry) {
+        // shared.js isUrlRememberedByEntry: bare domain matches the host and
+        // its subdomains; a path scopes the entry ("*" per segment, plain
+        // paths cover descendants); a SAVED query must match exactly or via
+        // wildcards — default profiles ignore the query entirely.
+        var saved = splitSiteEntry(savedEntry);
+        if (!saved) return false;
+        var rawUrl = String(url == null ? '' : url).trim();
+        if (!rawUrl) return false;
+        if (saved.file) return /^file:/i.test(rawUrl) || /^(?:local file|file)$/i.test(rawUrl);
+        var current = null;
+        try {
+            if (/^[a-z][a-z0-9+.-]*:[/]{2}/i.test(rawUrl)) {
+                var parsed = new URL(rawUrl);
+                if (!/^https?:$/.test(parsed.protocol)) return false;
+                current = {
+                    domain: canonicalHost(parsed.hostname),
+                    path: parsed.pathname || '/',
+                    query: parsed.search ? parsed.search.slice(1) : ''
+                };
             }
-            return true;          // whitelist mode: unlisted sites are off
+        } catch (e) { current = null; }
+        if (!current) {
+            var normalizedCurrent = normalizeSiteEntryInput(rawUrl, true);
+            if (!normalizedCurrent || normalizedCurrent === 'file') return false;
+            var split = splitSiteEntry(normalizedCurrent);
+            if (!split) return false;
+            current = { domain: split.domain, path: split.path || '/', query: split.query || '' };
         }
-        for (var j = 0; j < lists.blocklist.length; j++) {
-            if (listEntryMatches(lists.blocklist[j], HOST)) return true;
+        if (!(current.domain === saved.domain || current.domain.endsWith('.' + saved.domain))) return false;
+        if (saved.path) {
+            try {
+                if (saved.path.indexOf('*') !== -1) {
+                    if (!wildcardToRegExp(saved.path, '[^/]*').test(current.path)) return false;
+                } else if (current.path !== saved.path && !current.path.startsWith(saved.path + '/')) {
+                    return false;
+                }
+            } catch (e) { return false; }
         }
-        return false;
+        if (!saved.query) return true;
+        try {
+            if (saved.query.indexOf('*') !== -1) {
+                return wildcardToRegExp(saved.query, '.*').test(current.query || '');
+            }
+            return (current.query || '') === saved.query;
+        } catch (e) { return false; }
     }
+    function siteMatchRank(url, savedEntry) {
+        // shared.js getSiteSettingsMatchRank: query beats path beats bare
+        // domain, then literal length, then fewer wildcards, then deeper and
+        // longer domain labels.
+        var saved = splitSiteEntry(savedEntry);
+        if (!saved) return [0, 0, 0, 0, 0, 0, 0];
+        var currentDomain = '';
+        try {
+            currentDomain = canonicalHost(new URL(String(url)).hostname);
+        } catch (e) {
+            var normalized = normalizeSiteEntryInput(url);
+            var si = normalized.indexOf('/');
+            currentDomain = si === -1 ? normalized : normalized.slice(0, si);
+        }
+        var wildcardCount = ((saved.path || '').match(/\*/g) || []).length +
+            ((saved.query || '').match(/\*/g) || []).length;
+        var literalLength = (saved.path || '').replace(/\*/g, '').length +
+            (saved.query || '').replace(/\*/g, '').length;
+        return [
+            saved.query ? 1 : 0,
+            saved.path ? 1 : 0,
+            currentDomain === saved.domain ? 1 : 0,
+            literalLength,
+            -wildcardCount,
+            saved.domain.split('.').length,
+            saved.domain.length
+        ];
+    }
+    function compareSiteMatches(url, a, b) {
+        // shared.js compareSiteSettingsMatches: descending by rank, ties by
+        // localeCompare — matches[0] is the most specific profile.
+        var ar = siteMatchRank(url, a);
+        var br = siteMatchRank(url, b);
+        for (var i = 0; i < ar.length; i++) {
+            if (ar[i] !== br[i]) return br[i] - ar[i];
+        }
+        return String(a).localeCompare(String(b));
+    }
+    function getSiteSettingsKey(entries, url) {
+        // shared.js getSiteSettingsKey: exact normalized key (query kept)
+        // first, then the best-ranked remembered match.
+        if (!entries || !url) return null;
+        var normalizedWithQuery = normalizeSiteEntryInput(url, true);
+        if (normalizedWithQuery && entries[normalizedWithQuery]) return normalizedWithQuery;
+        var normalized = normalizeSiteEntryInput(url);
+        if (normalized === 'file' && entries['Local File']) return 'Local File';
+        var matches = [];
+        for (var key in entries) {
+            if (Object.prototype.hasOwnProperty.call(entries, key) && isUrlRememberedByEntry(url, key)) {
+                matches.push(key);
+            }
+        }
+        matches.sort(function (a, b) { return compareSiteMatches(url, a, b); });
+        return matches.length ? matches[0] : null;
+    }
+    function gmKeys() {
+        try {
+            if (typeof GM_listValues === 'function') return GM_listValues().map(String);
+        } catch (e) { /* fall through to the localStorage fallback */ }
+        var out = [];
+        try {
+            for (var i = 0; i < localStorage.length; i++) {
+                var k = localStorage.key(i);
+                if (k && k.indexOf('vc-tm:') === 0) out.push(k.slice(6));
+            }
+        } catch (e) { /* storage blocked */ }
+        return out;
+    }
+    function readPrefixedMap(prefix) {
+        var out = {};
+        gmKeys().forEach(function (k) {
+            if (k.indexOf(prefix) !== 0) return;
+            var v = store.get(k, null);
+            if (v && typeof v === 'object') out[k.slice(prefix.length)] = v;
+        });
+        return out;
+    }
+    function resolveSiteSettings(url) {
+        var map = readPrefixedMap(SITE_PREFIX);
+        var key = getSiteSettingsKey(map, url);
+        return { key: key || '', entry: key ? map[key] : null };
+    }
+    function normalizerDefaultOn() {
+        return !!store.get(NORMALIZER_DEFAULT_KEY, false);
+    }
+    function resolveNormalizerEnabled(url) {
+        // cs.js:2347-2350 — per-site entry (ranked match) → global default
+        var map = readPrefixedMap(NORMALIZER_PREFIX);
+        var key = getSiteSettingsKey(map, url);
+        if (key) return !!map[key].enabled;
+        return normalizerDefaultOn();
+    }
+    function bestSaveKey(prefix, url) {
+        // background.js mergeForUrl / popup.js setForUrl: update the
+        // best-matching existing entry, else create under the page's path
+        // key (query dropped — normalizeSiteSettingsEntryInput(url)).
+        var map = readPrefixedMap(prefix);
+        return getSiteSettingsKey(map, url) || normalizeSiteEntryInput(url);
+    }
+
     // one-time migration: the pre-7.1.4 per-site "Active off" flag becomes a
     // blocklist entry (the extension migrated its legacy allow list likewise)
     (function migrateExcludedFlag() {
         if (store.get(EXCLUDED_KEY, false)) {
-            if (!lists.blocklist.some(function (e) { return listEntryMatches(e, HOST); })) {
-                lists.blocklist.push(HOST);
+            if (!lists.blocklist.some(function (e) { return entryMatchesUrl(e, PAGE_URL); })) {
+                lists.blocklist.push(CANON_HOST);
             }
             persistLists();
         }
@@ -178,7 +478,8 @@
 
     // ---- debug defaults + per-site overrides (options.html Debug section) --
     var DEBUG_DEFAULTS_KEY = 'vc-debug-defaults';
-    var DEBUG_SITE_KEY = 'vc-debug:' + HOST;
+    var DEBUG_PREFIX = 'vc-debug:';
+    var DEBUG_SITE_KEY = DEBUG_PREFIX + HOST;
     function normalizeDebugConfig(raw) {
         var out = { debugMode: false, forceDrmCapture: false, forceCorsCapture: false, debugRouteMode: 'auto' };
         if (raw && typeof raw === 'object') {
@@ -191,7 +492,10 @@
         return out;
     }
     var debugDefaults = normalizeDebugConfig(store.get(DEBUG_DEFAULTS_KEY, null));
-    var siteDebug = normalizeDebugConfig(store.get(DEBUG_SITE_KEY, null) || null);
+    var siteDebug = (function () {
+        var raw = store.get(DEBUG_SITE_KEY, null);
+        return raw ? normalizeDebugConfig(raw) : null;   // null = no override
+    })();
     function effectiveDebugConfig() {
         // options.html semantics: per-site overrides persist independently;
         // DRM/CORS force when either the global default or the site override
@@ -220,9 +524,30 @@
     }
     applyDebugHighlight(effectiveDebugConfig().debugMode);
 
-    var siteSettings = store.get(SITE_KEY, null) || null;   // {remember, volume, mono, muted, normalizer}
+    // one-time normalize migration: ≤7.1.5 stored the Normalize preference
+    // INSIDE the Remembered Audio entry, so it was lost whenever Remember was
+    // off. Move it to the independent vc-normalizer: store (same profile
+    // key, canonicalized) — the field's removal makes this run only once.
+    (function migrateNormalizerPrefs() {
+        var map = readPrefixedMap(SITE_PREFIX);
+        var normMap = readPrefixedMap(NORMALIZER_PREFIX);
+        for (var key in map) {
+            if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
+            var entry = map[key];
+            if (!entry || typeof entry.normalizer !== 'boolean') continue;
+            var normKey = normalizeSiteEntryInput(key, true) || key;
+            if (!normMap[normKey]) store.set(NORMALIZER_PREFIX + normKey, { enabled: !!entry.normalizer });
+            delete entry.normalizer;
+            if (entry.remember) store.set(SITE_PREFIX + key, entry);
+            else store.del(SITE_PREFIX + key);
+        }
+    })();
+
+    var resolvedSite = resolveSiteSettings(PAGE_URL);
+    var siteSettingsKey = resolvedSite.key;         // '' when nothing matches
+    var siteSettings = resolvedSite.entry;           // {remember, volume, mono, muted}
     var excluded = siteBlockedByLists();
-    var normalizerConfig = (function () {
+    function loadNormalizerConfig() {
         var cfg = store.get('vc-normalizer-config', null);
         if (!cfg || typeof cfg !== 'object') return DEFAULT_NORMALIZER_CONFIG;
         var merged = {};
@@ -234,30 +559,122 @@
         merged.ceilingDb = Math.max(-6, Math.min(-0.1, Number(merged.ceilingDb) || -1));
         merged.responseMs = Math.max(100, Math.min(3000, Number(merged.responseMs) || 600));
         return merged;
-    })();
+    }
+    var normalizerConfig = loadNormalizerConfig();
 
-    // Live state (what the engine receives).
+    // Live state (what the engine receives). dB is the REQUESTED value —
+    // media limits clamp only the applied gain (cs.js requestedDb vs dB),
+    // so a preserved +12 dB request survives a temporary DRM fallback.
     var state = {
         enabled: !excluded,
         dB: siteSettings && siteSettings.remember ? normalizeDb(siteSettings.volume) : 0,
         mono: !!(siteSettings && siteSettings.remember && siteSettings.mono),
         muted: !!(siteSettings && siteSettings.remember && siteSettings.muted),
-        normalizerEnabled: !!(siteSettings && siteSettings.remember && siteSettings.normalizer)
+        // cs.js:2347-2356: the Normalize preference resolves independently of
+        // Remembered Audio (per-site entry → global default).
+        normalizerEnabled: resolveNormalizerEnabled(PAGE_URL)
     };
     var remembered = !!(siteSettings && siteSettings.remember);
-    var restriction = '';            // '' | 'restricted' | 'cross-origin'
+    var engineRestriction = '';      // hook aggregate: '' | 'restricted' | 'cross-origin'
     var meter = { peakDb: -Infinity, normalizerGainDb: 0 };
     var meterListeners = [];
 
     function persistSite() {
-        if (!remembered) { store.del(SITE_KEY); return; }
-        store.set(SITE_KEY, {
+        // background.js mergeForUrl / popup.js removeForUrl: Remember off
+        // deletes the profile governing this URL; Remember on updates the
+        // best-matching entry, or creates one under the page's path key.
+        if (!remembered) {
+            if (siteSettingsKey) store.del(SITE_PREFIX + siteSettingsKey);
+            return;
+        }
+        var key = siteSettingsKey || bestSaveKey(SITE_PREFIX, PAGE_URL);
+        siteSettingsKey = key;
+        store.set(SITE_PREFIX + key, {
             remember: true,
-            volume: state.dB,
+            volume: state.dB,        // requested dB (background.js saves requestedVolume)
             mono: state.mono,
-            muted: state.muted,
-            normalizer: state.normalizerEnabled
+            muted: state.muted
         });
+    }
+    function persistNormalizerPref() {
+        // popup.js toggleNormalizer → setForUrl: the per-site preference is
+        // saved independently from Remembered Audio (README: "does not
+        // require Remember"), updating the best-matching entry or creating
+        // one under the page's path key.
+        store.set(NORMALIZER_PREFIX + bestSaveKey(NORMALIZER_PREFIX, PAGE_URL), {
+            enabled: state.normalizerEnabled
+        });
+    }
+
+    // ---- boost-limit verdicts (cs.js getBoostLimitInfo + popup.js texts) --
+    function isLimitReasonBypassed(reason) {
+        // cs.js isBoostLimitReasonBypassed: the dangerous debug overrides
+        // lift the matching verdict, so a stale clamp cannot survive them.
+        if (reason === 'restricted' && effectiveDebugConfig().forceDrmCapture) return true;
+        if (reason === 'cross-origin' && effectiveDebugConfig().forceCorsCapture) return true;
+        return false;
+    }
+    function currentLimitation() {
+        // The MAIN-world hook can report only 'restricted'/'cross-origin'
+        // (route-failed is invisible from the controller). Force native is a
+        // route POLICY, not a capability verdict (cs.js:600-605): it clamps
+        // maxDb to 0, but a more informative DRM/CORS verdict outranks it.
+        // Unknown reasons fall back to BOOST_LIMIT_NOTES.fallback.
+        var reason = isLimitReasonBypassed(engineRestriction) ? '' : engineRestriction;
+        if (!reason && effectiveDebugConfig().debugRouteMode === 'native') reason = 'native-route';
+        if (!reason) return { reason: '', note: '', boostLimited: false, maxDb: MAX_DB };
+        return {
+            reason: reason,
+            note: BOOST_LIMIT_NOTES[reason] || BOOST_LIMIT_NOTES.fallback,
+            boostLimited: true,
+            maxDb: 0
+        };
+    }
+    function monoAvailability() {
+        // cs.js getMonoAvailability: the native-route policy first, then any
+        // boost-limit verdict (reason '' degrades to the fallback note).
+        if (effectiveDebugConfig().debugRouteMode === 'native') {
+            return { available: false, reason: 'native-route' };
+        }
+        var limit = currentLimitation();
+        if (limit.boostLimited) return { available: false, reason: limit.reason || 'fallback' };
+        return { available: true, reason: '' };
+    }
+    function normalizerAvailability() {
+        // cs.js getNormalizerAvailability (identical rules)
+        if (effectiveDebugConfig().debugRouteMode === 'native') {
+            return { available: false, reason: 'native-route' };
+        }
+        var limit = currentLimitation();
+        if (limit.boostLimited) return { available: false, reason: limit.reason || 'fallback' };
+        return { available: true, reason: '' };
+    }
+    // popup.js applyMonoAvailability — 5-way reason texts (verbatim)
+    function monoUnavailableMessage(reason) {
+        return reason === 'restricted'
+            ? 'Mono unavailable while DRM/restricted media is using fallback audio.'
+            : reason === 'cross-origin'
+                ? 'Mono unavailable while cross-origin media is using fallback audio.'
+                : reason === 'route-failed'
+                    ? 'Mono unavailable because the WebAudio route could not be created.'
+                    : reason === 'native-route'
+                        ? 'Mono unavailable while HTML Media Route Override is Force native volume fallback.'
+                        : 'Mono unavailable while WebAudio processing is unavailable.';
+    }
+    // popup.js applyNormalizerState — 4-way reason texts (verbatim)
+    function normalizerUnavailableMessage(reason) {
+        return reason === 'restricted'
+            ? 'Normalize cannot process DRM-protected audio in this browser.'
+            : reason === 'cross-origin'
+                ? 'Normalize cannot analyze cross-origin audio without WebAudio access.'
+                : reason === 'native-route'
+                    ? 'Normalize requires WebAudio; Force native routing is selected.'
+                    : 'Normalize needs a supported WebAudio route and cannot process this media.';
+    }
+    function appliedDb() {
+        // The gain actually applied: the requested value clamped by the
+        // current media limitation (cs.js normalizeDbForCurrentMedia).
+        return Math.min(state.dB, currentLimitation().maxDb);
     }
 
     // ============================================================= bridge
@@ -266,7 +683,7 @@
     function currentState() {
         return {
             enabled: state.enabled,
-            dB: state.dB,
+            dB: appliedDb(),        // the hook receives the clamped value (cs.js)
             mono: state.mono,
             muted: state.muted,
             normalizerEnabled: state.normalizerEnabled,
@@ -314,12 +731,16 @@
         if (data.command === 'requestState') {
             sendState();
         } else if (data.command === 'locationChanged') {
-            // SPA navigation inside the same site — nothing changes for us
-            // (settings are per-hostname), but re-sync in case the hook reset.
-            sendState();
+            // SPA navigation: the URL feeds the access-list verdict, the
+            // ranked settings key and the Normalize preference — re-run all
+            // of them like cs.js start() does (path-scoped entries may now
+            // match differently). The hook's href payload is untrusted page
+            // data; location.href is authoritative (cs.js:2455-2458).
+            reevaluateForLocation();
         } else if (data.command === 'pageRestrictionChanged') {
-            restriction = data.restriction === 'restricted' ? 'restricted'
+            engineRestriction = data.restriction === 'restricted' ? 'restricted'
                 : data.restriction === 'cross-origin' ? 'cross-origin' : '';
+            sendState();       // the applied gain may need re-clamping
             notifyUI();
         } else if (data.command === 'meterUpdate') {
             var peak = Number(data.peakDb);
@@ -394,10 +815,22 @@
 
     // ============================================================= actions
     function setVolume(db) {
-        state.dB = Math.max(MIN_DB, Math.min(restriction === 'restricted' ? 0 : MAX_DB, normalizeDb(db)));
+        // background.js setVolume: the REQUESTED value is kept (and
+        // remembered) even while media limits clamp the applied gain.
+        state.dB = normalizeDb(db);
         persistSite();
         sendState();
         notifyUI();
+    }
+    function bumpVolume(delta) {
+        // background.js volume-up ceiling guard: at a boost-limited ceiling
+        // a press must not replace the preserved request with an invisible
+        // +1 dB change that only takes effect on later, routable media.
+        if (delta > 0) {
+            var limit = currentLimitation();
+            if (limit.boostLimited && appliedDb() >= limit.maxDb) return;
+        }
+        setVolume(state.dB + delta);
     }
     function toggleMute() {
         state.muted = !state.muted;
@@ -406,38 +839,45 @@
         notifyUI();
     }
     function toggleMono() {
-        if (restriction === 'restricted') return;
+        // popup.js guards the disabled switch (mono is unavailable while a
+        // boost-limit verdict or the native-route policy is active)
+        if (!monoAvailability().available) return;
         state.mono = !state.mono;
         persistSite();
         sendState();
         notifyUI();
     }
     function toggleNormalizer() {
-        if (restriction === 'restricted') return;
+        // The preference stays valid even while unavailable (popup.js keeps
+        // it stored/checked); only changes are blocked.
+        if (!normalizerAvailability().available) return;
         state.normalizerEnabled = !state.normalizerEnabled;
-        persistSite();
+        persistNormalizerPref();     // independent of Remember (FIX parity)
         sendState();
         notifyUI();
     }
     function toggleRemember() {
         remembered = !remembered;
-        if (remembered) persistSite(); else store.del(SITE_KEY);
+        persistSite();          // writes the profile, or deletes it (removeForUrl)
         notifyUI();
     }
     function toggleActive() {
         // popup.js/options.js semantics: Active edits the access list that
         // governs this site — the blocklist entry in Blacklist mode, the
-        // whitelist entry in Whitelist mode.
+        // whitelist entry in Whitelist mode. Like background.js
+        // setSiteActive, flipping Active ON removes EVERY entry that keeps
+        // this page inactive (path-scoped ones included) and new entries are
+        // stored canonicalized ("www." stripped).
         if (lists.whitelistMode) {
-            var allowed = lists.whitelist.some(function (e) { return listEntryMatches(e, HOST); });
+            var allowed = entriesMatchingUrl(lists.whitelist, PAGE_URL).length > 0;
             lists.whitelist = allowed
-                ? lists.whitelist.filter(function (e) { return !listEntryMatches(e, HOST); })
-                : lists.whitelist.concat([HOST]);
+                ? lists.whitelist.filter(function (e) { return !entryMatchesUrl(e, PAGE_URL); })
+                : lists.whitelist.concat([CANON_HOST]);
         } else {
-            var blocked = lists.blocklist.some(function (e) { return listEntryMatches(e, HOST); });
+            var blocked = entriesMatchingUrl(lists.blocklist, PAGE_URL).length > 0;
             lists.blocklist = blocked
-                ? lists.blocklist.filter(function (e) { return !listEntryMatches(e, HOST); })
-                : lists.blocklist.concat([HOST]);
+                ? lists.blocklist.filter(function (e) { return !entryMatchesUrl(e, PAGE_URL); })
+                : lists.blocklist.concat([CANON_HOST]);
         }
         persistLists();
         excluded = siteBlockedByLists();
@@ -446,22 +886,144 @@
         notifyUI();
     }
     function resetSiteSettings() {
-        store.del(SITE_KEY);
+        // remove every profile that governs this page: remembered audio
+        // (best match + legacy host key), the Normalize preference and the
+        // per-site debug override, then unblock the URL in the lists.
+        var siteKey = siteSettingsKey || normalizeSiteEntryInput(PAGE_URL);
+        if (siteKey) store.del(SITE_PREFIX + siteKey);
+        store.del(SITE_PREFIX + HOST);          // legacy host-only key
+        store.del(NORMALIZER_PREFIX + (siteKey || HOST));
         store.del(EXCLUDED_KEY);
-        lists.blocklist = lists.blocklist.filter(function (e) { return !listEntryMatches(e, HOST); });
+        store.del(DEBUG_SITE_KEY);
+        lists.blocklist = lists.blocklist.filter(function (e) { return !entryMatchesUrl(e, PAGE_URL); });
         persistLists();
         remembered = false;
+        siteSettingsKey = '';
+        siteSettings = null;
+        siteDebug = null;
         excluded = siteBlockedByLists();
         state.enabled = !excluded; state.dB = 0; state.mono = false;
-        state.muted = false; state.normalizerEnabled = false;
+        state.muted = false;
+        state.normalizerEnabled = resolveNormalizerEnabled(PAGE_URL);
         sendState();
         notifyUI();
+    }
+
+    // ---- re-resolution (SPA navigation + cross-tab storage changes) -------
+    function reevaluateForLocation() {
+        // cs.js start() on locationChanged: re-run everything the URL feeds.
+        PAGE_URL = location.href;
+        var resolved = resolveSiteSettings(PAGE_URL);
+        siteSettingsKey = resolved.key;
+        siteSettings = resolved.entry;
+        // A matching remembered profile replaces the controls; without one,
+        // unsaved in-tab values survive the navigation (cs.js:2410-2421).
+        remembered = !!(siteSettings && siteSettings.remember);
+        if (remembered) {
+            if (siteSettings.volume !== undefined) state.dB = normalizeDb(siteSettings.volume);
+            if (siteSettings.mono !== undefined) state.mono = !!siteSettings.mono;
+            if (siteSettings.muted !== undefined) state.muted = !!siteSettings.muted;
+        }
+        state.normalizerEnabled = resolveNormalizerEnabled(PAGE_URL);
+        excluded = listsBlockUrl(lists, PAGE_URL);
+        state.enabled = !excluded;
+        sendState();
+        notifyUI();      // the popup shows any new exclusion status live
+    }
+
+    function reapplySettingsFromStorage() {
+        // Mirrors cs.js storage.onChanged → start(): re-resolve lists, the
+        // ranked settings key, the Normalize preference, the normalizer
+        // config and the debug settings from storage, then apply only what
+        // actually changed. Identical resolved state → return (the writer
+        // tab's echo events stop here, so no feedback loop).
+        var nextLists = loadLists();
+        var resolved = resolveSiteSettings(PAGE_URL);
+        var entry = resolved.entry;
+        var rememberedNow = !!(entry && entry.remember);
+        var next = {
+            excluded: listsBlockUrl(nextLists, PAGE_URL),
+            dB: rememberedNow && entry.volume !== undefined ? normalizeDb(entry.volume) : state.dB,
+            mono: rememberedNow && entry.mono !== undefined ? !!entry.mono : state.mono,
+            muted: rememberedNow && entry.muted !== undefined ? !!entry.muted : state.muted,
+            normalizerEnabled: resolveNormalizerEnabled(PAGE_URL),
+            config: loadNormalizerConfig(),
+            debugDefaults: normalizeDebugConfig(store.get(DEBUG_DEFAULTS_KEY, null)),
+            siteDebug: (function () {
+                var raw = store.get(DEBUG_SITE_KEY, null);
+                return raw ? normalizeDebugConfig(raw) : null;
+            })()
+        };
+        var unchanged =
+            JSON.stringify(lists) === JSON.stringify(nextLists) &&
+            excluded === next.excluded &&
+            siteSettingsKey === resolved.key &&
+            remembered === rememberedNow &&
+            state.dB === next.dB && state.mono === next.mono && state.muted === next.muted &&
+            state.normalizerEnabled === next.normalizerEnabled &&
+            JSON.stringify(normalizerConfig) === JSON.stringify(next.config) &&
+            JSON.stringify(debugDefaults) === JSON.stringify(next.debugDefaults) &&
+            JSON.stringify(siteDebug) === JSON.stringify(next.siteDebug);
+        if (unchanged) return;
+        lists = nextLists;
+        siteSettingsKey = resolved.key;
+        siteSettings = entry;
+        remembered = rememberedNow;
+        excluded = next.excluded;
+        state.enabled = !excluded;
+        state.dB = next.dB; state.mono = next.mono; state.muted = next.muted;
+        state.normalizerEnabled = next.normalizerEnabled;
+        normalizerConfig = next.config;
+        debugDefaults = next.debugDefaults;
+        siteDebug = next.siteDebug;
+        applyDebugHighlight(effectiveDebugConfig().debugMode);
+        sendState();
+        notifyUI();
+    }
+
+    // ---- cross-tab live sync (cs.js storage.onChanged) --------------------
+    // GM storage writes from this script's instances in OTHER tabs (or this
+    // tab's echo — TM may deliver the event to the writer too) re-resolve
+    // and re-apply here. Registration is per key, so re-scan periodically
+    // and after every event to pick up vc-site:/vc-normalizer:/vc-debug:
+    // keys that did not exist when the watchers were last registered.
+    var storageWatchKeys = [];
+    function watchedStorageKeys() {
+        var keys = [LISTS_KEY, 'vc-normalizer-config', NORMALIZER_DEFAULT_KEY, DEBUG_DEFAULTS_KEY];
+        gmKeys().forEach(function (k) {
+            if (k.indexOf(SITE_PREFIX) === 0 || k.indexOf(NORMALIZER_PREFIX) === 0 ||
+                k.indexOf(DEBUG_PREFIX) === 0) keys.push(k);
+        });
+        return keys;
+    }
+    var storageResyncTimer = null;
+    function onStorageKeyChanged() {
+        if (storageResyncTimer) return;       // coalesce bursts (Reset-all)
+        storageResyncTimer = setTimeout(function () {
+            storageResyncTimer = null;
+            watchStorage();
+            reapplySettingsFromStorage();
+        }, 60);
+    }
+    function watchStorage() {
+        if (typeof GM_addValueChangeListener !== 'function') return;
+        watchedStorageKeys().forEach(function (k) {
+            if (storageWatchKeys.indexOf(k) !== -1) return;
+            storageWatchKeys.push(k);
+            try { GM_addValueChangeListener(k, onStorageKeyChanged); } catch (e) { /* rejected */ }
+        });
     }
 
     // ============================================================= UI (top frame)
     var ui = null;
 
-    function notifyUI() { if (ui) ui.refresh(); }
+    function notifyUI() {
+        if (!ui) return;
+        ui.refresh();
+        // keep an open Advanced view in step (cross-tab storage changes,
+        // SPA re-evaluation) — cheap while the volume view is showing
+        if (ui.syncIfVisible) ui.syncIfVisible();
+    }
 
     function buildUI() {
         var host = document.createElement('div');
@@ -550,6 +1112,13 @@
         var advSdDrm = advRoot.querySelector('#adv-sd-drm');
         var advSdCors = advRoot.querySelector('#adv-sd-cors');
         var advSdRoute = advRoot.querySelector('#adv-sd-route');
+        // normalizer default + management lists + about (v7.1.6)
+        var advNormDefault = advRoot.querySelector('#adv-normalizer-default');
+        var advMemoryList = advRoot.querySelector('#adv-memory-list');
+        var advDebugList = advRoot.querySelector('#adv-debug-list');
+        var normPanel = root.querySelector('.normalizer-panel');
+        var normSwitchLabel = root.querySelector('.normalizer-switch');
+        var monoLabel = root.querySelector('label[for="mono-checkbox"]');
 
         // dark mode follows the browser like the extension popup
         var darkQuery = null;
@@ -567,7 +1136,9 @@
         var wheelRemainder = 0;
         var lastMeterPaint = 0;
 
-        function maxDb() { return restriction === 'restricted' ? 0 : MAX_DB; }
+        // cs.js getBoostLimitInfo().maxDb: 0 for ANY limitation reason (DRM,
+        // CORS, route failure, force-native), +32 otherwise.
+        function maxDb() { return currentLimitation().maxDb; }
         function displayDb() { return Math.min(state.dB, maxDb()); }
 
         function commitText(raw) {
@@ -672,13 +1243,24 @@
             safeVal(advCeiling, normalizerConfig.ceilingDb);
             safeVal(advResponse, normalizerConfig.responseMs);
             if (shadow.activeElement !== advTruePeak) advTruePeak.checked = !!normalizerConfig.experimentalTruePeak;
+            if (shadow.activeElement !== advNormDefault) advNormDefault.checked = normalizerDefaultOn();
             var installed = hookInstalled();
             advEngine.textContent = installed
                 ? 'Engine: active on this page \u2014 hook installed'
                 : 'Engine: waiting (strict-CSP pages fall back within ~2 s)';
             syncAccess();
             syncDebug();
+            renderMemoryList();
+            renderDebugList();
         }
+        advNormDefault.addEventListener('change', function () {
+            // options.html "Normalize by default on sites without an override"
+            // → cs.js:2347-2356 re-resolves the preference for this page
+            store.set(NORMALIZER_DEFAULT_KEY, !!advNormDefault.checked);
+            state.normalizerEnabled = resolveNormalizerEnabled(PAGE_URL);
+            sendState();
+            refresh();
+        });
         function commitAdvanced() {
             var cfg = {
                 mode: advMode.value === 'adaptive' ? 'adaptive' : 'music',
@@ -700,13 +1282,15 @@
         // ---- site access lists (options.html Blocked/Allowed Sites) ---------
         function normalizeAccessInput(raw) {
             // shared.js input normalizer: strip scheme, credentials, port and
-            // a leading www.; any path/query stays (informational).
+            // a leading www.; any path/query stays (path-scoped entries,
+            // issue #69); a trailing "/" is meaningless and trimmed.
             var v = String(raw == null ? '' : raw).trim().toLowerCase();
             v = v.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
             v = v.replace(/^[^/@]+@/, '');
-            v = v.replace(/:\d+(?=\/|$)/, '');
+            v = v.replace(/:\d+(?=\/|$|\?)/, '');
             v = v.replace(/^www\./, '');
-            return v.replace(/^\/+/, '');
+            v = v.replace(/^\/+/, '');
+            return v.replace(/\/+$/, '');
         }
         var accessStatusTimer = null;
         function showAccessStatus(text) {
@@ -723,10 +1307,13 @@
             advSiteList.innerHTML = '';
             entries.forEach(function (entry) {
                 var row = document.createElement('div');
-                row.className = 'vc-adv-entry' + (listEntryMatches(entry, HOST) ? ' vc-current' : '');
+                row.className = 'vc-adv-entry' + (entryMatchesUrl(entry, PAGE_URL) ? ' vc-current' : '');
                 var name = document.createElement('span');
                 name.textContent = entry;
-                name.title = 'Matches ' + String(entry).split('/')[0] + ' and its subdomains';
+                var parts = splitEntry(entry);
+                name.title = parts && parts.path
+                    ? 'Scoped to ' + parts.path + ' on ' + parts.domain + ' (and its subdomains)'
+                    : 'Matches ' + (parts ? parts.domain : entry) + ' and its subdomains';
                 var rm = document.createElement('button');
                 rm.type = 'button';
                 rm.className = 'vc-adv-remove';
@@ -756,8 +1343,10 @@
         }
         function addAccessEntry() {
             var entry = normalizeAccessInput(advSiteInput.value);
-            var domain = entry.split('/')[0];
-            if (!domain || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(domain)) {
+            var domain = entry.split('/')[0].replace(/\?.*$/, '');
+            // parseSiteLikeInput semantics: single-label hosts (localhost,
+            // intranet names) are valid — new URL("http://localhost") is.
+            if (!domain || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(domain)) {
                 showAccessStatus('Enter a domain like example.com');
                 return;
             }
@@ -791,6 +1380,141 @@
             applyAccessChange();
         });
 
+        // ---- remembered profiles (options.html "Remembered Settings") ------
+        function sortedMapKeys(map) {
+            var keys = [];
+            for (var k in map) {
+                if (Object.prototype.hasOwnProperty.call(map, k)) keys.push(k);
+            }
+            keys.sort(function (a, b) { return String(a).localeCompare(String(b)); });
+            return keys;
+        }
+        function makeChip(text, title) {
+            var chip = document.createElement('span');
+            chip.className = 'vc-adv-chip';
+            chip.textContent = text;
+            if (title) chip.title = title;
+            return chip;
+        }
+        function makeRemoveButton(label, onRemove) {
+            var rm = document.createElement('button');
+            rm.type = 'button';
+            rm.className = 'vc-adv-remove';
+            rm.textContent = '\u00d7';
+            rm.setAttribute('aria-label', label);
+            rm.addEventListener('click', onRemove);
+            return rm;
+        }
+        function renderMemoryList() {
+            advMemoryList.innerHTML = '';
+            var map = readPrefixedMap(SITE_PREFIX);
+            var keys = sortedMapKeys(map);
+            if (!keys.length) {
+                var empty = document.createElement('div');
+                empty.className = 'vc-adv-empty';
+                empty.textContent = 'No remembered settings';
+                advMemoryList.appendChild(empty);
+                return;
+            }
+            keys.forEach(function (key) {
+                var entry = map[key];
+                var row = document.createElement('div');
+                row.className = 'vc-adv-entry' + (key === siteSettingsKey ? ' vc-current' : '');
+                // rename = options.js/background.js "rename": the new key is
+                // normalized with the query kept (Enter/blur commits)
+                var name = document.createElement('input');
+                name.type = 'text';
+                name.className = 'vc-adv-rename';
+                name.value = key;
+                name.spellcheck = false;
+                name.title = 'Rename remembered settings';
+                name.setAttribute('aria-label', 'Rename remembered settings for ' + key);
+                name.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') { e.preventDefault(); name.blur(); }
+                });
+                name.addEventListener('blur', function () {
+                    var newKey = normalizeSiteEntryInput(name.value, true);
+                    if (!newKey) {
+                        alert('Site cannot be empty.');
+                        name.value = key;
+                        return;
+                    }
+                    if (newKey === key) { name.value = key; return; }
+                    if (store.get(SITE_PREFIX + newKey, null)) {
+                        alert('A remembered entry for that site/path already exists.');
+                        name.value = key;
+                        return;
+                    }
+                    var value = store.get(SITE_PREFIX + key, null);
+                    if (value) {
+                        store.set(SITE_PREFIX + newKey, value);
+                        store.del(SITE_PREFIX + key);
+                    }
+                    reapplySettingsFromStorage();   // re-bind the current page
+                    renderMemoryList();
+                });
+                var chips = document.createElement('span');
+                chips.className = 'vc-adv-chips';
+                var vol = entry && entry.volume !== undefined ? normalizeDb(entry.volume) : 0;
+                chips.appendChild(makeChip((vol >= 0 ? '+' : '') + vol + ' dB', 'Remembered volume'));
+                if (entry && entry.mono) chips.appendChild(makeChip('Mono', 'Mono down-mix remembered'));
+                if (entry && entry.muted) chips.appendChild(makeChip('Muted', 'Mute remembered'));
+                row.appendChild(name);
+                row.appendChild(chips);
+                row.appendChild(makeRemoveButton('Remove remembered settings for ' + key, function () {
+                    store.del(SITE_PREFIX + key);
+                    reapplySettingsFromStorage();
+                    renderMemoryList();
+                }));
+                advMemoryList.appendChild(row);
+            });
+        }
+
+        // ---- per-site debug overrides (options.html "Site Debug Overrides") -
+        function renderDebugList() {
+            advDebugList.innerHTML = '';
+            var map = readPrefixedMap(DEBUG_PREFIX);
+            var keys = sortedMapKeys(map);
+            if (!keys.length) {
+                var empty = document.createElement('div');
+                empty.className = 'vc-adv-empty';
+                empty.textContent = 'No site debug overrides';
+                advDebugList.appendChild(empty);
+                return;
+            }
+            keys.forEach(function (key) {
+                var cfg = normalizeDebugConfig(map[key]);
+                var row = document.createElement('div');
+                row.className = 'vc-adv-entry' + (key === HOST ? ' vc-current' : '');
+                var name = document.createElement('span');
+                name.textContent = key;
+                var parts = splitSiteEntry(key);
+                if (parts && !parts.file) {
+                    name.title = parts.path
+                        ? 'Scoped to ' + parts.path + ' on ' + parts.domain
+                        : 'Applies to ' + parts.domain + ' and its subdomains';
+                }
+                var summary = document.createElement('span');
+                summary.className = 'vc-adv-summary';
+                var flags = [];
+                if (cfg.debugMode) flags.push('Highlight');
+                if (cfg.forceDrmCapture) flags.push('DRM');
+                if (cfg.forceCorsCapture) flags.push('CORS');
+                if (cfg.debugRouteMode !== 'auto') {
+                    flags.push('Route: ' + (cfg.debugRouteMode === 'webaudio' ? 'WebAudio' : 'Native'));
+                }
+                summary.textContent = flags.length ? flags.join(', ') : 'All off';
+                row.appendChild(name);
+                row.appendChild(summary);
+                row.appendChild(makeRemoveButton('Remove site debug override for ' + key, function () {
+                    store.del(DEBUG_PREFIX + key);
+                    reapplySettingsFromStorage();
+                    renderDebugList();
+                }));
+                advDebugList.appendChild(row);
+            });
+        }
+
         // ---- debug overrides (options.html Debug section) --------------------
         function syncDebug() {
             if (shadow.activeElement !== advDbgHighlight) advDbgHighlight.checked = !!debugDefaults.debugMode;
@@ -816,6 +1540,7 @@
             sendState();                                   // engine applies live
             applyDebugHighlight(effectiveDebugConfig().debugMode);
             syncDebug();
+            refresh();      // route changes alter the boost-limit verdict
         }
         function commitSiteDebug() {
             siteDebug = {
@@ -828,6 +1553,8 @@
             sendState();
             applyDebugHighlight(effectiveDebugConfig().debugMode);
             syncDebug();
+            renderDebugList();
+            refresh();
         }
         [advDbgHighlight, advForceDrm, advForceCors, advRoute].forEach(function (el) {
             el.addEventListener('change', commitDebugDefaults);
@@ -846,6 +1573,8 @@
             sendState();
             applyDebugHighlight(effectiveDebugConfig().debugMode);
             syncDebug();
+            renderDebugList();
+            refresh();
         });
         advBack.addEventListener('click', function () {
             setView('main');
@@ -873,16 +1602,12 @@
             }
             var n = 0;
             try {
-                if (typeof GM_listValues === 'function') {
-                    GM_listValues().forEach(function (k) { store.del(k); n++; });
-                } else {
-                    ['vc-first-run', 'vc-btn-pos', 'vc-normalizer-config', SITE_KEY, EXCLUDED_KEY,
-                     LISTS_KEY, DEBUG_DEFAULTS_KEY, DEBUG_SITE_KEY]
-                        .forEach(function (k) { store.del(k); n++; });
-                }
+                gmKeys().forEach(function (k) { store.del(k); n++; });
             } catch (e) {}
             // live state back to fresh-install values
             remembered = false;
+            siteSettingsKey = '';
+            siteSettings = null;
             lists = { blocklist: [], whitelist: [], whitelistMode: false };
             debugDefaults = normalizeDebugConfig(null);
             siteDebug = null;
@@ -990,6 +1715,15 @@
         document.addEventListener('fullscreenchange', adoptFullscreen);
         document.addEventListener('webkitfullscreenchange', adoptFullscreen);
         adoptFullscreen();   // in case the UI was built while already fullscreen
+        // The fullscreen element can be REPLACED while the host lives inside
+        // it (SPA players rebuild their DOM on navigation in fullscreen) —
+        // the host would be dropped with the old subtree and the GUI would
+        // vanish for the rest of the page's life. Heartbeat re-attach.
+        setInterval(function () {
+            try {
+                if (!document.contains(host)) document.documentElement.appendChild(host);
+            } catch (e) { /* page blocked the move — retry next tick */ }
+        }, 2000);
 
         // ---- one-time attention pulse (first run after install/update) -----
         function pulseButton() {
@@ -1011,8 +1745,10 @@
             meterEl.setAttribute('aria-valuenow', clamped.toFixed(1));
             var shown = Number.isFinite(m.normalizerGainDb) ? m.normalizerGainDb : 0;
             normGain.textContent = 'Gain ' + (shown >= 0 ? '+' : '') + shown.toFixed(1) + ' dB';
+            // popup.js:548 — the peak warning needs Normalize enabled AND
+            // available (any boost-limit verdict hides it)
             peakWarn.classList.toggle('hidden',
-                !(state.normalizerEnabled && restriction !== 'restricted' && Number.isFinite(peakDb) && peakDb >= -0.3));
+                !(state.normalizerEnabled && normalizerAvailability().available && Number.isFinite(peakDb) && peakDb >= -0.3));
         });
 
         // ---- refresh (badge + controls) ---------------------------------------
@@ -1036,9 +1772,18 @@
             content.classList.toggle('excluded-site', !active);
             content.classList.toggle('is-muted', state.muted);
             exclusionMsg.classList.toggle('hidden', active);
-            exclusionDetail.textContent = location.hostname + (lists.whitelistMode
-                ? ' is not on the allowed-sites list. Toggle Active, or add it under Settings → Site access, to reactivate.'
-                : ' is on the blocked-sites list. Toggle Active, or remove it under Settings → Site access, to reactivate.');
+            if (lists.whitelistMode) {
+                exclusionDetail.textContent = location.hostname + ' is not on the allowed-sites list. Toggle Active, or add it under Settings → Site access, to reactivate.';
+            } else {
+                // popup.js v6.15: name the entry that keeps the site off (and
+                // count extras) so the user knows exactly what to remove.
+                var blocking = entriesMatchingUrl(lists.blocklist, PAGE_URL);
+                var entryNote = blocking.length
+                    ? ' (matched your blocklist entry "' + blocking[0] + '"'
+                        + (blocking.length > 1 ? ' and ' + (blocking.length - 1) + ' more' : '') + ')'
+                    : '';
+                exclusionDetail.textContent = location.hostname + entryNote + ' is on the blocked-sites list. Toggle Active, or remove it under Settings → Site access, to reactivate.';
+            }
 
             slider.value = String(shown);
             slider.max = String(m);
@@ -1052,18 +1797,50 @@
             muteLabel.textContent = state.muted ? 'Unmute' : 'Mute';
             muteBtn.disabled = !active;
 
-            var restricted = restriction === 'restricted';
-            limitNote.classList.toggle('hidden', !(restricted && active));
+            // ---- boost-limit verdicts (popup.js applyAudioControlState) ----
+            var limit = currentLimitation();
+            // popup.js:583-588 — the note carries the verdict text plus the
+            // Normalize addendum while the normalizer is also unavailable
+            // (any boost-limit verdict makes it unavailable).
+            limitNote.classList.toggle('hidden', !(limit.boostLimited && active));
+            if (limit.boostLimited) {
+                limitNote.textContent = limit.note +
+                    ' Normalize is also unavailable until compatible WebAudio playback resumes.';
+            }
             boostWarning.classList.toggle('hidden', !(shown >= 6 && active));
 
+            var monoAvail = monoAvailability();
+            var normAvail = normalizerAvailability();
+            // popup.js applyNormalizerState: the preference stays checked but
+            // changes are blocked; the explanation (4-way reason + the
+            // "will resume" suffix while enabled-but-unavailable) is shown.
             normCheckbox.checked = state.normalizerEnabled;
-            normCheckbox.disabled = restricted || !active;
-            normNote.classList.toggle('hidden', !restricted);
-            if (restricted) normNote.textContent = 'Normalize cannot process DRM-protected audio in this browser.';
-            normDetails.hidden = !(state.normalizerEnabled && !restricted);
+            normCheckbox.disabled = !normAvail.available || !active;
+            normCheckbox.setAttribute('aria-disabled', String(!normAvail.available));
+            var normMessage = normalizerUnavailableMessage(normAvail.reason);
+            var normExplanation = state.normalizerEnabled && !normAvail.available
+                ? normMessage + ' Your saved Normalize preference will resume when supported audio plays.'
+                : normMessage;
+            normNote.classList.toggle('hidden', normAvail.available || !active);
+            if (!normAvail.available) normNote.textContent = normExplanation;
+            normDetails.hidden = !(state.normalizerEnabled && normAvail.available);
+            if (normPanel) normPanel.classList.toggle('is-unavailable', !normAvail.available);
+            if (normSwitchLabel) {
+                normSwitchLabel.title = normAvail.available
+                    ? 'Automatically even out loud and quiet audio'
+                    : normExplanation;
+            }
 
+            // popup.js applyMonoAvailability: 5-way reason text on the label
             monoCheckbox.checked = state.mono;
-            monoCheckbox.disabled = restricted || !active;
+            monoCheckbox.disabled = !monoAvail.available || !active;
+            monoCheckbox.setAttribute('aria-disabled', String(!monoAvail.available));
+            if (monoLabel) {
+                monoLabel.classList.toggle('is-disabled', !monoAvail.available);
+                monoLabel.title = monoAvail.available
+                    ? 'Toggle Mono Audio'
+                    : monoUnavailableMessage(monoAvail.reason);
+            }
             rememberCheckbox.checked = remembered;
             activeCheckbox.checked = active;
         }
@@ -1076,6 +1853,9 @@
             setView: setView,
             pulse: pulseButton,
             isOpen: function () { return open; },
+            syncIfVisible: function () {
+                if (open && view === 'advanced') syncAdvanced();
+            },
             showAccess: function () {
                 setView('advanced');
                 syncAdvanced();
@@ -1176,6 +1956,8 @@
         '  <div class="vc-adv-body">' +
         '    <div class="vc-adv-section">' +
         '      <div class="vc-adv-h">Normalizer</div>' +
+        '      <label class="vc-adv-check"><input type="checkbox" id="adv-normalizer-default"/>' +
+        '        <span>Normalize by default on sites without an override</span></label>' +
         '      <label class="vc-adv-row"><span>Normalization style</span>' +
         '        <select id="adv-mode">' +
         '          <option value="music">Music \u2014 preserve song dynamics (recommended)</option>' +
@@ -1192,7 +1974,8 @@
         '          <input type="number" id="adv-response" min="100" max="3000" step="50" inputmode="numeric"/><em>ms</em></label>' +
         '      </div>' +
         '      <label class="vc-adv-check"><input type="checkbox" id="adv-truepeak"/>' +
-        '        <span>Experimental true-peak limiter (opt-in; isolated fallback route)</span></label>' +
+        '        <span>Experimental true-peak limiter (opt-in)</span></label>' +
+        '      <div class="vc-adv-hint">Honored only by the extension\u2019s isolated fallback route (mainly Firefox); no effect on the page-engine route this script uses \u2014 identical to the extension\u2019s behavior on Chrome.</div>' +
         '      <div class="vc-adv-hint">Defaults: Music style, \u221216 dBFS RMS target, +12 dB max auto boost, \u22121 dBFS compressor threshold. Response speed applies to Adaptive style. Changes apply live to every site using Normalize.</div>' +
         '    </div>' +
         '    <div class="vc-adv-section">' +
@@ -1209,7 +1992,12 @@
         '      </div>' +
         '      <div id="adv-site-status" class="vc-adv-status vc-empty" role="status"></div>' +
         '      <div id="adv-site-list" class="vc-adv-list"></div>' +
-        '      <div class="vc-adv-hint">Blacklist: listed sites are skipped entirely (native volume only). Whitelist: only listed sites run Volume Control. Entries match subdomains, and the popup’s Active toggle edits the same list for this site.</div>' +
+        '      <div class="vc-adv-hint">Blacklist: listed sites are skipped entirely (native volume only). Whitelist: only listed sites run Volume Control. Entries match subdomains; an optional path (with * wildcards, e.g. example.com/videos/*) scopes the entry, and the popup’s Active toggle edits the same list for this site.</div>' +
+        '    </div>' +
+        '    <div class="vc-adv-section">' +
+        '      <div class="vc-adv-h">Remembered settings</div>' +
+        '      <div class="vc-adv-hint">Saved volume, mono and mute per site or URL path. A path such as example.com/videos applies to that path and its descendants; a renamed key may carry a query (youtube.com/watch?v=abc) for an exact query-scoped profile. Rename commits on Enter or blur.</div>' +
+        '      <div id="adv-memory-list" class="vc-adv-list"></div>' +
         '    </div>' +
         '    <div class="vc-adv-section">' +
         '      <div class="vc-adv-h">Debug overrides</div>' +
@@ -1242,14 +2030,41 @@
         '      <div class="vc-adv-hint">Applies live to the engine on every open tab. Per-site overrides persist independently; DRM/CORS force when either the default or the site override is on.</div>' +
         '    </div>' +
         '    <div class="vc-adv-section">' +
+        '      <div class="vc-adv-h">Site debug overrides</div>' +
+        '      <div class="vc-adv-hint">Every stored per-site override, independent from Remembered Settings. Removing one restores the global defaults for that site.</div>' +
+        '      <div id="adv-debug-list" class="vc-adv-list"></div>' +
+        '    </div>' +
+        '    <div class="vc-adv-section">' +
         '      <div class="vc-adv-h">Engine</div>' +
         '      <div class="vc-adv-row"><span id="adv-engine-status">Engine: \u2026</span></div>' +
         '      <div class="vc-adv-hint">The audio engine is the extension\u2019s real page-audio-hook.js. On strict-CSP sites the inline install is blocked and it falls back automatically \u2014 nothing to configure.</div>' +
         '    </div>' +
         '    <div class="vc-adv-section">' +
+        '      <div class="vc-adv-h">Keyboard shortcuts</div>' +
+        '      <div class="vc-shortcut"><span>Increase volume by 1 dB</span><span class="vc-adv-keys">' +
+        '<kbd>Alt</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>\u2191</kbd></span></div>' +
+        '      <div class="vc-shortcut"><span>Decrease volume by 1 dB</span><span class="vc-adv-keys">' +
+        '<kbd>Alt</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>\u2193</kbd></span></div>' +
+        '      <div class="vc-shortcut"><span>Reset volume to 0 dB</span><span class="vc-adv-keys">' +
+        '<kbd>Alt</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>0</kbd></span></div>' +
+        '      <div class="vc-shortcut"><span>Toggle mono audio</span><span class="vc-adv-keys">' +
+        '<kbd>Alt</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>M</kbd></span></div>' +
+        '      <div class="vc-shortcut"><span>Toggle mute</span><span class="vc-adv-keys">' +
+        '<kbd>Alt</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>U</kbd></span></div>' +
+        '      <div class="vc-shortcut"><span>Open volume control</span><span class="vc-adv-keys">' +
+        '<kbd>Alt</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>P</kbd></span></div>' +
+        '      <div class="vc-adv-hint">The userscript\u2019s page-level keybindings. The extension\u2019s global commands work browser-wide; a userscript can only listen on the focused page (and its toggle-mute command has no default key \u2014 U is this script\u2019s choice).</div>' +
+        '    </div>' +
+        '    <div class="vc-adv-section">' +
         '      <div class="vc-adv-h">Data</div>' +
         '      <div class="vc-adv-row vc-adv-data"><span id="adv-data-note">Sites, remembered volumes, positions, access lists, debug overrides.</span>' +
         '        <button id="adv-reset-all" class="vc-adv-danger" type="button">Reset all data</button></div>' +
+        '    </div>' +
+        '    <div class="vc-adv-section">' +
+        '      <div class="vc-adv-h">About</div>' +
+        '      <div class="vc-adv-row vc-adv-about"><span>About Volume Control <strong>v__VERSION__</strong></span>' +
+        '        <a class="vc-adv-site" href="https://chaython.github.io/volumecontrol/" target="_blank" rel="noreferrer">chaython.github.io/volumecontrol \u2197</a></div>' +
+        '      <div class="vc-adv-hint">Open Source project hosted on GitHub. Developed by Chaython.</div>' +
         '    </div>' +
         '  </div>' +
         '</div>';
@@ -1286,7 +2101,33 @@
         '@media (prefers-color-scheme:dark){.vc-tm-btn{background:#202124;color:#e8eaed;border-color:rgba(255,255,255,.2);}}',
         '@keyframes vc-tm-pulse{0%{transform:scale(1);}45%{transform:scale(1.16);',
         'box-shadow:0 6px 26px rgba(0,0,0,.4);}100%{transform:scale(1);}}',
-        '.vc-tm-btn.vc-tm-pulse{animation:vc-tm-pulse 1.3s ease 1;}'
+        '.vc-tm-btn.vc-tm-pulse{animation:vc-tm-pulse 1.3s ease 1;}',
+        // popup.css touch block (hover:none + pointer:coarse), scoped to the
+        // floating popup: the extension targets html/body/#popup-content of
+        // the popup page — here the popup root and its content play those
+        // roles. Same 44px targets, track/thumb sizes and touch-action.
+        '@media (hover:none) and (pointer:coarse){',
+        '.vc-popup-anchor .vc-popup{width:100%;min-width:0;max-width:100%;box-sizing:border-box;}',
+        '.vc-popup-anchor .vc-popup #popup-content{width:100%;box-sizing:border-box;}',
+        '.vc-popup-anchor .vc-popup .top-controls{padding:8px 12px 0;margin-bottom:12px;}',
+        '.vc-popup-anchor .vc-popup .bot-controls{padding:0 12px 12px;gap:12px;flex-wrap:wrap;margin-bottom:0;}',
+        '.vc-popup-anchor .vc-popup .left,.vc-popup-anchor .vc-popup .right{gap:12px;flex-wrap:wrap;}',
+        '.vc-popup-anchor .vc-popup .right{margin-left:auto;}',
+        '.vc-popup-anchor .vc-popup .switch-container,.vc-popup-anchor .vc-popup .settings,',
+        '.vc-popup-anchor .vc-popup .mute-btn{min-height:44px;}',
+        '.vc-popup-anchor .vc-popup .switch-container{gap:0;}',
+        '.vc-popup-anchor .vc-popup .switch{width:44px;height:28px;}',
+        '.vc-popup-anchor .vc-popup .slider{border-radius:28px;}',
+        '.vc-popup-anchor .vc-popup .slider:before{width:20px;height:20px;}',
+        '.vc-popup-anchor .vc-popup input:checked + .slider:before{transform:translateX(16px);}',
+        '.vc-popup-anchor .vc-popup .settings{padding:8px;}',
+        '.vc-popup-anchor .vc-popup .mute-btn{padding:6px 10px;}',
+        '.vc-popup-anchor .vc-popup input[type=range]{height:44px;margin:4px 0 8px;touch-action:pan-y;}',
+        '.vc-popup-anchor .vc-popup input[type=range]::-moz-range-track{height:12px;}',
+        '.vc-popup-anchor .vc-popup input[type=range]::-moz-range-thumb{width:24px;height:32px;border-radius:7px;}',
+        '.vc-popup-anchor .vc-popup input[type=range]::-webkit-slider-thumb{width:24px;height:32px;margin-top:-11px;border-radius:7px;}',
+        '.vc-popup-anchor .vc-popup #volume-text{font-size:18px;min-height:36px;}',
+        '}'
     ].join('');
 
     // advanced-view styles (scoped to the shadow root; light + dark like popup.css)
@@ -1346,6 +2187,26 @@
         'cursor:pointer;padding:2px 7px;border-radius:4px;}',
         '.vc-adv-remove:hover{background:#fce8e6;}',
         '.vc-adv-warn{color:#c62828;}',
+        // remembered/debug management rows (options.html list entries)
+        '.vc-adv-empty{font:italic 400 11px/1.6 "Segoe UI",Tahoma,sans-serif;color:#80868b;padding:0 2px;}',
+        '.vc-adv-rename{flex:1;min-width:0;border:1px solid transparent;border-radius:6px;background:transparent;',
+        'color:inherit;font:500 12px/1.4 "Segoe UI",Tahoma,sans-serif;padding:2px 6px;}',
+        '.vc-adv-rename:hover{border-color:rgba(0,0,0,.2);}',
+        '.vc-adv-rename:focus{outline:2px solid #9aa0a6;outline-offset:-1px;border-color:transparent;background:#fff;}',
+        '.vc-adv-chips{display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end;}',
+        '.vc-adv-chip{border:1px solid rgba(0,0,0,.15);border-radius:9px;padding:1px 7px;white-space:nowrap;',
+        'font:600 10px/1.4 "Segoe UI",Tahoma,sans-serif;color:#5f6368;}',
+        '.vc-adv-summary{font:400 10px/1.4 "Segoe UI",Tahoma,sans-serif;color:#80868b;white-space:nowrap;}',
+        // keyboard shortcuts (options.css .shortcut-entry/.keycap look)
+        '.vc-shortcut{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 2px;',
+        'font:400 12px/1.5 "Segoe UI",Tahoma,sans-serif;color:#3c4043;}',
+        '.vc-adv-keys{display:flex;align-items:center;gap:4px;flex-shrink:0;}',
+        '.vc-adv-keys kbd{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:20px;',
+        'padding:1px 5px;background:#fff;border:1px solid #aaa;border-bottom-width:2px;border-radius:4px;',
+        'font:600 10px/1 "Segoe UI",Tahoma,sans-serif;color:#444;box-shadow:0 1px 0 #ddd;}',
+        '.vc-adv-keys i{font:700 10px/1 "Segoe UI",Tahoma,sans-serif;color:#80868b;font-style:normal;user-select:none;}',
+        '.vc-adv-about{justify-content:space-between;align-items:center;flex-wrap:wrap;}',
+        '.vc-adv-about strong{font-weight:600;}',
         '.vc-adv-sitebox{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px;',
         'border-top:1px dashed rgba(0,0,0,.15);padding-top:8px;}',
         '.vc-adv-sitebox select{border:1px solid rgba(0,0,0,.25);border-radius:6px;background:#fff;color:#202124;',
@@ -1376,7 +2237,16 @@
         '.vc-popup-dark .vc-adv-remove:hover{background:rgba(198,40,40,.2);}',
         '.vc-popup-dark .vc-adv-sitebox{border-color:rgba(255,255,255,.15);}',
         '.vc-popup-dark .vc-adv-sitebox select{background:#292a2d;color:#e8eaed;border-color:rgba(255,255,255,.25);}',
-        '.vc-popup-dark .vc-advanced::-webkit-scrollbar-thumb{background:rgba(255,255,255,.3);}'
+        '.vc-popup-dark .vc-advanced::-webkit-scrollbar-thumb{background:rgba(255,255,255,.3);}',
+        '.vc-popup-dark .vc-adv-empty{color:#9aa0a6;}',
+        '.vc-popup-dark .vc-adv-rename{color:#e8eaed;}',
+        '.vc-popup-dark .vc-adv-rename:focus{background:#292a2d;}',
+        '.vc-popup-dark .vc-adv-chip{border-color:rgba(255,255,255,.2);color:#9aa0a6;}',
+        '.vc-popup-dark .vc-adv-summary{color:#9aa0a6;}',
+        '.vc-popup-dark .vc-shortcut{color:#bdc1c6;}',
+        '.vc-popup-dark .vc-adv-keys kbd{background:#292a2d;color:#e8eaed;border-color:rgba(255,255,255,.3);',
+        'box-shadow:0 1px 0 rgba(0,0,0,.5);}',
+        '.vc-popup-dark .vc-adv-keys i{color:#9aa0a6;}'
     ].join('');
 
     // ============================================================= hotkeys
@@ -1395,11 +2265,11 @@
         if (key === 'ArrowUp') {
             if (!hotkeyTargetOk(e.target)) return;
             e.preventDefault(); e.stopPropagation();
-            setVolume(state.dB + 1);
+            bumpVolume(1);        // background.js volume-up (+ ceiling guard)
         } else if (key === 'ArrowDown') {
             if (!hotkeyTargetOk(e.target)) return;
             e.preventDefault(); e.stopPropagation();
-            setVolume(state.dB - 1);
+            bumpVolume(-1);
         } else if (key === '0') {
             if (!hotkeyTargetOk(e.target)) return;
             e.preventDefault(); e.stopPropagation();
@@ -1429,12 +2299,12 @@
     if (IS_TOP_FRAME && typeof GM_registerMenuCommand === 'function') {
         try {
             GM_registerMenuCommand('Open Volume Control', function () { uiOpenToggle(true); });
-            GM_registerMenuCommand('Volume +1 dB', function () { setVolume(state.dB + 1); });
-            GM_registerMenuCommand('Volume −1 dB', function () { setVolume(state.dB - 1); });
+            GM_registerMenuCommand('Volume +1 dB', function () { bumpVolume(1); });
+            GM_registerMenuCommand('Volume −1 dB', function () { bumpVolume(-1); });
             GM_registerMenuCommand('Reset volume (0 dB)', function () { setVolume(0); });
             GM_registerMenuCommand('Toggle mute', toggleMute);
             GM_registerMenuCommand('Toggle mono', toggleMono);
-            GM_registerMenuCommand('Disable on this site', toggleActive);
+            GM_registerMenuCommand('Toggle Active on this site', toggleActive);
             GM_registerMenuCommand('Site access lists (block/allow)', function () {
                 uiOpenToggle(true);
                 if (ui && ui.showAccess) ui.showAccess();
@@ -1445,6 +2315,12 @@
 
     // ============================================================= boot
     bootEngine();
+    // cross-tab live sync: register the storage watchers now and re-scan
+    // periodically — GM_addValueChangeListener registers per key, and
+    // vc-site:/vc-normalizer:/vc-debug: keys created in other tabs after
+    // this page loaded need a listener too.
+    watchStorage();
+    setInterval(watchStorage, 5000);
 
     if (IS_TOP_FRAME) {
         var startUI = function () {

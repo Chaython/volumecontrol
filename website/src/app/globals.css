@@ -122,9 +122,10 @@
 }
 
 /* Volume Control — options page "Show Debug Highlight" (global default or a
-   per-site override): draws a green border around hooked video elements,
-   exactly like the extension's debug mode. */
-.vc-debug-highlight video {
-  outline: 2px solid #2e7d32;
+   per-site override, resolved per page like cs.js applyEffectiveDebugSettings):
+   cs.js:2180 paints a 2px solid #00ff00 border on successfully HOOKED media
+   elements (engine dataset.vcHooked) — outline keeps the demo layout stable. */
+.vc-debug-highlight [data-vc-hooked="true"] {
+  outline: 2px solid #00ff00;
   outline-offset: 2px;
 }

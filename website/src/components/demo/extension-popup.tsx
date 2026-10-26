@@ -9,7 +9,14 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useExtensionStore, effectiveRestricted } from "@/lib/volume-control/store";
+import {
+  useExtensionStore,
+  effectiveLimitation,
+  entryMatchesUrl,
+  getSiteSettingsKey,
+  BOOST_LIMIT_NOTE,
+  BOOST_LIMIT_NOTES,
+} from "@/lib/volume-control/store";
 import { VolumeEngine } from "@/lib/volume-control/engine";
 import {
   MIN_DB,
@@ -42,11 +49,18 @@ export function ExtensionPopup({
   const mono = useExtensionStore((s) => s.mono);
   const normalizerEnabled = useExtensionStore((s) => s.normalizerEnabled);
   const extensionActive = useExtensionStore((s) => s.extensionActive);
-  const remembered = useExtensionStore((s) => s.remembered[s.site.key]);
-  // The popup mirrors the ENGINE verdict (cs.js pageRestrictionChanged
-  // semantics), not the raw simulation flag — the debug "Force DRM Audio
-  // Capture" override (global or per-site) lifts the restriction live.
-  const restricted = useExtensionStore((s) => effectiveRestricted(s, s.site.key));
+  const whitelistMode = useExtensionStore((s) => s.whitelistMode);
+  const blocklist = useExtensionStore((s) => s.blocklist);
+  // The popup mirrors the ENGINE verdict (cs.js getBoostLimitInfo), not the
+  // raw simulation flags — the debug "Force DRM Audio Capture" / "Skip CORS
+  // Media Guard" overrides (global or per-site) lift the matching verdict
+  // live, and the native-route policy clamps at 0 dB unless a more
+  // informative DRM/CORS verdict exists.
+  const limitationReason = useExtensionStore((s) => effectiveLimitation(s, s.site.key, s.site.url));
+  // Remember reflects the RANKED settings key (shared.js getSiteSettingsKey):
+  // a path/query-scoped remembered profile lights the checkbox too.
+  const siteRemembered = useExtensionStore((s) =>
+    getSiteSettingsKey(s.rememberedSettings, s.site.url) !== null);
   const setVolume = useExtensionStore((s) => s.setVolume);
   const toggleMute = useExtensionStore((s) => s.toggleMute);
   const toggleMono = useExtensionStore((s) => s.toggleMono);
@@ -55,11 +69,31 @@ export function ExtensionPopup({
   const toggleActive = useExtensionStore((s) => s.toggleActive);
   const closePopup = useExtensionStore((s) => s.closePopup);
 
-  const maxDb = restricted ? 0 : MAX_DB;
-  const boostLimited = restricted;
-  const monoAvailable = !restricted;
-  const normalizerAvailable = !restricted;
-  const siteRemembered = Boolean(remembered);
+  const maxDb = limitationReason ? 0 : MAX_DB;
+  const boostLimited = limitationReason !== "";
+  const monoAvailable = !limitationReason;
+  const normalizerAvailable = !limitationReason;
+
+  // --- exclusion detail (popup.js v6.15 exclusionOverlayDetail, verbatim):
+  // name the entry that keeps the page off; whitelist mode gets its own
+  // message. `extra` pluralizes "entry"/"entries" for the count.
+  const exclusionDetailText = (() => {
+    if (whitelistMode) {
+      return "Whitelist mode is active, so only sites in Allowed Sites are controlled. Turn the Active switch on to allow this page, add it in Settings, or turn whitelist mode off.";
+    }
+    const blocking = blocklist.filter((e) => entryMatchesUrl(e, site.url));
+    if (!blocking.length) return "";
+    const first = blocking[0];
+    const extra = blocking.length > 1
+      ? ` (and ${blocking.length - 1} more entr${blocking.length === 2 ? "y" : "ies"})`
+      : "";
+    return `This page matched your blocklist entry "${first}"${extra}. Turn the Active switch on to remove the blocking entries and reload the page, or edit the list in Settings.`;
+  })();
+  const activeTitle = whitelistMode
+    ? (extensionActive
+      ? "This site is explicitly allowed in whitelist mode."
+      : "This site is not in your whitelist. Turning Active on adds it.")
+    : "Enable/Disable on this site";
 
   // --- displayed volume (slider + text). Derived from the store like
   // popup.js setDisplayedVolume — clamped to the current boost limit.
@@ -183,13 +217,31 @@ export function ExtensionPopup({
     Number.isFinite(peakDb) && peakDb >= -0.3;
   const detailsVisible = normalizerEnabled && normalizerAvailable;
 
-  const normalizerNote = normalizerAvailable
-    ? ""
-    : "Normalize cannot process DRM-protected audio in this browser.";
-
+  // popup.js applyMonoAvailability — the 5-way unavailability reason.
   const monoTooltip = monoAvailable
     ? "Toggle Mono Audio"
-    : "Mono unavailable while DRM/restricted media is using fallback audio.";
+    : limitationReason === "restricted"
+      ? "Mono unavailable while DRM/restricted media is using fallback audio."
+      : limitationReason === "cross-origin"
+        ? "Mono unavailable while cross-origin media is using fallback audio."
+        : limitationReason === "route-failed"
+          ? "Mono unavailable because the WebAudio route could not be created."
+          : limitationReason === "native-route"
+            ? "Mono unavailable while HTML Media Route Override is Force native volume fallback."
+            : "Mono unavailable while WebAudio processing is unavailable.";
+
+  // popup.js applyNormalizerState — the 4-way unavailability reason, plus
+  // the "will resume" suffix while the saved preference is enabled.
+  const normalizerReasonNote = limitationReason === "restricted"
+    ? "Normalize cannot process DRM-protected audio in this browser."
+    : limitationReason === "cross-origin"
+      ? "Normalize cannot analyze cross-origin audio without WebAudio access."
+      : limitationReason === "native-route"
+        ? "Normalize requires WebAudio; Force native routing is selected."
+        : "Normalize needs a supported WebAudio route and cannot process this media.";
+  const normalizerExplanation = normalizerEnabled && !normalizerAvailable
+    ? normalizerReasonNote + " Your saved Normalize preference will resume when supported audio plays."
+    : normalizerReasonNote;
 
   return (
     <div className="vc-popup-anchor">
@@ -205,10 +257,7 @@ export function ExtensionPopup({
         >
           <div className={`exclusion-message ${extensionActive ? "hidden" : ""}`}>
             <div className="exclusion-title">Volume Control is disabled for this site.</div>
-            <div className="exclusion-detail">
-              {site.url} was added to the blocked sites list. Remove it from Settings to
-              reactivate.
-            </div>
+            <div className="exclusion-detail">{exclusionDetailText}</div>
           </div>
 
           <div className="top-controls">
@@ -228,9 +277,10 @@ export function ExtensionPopup({
               style={{ ["--vc-range-steps" as string]: String(Math.max(1, maxDb - MIN_DB)) }}
             />
             <p id="volume-limit-note" className={`volume-limit-note ${boostLimited && extensionActive ? "" : "hidden"}`} role="status">
-              Boosting, mono, and Normalize may be unavailable on DRM/CORS-restricted media because the browser only allows fallback volume control. You can still lower volume and mute.
+              {(BOOST_LIMIT_NOTES[limitationReason] || BOOST_LIMIT_NOTES.fallback)
+                + (normalizerAvailable ? "" : " Normalize is also unavailable until compatible WebAudio playback resumes.")}
             </p>
-            <p id="volume-boost-warning" className={`volume-limit-note ${displayDb >= 6 ? "" : "hidden"}`} role="note">
+            <p id="volume-boost-warning" className={`volume-limit-note ${displayDb >= 6 && extensionActive ? "" : "hidden"}`} role="note">
               Large positive volume boosts can distort loud audio; the compressor is not a guaranteed true-peak limiter.
             </p>
             <div className="volume-row">
@@ -276,7 +326,7 @@ export function ExtensionPopup({
                   htmlFor="normalizer-checkbox"
                   title={normalizerAvailable
                     ? "Automatically even out loud and quiet audio"
-                    : `${normalizerNote} Your saved Normalize preference will resume when supported audio plays.`}
+                    : normalizerExplanation}
                 >
                   <div className="switch">
                     <input
@@ -292,7 +342,7 @@ export function ExtensionPopup({
                 </label>
               </div>
               <p id="normalizer-note" className={`normalizer-note ${normalizerAvailable ? "hidden" : ""}`} role="status">
-                {normalizerNote}
+                {normalizerExplanation}
               </p>
               <div id="normalizer-details" className="normalizer-details" hidden={!detailsVisible}>
                 <div className="normalizer-detail-header">
@@ -356,7 +406,7 @@ export function ExtensionPopup({
             </div>
 
             <div className="right">
-              <label className="switch-container" htmlFor="enable-checkbox" title="Enable/Disable on this site">
+              <label className="switch-container" htmlFor="enable-checkbox" title={activeTitle}>
                 <div className="switch">
                   <input
                     type="checkbox"

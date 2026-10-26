@@ -27,6 +27,10 @@ export interface ExtensionState {
   muted: boolean;
   normalizerEnabled: boolean;
   normalizerConfig: NormalizerConfig;
+  /** Debug "HTML Media Route Override" (page-audio-hook state.debugRouteMode).
+   *  "native" blocks new WebAudio capture (boost caps at 0 dB); "webaudio"
+   *  captures eagerly, even for pure attenuation. */
+  debugRouteMode: "auto" | "webaudio" | "native";
 }
 
 export interface MeterState {

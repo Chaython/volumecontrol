@@ -5,11 +5,18 @@
  * its manifest: Alt+Shift+Up/Down (±1 dB), Alt+Shift+0 (reset), Alt+Shift+M
  * (mono). They work even while the popup is closed, exactly like the real
  * extension's global commands, and update the toolbar badge.
+ *
+ * background.js handleCommand semantics:
+ *  - volume-up/down step from the APPLIED volume (contentState.volume), and
+ *    volume-up is guarded at a boost-limited ceiling so a press never
+ *    replaces a preserved request with an invisible +1 dB change;
+ *  - toggle-mono is ignored while mono is unavailable (DRM/CORS/native).
  */
 
 import { useEffect } from "react";
 import { useExtensionStore } from "@/lib/volume-control/store";
-import { MAX_DB, MIN_DB } from "@/lib/volume-control/core";
+import { VolumeEngine } from "@/lib/volume-control/engine";
+import { MAX_DB, MIN_DB, normalizeDb } from "@/lib/volume-control/core";
 
 export function useExtensionShortcuts() {
   useEffect(() => {
@@ -21,15 +28,22 @@ export function useExtensionShortcuts() {
       switch (event.code) {
         case "ArrowUp": {
           event.preventDefault();
-          const next = Math.min(store.requestedDb + 1, MAX_DB);
-          // The real extension suppresses +1 when boost-limited at the ceiling
-          // so there is no invisible change that only applies later.
+          // background.js: "When DRM/CORS restricts playback to native
+          // volume, a press at the effective 0 dB ceiling cannot make audio
+          // louder. Do not replace a preserved +12 dB request with an
+          // invisible +1 dB setting that only takes effect on a later,
+          // routable song."
+          const cs = VolumeEngine.getInstance().getAudioControlState();
+          if (cs.boostLimited && cs.volume >= cs.maxDb) break;
+          const next = Math.min(normalizeDb(cs.volume + 1), MAX_DB);
           if (next !== store.requestedDb) store.setVolume(next);
           break;
         }
         case "ArrowDown": {
           event.preventDefault();
-          const nextDown = Math.max(store.requestedDb - 1, MIN_DB);
+          // background.js steps down from the applied volume, unguarded.
+          const cs = VolumeEngine.getInstance().getAudioControlState();
+          const nextDown = Math.max(normalizeDb(cs.volume - 1), MIN_DB);
           if (nextDown !== store.requestedDb) store.setVolume(nextDown);
           break;
         }
@@ -41,7 +55,9 @@ export function useExtensionShortcuts() {
         }
         case "KeyM": {
           event.preventDefault();
-          store.toggleMono();
+          // background.js toggle-mono: only when mono is available.
+          const cs = VolumeEngine.getInstance().getAudioControlState();
+          if (cs.monoAvailable !== false) store.toggleMono();
           break;
         }
         default:
