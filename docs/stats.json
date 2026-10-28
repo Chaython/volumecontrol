@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-27T14:41:15.442Z",
+  "generatedAt": "2026-10-28T15:13:52.190Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 75502,
-    "weeklyDownloads": 3476,
+    "averageDailyUsers": 75830,
+    "weeklyDownloads": 3537,
     "rating": 3.8318,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
@@ -16,7 +16,7 @@
     "status": "available",
     "extensionId": "ipbghdjdmefdioebhaneohmkidjakfbc",
     "url": "https://microsoftedge.microsoft.com/addons/detail/ipbghdjdmefdioebhaneohmkidjakfbc",
-    "activeInstallCount": 695,
+    "activeInstallCount": 685,
     "rating": 4,
     "ratingCount": 4,
     "version": "7.0",
@@ -32,11 +32,6 @@
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-10-13T00:00:00Z",
-          "count": 1,
-          "uniques": 1
-        },
         {
           "timestamp": "2026-10-14T00:00:00Z",
           "count": 4,
@@ -101,16 +96,16 @@
           "timestamp": "2026-10-26T00:00:00Z",
           "count": 8,
           "uniques": 6
+        },
+        {
+          "timestamp": "2026-10-27T00:00:00Z",
+          "count": 8,
+          "uniques": 5
         }
       ],
-      "totalViews": 90,
-      "uniqueVisitors": 46,
+      "totalViews": 97,
+      "uniqueVisitors": 50,
       "clones": [
-        {
-          "timestamp": "2026-10-13T00:00:00Z",
-          "count": 624,
-          "uniques": 378
-        },
         {
           "timestamp": "2026-10-14T00:00:00Z",
           "count": 65,
@@ -175,25 +170,30 @@
           "timestamp": "2026-10-26T00:00:00Z",
           "count": 106,
           "uniques": 53
+        },
+        {
+          "timestamp": "2026-10-27T00:00:00Z",
+          "count": 3,
+          "uniques": 3
         }
       ],
-      "totalClones": 2209,
-      "uniqueCloners": 947,
+      "totalClones": 1588,
+      "uniqueCloners": 643,
       "referrers": [
         {
           "referrer": "Google",
-          "count": 13,
-          "uniques": 9
-        },
-        {
-          "referrer": "github.com",
-          "count": 6,
-          "uniques": 4
+          "count": 18,
+          "uniques": 11
         },
         {
           "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
           "count": 5,
           "uniques": 5
+        },
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 3
         },
         {
           "referrer": "search.brave.com",
