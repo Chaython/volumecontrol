@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-29T15:18:35.789Z",
+  "generatedAt": "2026-10-30T15:07:32.474Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 76112,
-    "weeklyDownloads": 3570,
+    "averageDailyUsers": 76643,
+    "weeklyDownloads": 3608,
     "rating": 3.8318,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
@@ -32,11 +32,6 @@
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-10-15T00:00:00Z",
-          "count": 1,
-          "uniques": 1
-        },
         {
           "timestamp": "2026-10-16T00:00:00Z",
           "count": 25,
@@ -101,16 +96,16 @@
           "timestamp": "2026-10-28T00:00:00Z",
           "count": 4,
           "uniques": 2
+        },
+        {
+          "timestamp": "2026-10-29T00:00:00Z",
+          "count": 2,
+          "uniques": 2
         }
       ],
-      "totalViews": 97,
+      "totalViews": 98,
       "uniqueVisitors": 49,
       "clones": [
-        {
-          "timestamp": "2026-10-15T00:00:00Z",
-          "count": 308,
-          "uniques": 175
-        },
         {
           "timestamp": "2026-10-16T00:00:00Z",
           "count": 105,
@@ -175,10 +170,15 @@
           "timestamp": "2026-10-28T00:00:00Z",
           "count": 9,
           "uniques": 6
+        },
+        {
+          "timestamp": "2026-10-29T00:00:00Z",
+          "count": 5,
+          "uniques": 4
         }
       ],
-      "totalClones": 1532,
-      "uniqueCloners": 624,
+      "totalClones": 1229,
+      "uniqueCloners": 465,
       "referrers": [
         {
           "referrer": "Google",

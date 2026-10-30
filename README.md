@@ -43,7 +43,7 @@ Sources live in the [`tampermonkey/`](tampermonkey/) folder at the repository ro
 
 ## 📈 Live usage & repository statistics
 
-[![Volume Control live statistics](docs/stats.svg?v=1793287115789)](https://chaython.github.io/volumecontrol/stats.html)
+[![Volume Control live statistics](docs/stats.svg?v=1793372852474)](https://chaython.github.io/volumecontrol/stats.html)
 
 
 <details>
