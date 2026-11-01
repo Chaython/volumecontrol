@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-31T14:37:19.815Z",
+  "generatedAt": "2026-11-01T15:19:28.026Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 76643,
-    "weeklyDownloads": 3620,
+    "averageDailyUsers": 76645,
+    "weeklyDownloads": 3586,
     "rating": 3.8318,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
@@ -32,11 +32,6 @@
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-10-17T00:00:00Z",
-          "count": 7,
-          "uniques": 5
-        },
         {
           "timestamp": "2026-10-18T00:00:00Z",
           "count": 1,
@@ -101,16 +96,16 @@
           "timestamp": "2026-10-30T00:00:00Z",
           "count": 6,
           "uniques": 2
+        },
+        {
+          "timestamp": "2026-10-31T00:00:00Z",
+          "count": 28,
+          "uniques": 6
         }
       ],
-      "totalViews": 79,
-      "uniqueVisitors": 42,
+      "totalViews": 100,
+      "uniqueVisitors": 43,
       "clones": [
-        {
-          "timestamp": "2026-10-17T00:00:00Z",
-          "count": 142,
-          "uniques": 58
-        },
         {
           "timestamp": "2026-10-18T00:00:00Z",
           "count": 10,
@@ -175,15 +170,20 @@
           "timestamp": "2026-10-30T00:00:00Z",
           "count": 13,
           "uniques": 8
+        },
+        {
+          "timestamp": "2026-10-31T00:00:00Z",
+          "count": 3,
+          "uniques": 3
         }
       ],
-      "totalClones": 1137,
-      "uniqueCloners": 434,
+      "totalClones": 998,
+      "uniqueCloners": 390,
       "referrers": [
         {
           "referrer": "Google",
-          "count": 16,
-          "uniques": 10
+          "count": 17,
+          "uniques": 11
         },
         {
           "referrer": "github.com",
@@ -191,9 +191,9 @@
           "uniques": 3
         },
         {
-          "referrer": "addons.mozilla.org",
-          "count": 2,
-          "uniques": 2
+          "referrer": "kdroidwin.codeberg.page",
+          "count": 1,
+          "uniques": 1
         },
         {
           "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
