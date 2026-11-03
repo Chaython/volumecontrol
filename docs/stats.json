@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-02T18:33:43.232Z",
+  "generatedAt": "2026-11-03T16:21:34.224Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 76448,
-    "weeklyDownloads": 3592,
+    "averageDailyUsers": 76555,
+    "weeklyDownloads": 3562,
     "rating": 3.8318,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
@@ -32,11 +32,6 @@
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-10-19T00:00:00Z",
-          "count": 5,
-          "uniques": 2
-        },
         {
           "timestamp": "2026-10-20T00:00:00Z",
           "count": 4,
@@ -101,16 +96,16 @@
           "timestamp": "2026-11-01T00:00:00Z",
           "count": 8,
           "uniques": 6
+        },
+        {
+          "timestamp": "2026-11-02T00:00:00Z",
+          "count": 21,
+          "uniques": 9
         }
       ],
-      "totalViews": 107,
-      "uniqueVisitors": 49,
+      "totalViews": 123,
+      "uniqueVisitors": 56,
       "clones": [
-        {
-          "timestamp": "2026-10-19T00:00:00Z",
-          "count": 3,
-          "uniques": 3
-        },
         {
           "timestamp": "2026-10-20T00:00:00Z",
           "count": 7,
@@ -175,20 +170,25 @@
           "timestamp": "2026-11-01T00:00:00Z",
           "count": 4,
           "uniques": 4
+        },
+        {
+          "timestamp": "2026-11-02T00:00:00Z",
+          "count": 13,
+          "uniques": 9
         }
       ],
-      "totalClones": 992,
-      "uniqueCloners": 389,
+      "totalClones": 1002,
+      "uniqueCloners": 391,
       "referrers": [
         {
           "referrer": "Google",
-          "count": 18,
-          "uniques": 12
+          "count": 16,
+          "uniques": 11
         },
         {
           "referrer": "github.com",
-          "count": 5,
-          "uniques": 3
+          "count": 8,
+          "uniques": 4
         },
         {
           "referrer": "kdroidwin.codeberg.page",
