@@ -4603,3 +4603,42 @@ test('music normalizer peak protection never adds attenuation and recovers betwe
         assert.ok('appliedGainDb' in diagnostic);
     }
 });
+
+test('Tampermonkey drag implementation, published copies, and update revision stay synchronized', () => {
+    const template = readFileSync(join(root, 'tampermonkey/userscript-template.js'), 'utf8');
+    const userscript = readFileSync(join(root, 'tampermonkey/volume-control.user.js'), 'utf8');
+    const websiteCopy = readFileSync(join(root, 'website/public/tampermonkey/volume-control.user.js'), 'utf8');
+    const builder = readFileSync(join(root, 'scripts/build-userscript.mjs'), 'utf8');
+    const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'));
+    const engine = readFileSync(join(root, 'page-audio-hook.js'), 'utf8');
+
+    const dragSection = source => {
+        const start = source.indexOf('// ---- drag (button)');
+        const end = source.indexOf('// restore position', start);
+        assert.ok(start >= 0 && end > start, 'drag section must have stable boundaries');
+        return source.slice(start, end);
+    };
+
+    assert.equal(dragSection(userscript), dragSection(template),
+        'generated userscript must contain the canonical template drag implementation');
+    assert.equal(websiteCopy, userscript,
+        'the GitHub Pages download must exactly match the canonical userscript');
+
+    const moveStart = userscript.indexOf("window.addEventListener('pointermove'");
+    const moveEnd = userscript.indexOf("window.addEventListener('pointerup'", moveStart);
+    assert.ok(moveStart >= 0 && moveEnd > moveStart);
+    assert.doesNotMatch(userscript.slice(moveStart, moveEnd), /store\\.set\\(/,
+        'drag movement must not perform persistent storage writes');
+    assert.match(userscript, /store\\.set\\('vc-btn-pos', \\{ right: completed\\.right, bottom: completed\\.bottom \\}\\)/,
+        'final drag position must be persisted once at drag completion');
+    assert.match(userscript, /\\.vc-tm-dragging \\.vc-tm-btn[^']*transition:none;transform:none;/,
+        'hover scaling must be disabled while dragging');
+
+    const revisionMatch = builder.match(/const USERSCRIPT_REVISION = (\\d+);/);
+    assert.ok(revisionMatch, 'builder must declare the userscript-only update revision');
+    assert.equal(userscript.match(/^\\/\\/ @version\\s+(.+)$/m)?.[1],
+        manifest.version + '.' + revisionMatch[1],
+        'published userscript version must include the current template revision');
+    assert.ok(userscript.includes('var ENGINE_SOURCE = ' + JSON.stringify(engine) + ';'),
+        'userscript must embed the exact current page-audio-hook engine');
+});
