@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-03T16:21:34.224Z",
+  "generatedAt": "2026-11-04T16:25:40.584Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 76555,
-    "weeklyDownloads": 3562,
+    "averageDailyUsers": 76801,
+    "weeklyDownloads": 3507,
     "rating": 3.8318,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
@@ -32,11 +32,6 @@
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-10-20T00:00:00Z",
-          "count": 4,
-          "uniques": 3
-        },
         {
           "timestamp": "2026-10-21T00:00:00Z",
           "count": 0,
@@ -101,16 +96,16 @@
           "timestamp": "2026-11-02T00:00:00Z",
           "count": 21,
           "uniques": 9
+        },
+        {
+          "timestamp": "2026-11-03T00:00:00Z",
+          "count": 2,
+          "uniques": 2
         }
       ],
-      "totalViews": 123,
-      "uniqueVisitors": 56,
+      "totalViews": 121,
+      "uniqueVisitors": 55,
       "clones": [
-        {
-          "timestamp": "2026-10-20T00:00:00Z",
-          "count": 7,
-          "uniques": 6
-        },
         {
           "timestamp": "2026-10-21T00:00:00Z",
           "count": 8,
@@ -175,10 +170,15 @@
           "timestamp": "2026-11-02T00:00:00Z",
           "count": 13,
           "uniques": 9
+        },
+        {
+          "timestamp": "2026-11-03T00:00:00Z",
+          "count": 16,
+          "uniques": 9
         }
       ],
-      "totalClones": 1002,
-      "uniqueCloners": 391,
+      "totalClones": 1011,
+      "uniqueCloners": 390,
       "referrers": [
         {
           "referrer": "Google",
@@ -191,12 +191,12 @@
           "uniques": 4
         },
         {
-          "referrer": "kdroidwin.codeberg.page",
-          "count": 1,
-          "uniques": 1
+          "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
+          "count": 2,
+          "uniques": 2
         },
         {
-          "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
+          "referrer": "kdroidwin.codeberg.page",
           "count": 1,
           "uniques": 1
         },
