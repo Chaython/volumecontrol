@@ -4639,6 +4639,8 @@ test('Tampermonkey drag implementation, published copies, and update revision st
     assert.equal(userscript.match(/^\/\/ @version\s+(.+)$/m)?.[1],
         manifest.version + '.' + revisionMatch[1],
         'published userscript version must include the current template revision');
-    assert.ok(userscript.includes('var ENGINE_SOURCE = ' + JSON.stringify(engine) + ';'),
+    const embeddedEngineMatch = userscript.match(/var ENGINE_SOURCE = ("(?:\\\\.|[^"\\\\])*");/);
+    assert.ok(embeddedEngineMatch, 'generated userscript must contain a serialized audio engine');
+    assert.equal(JSON.parse(embeddedEngineMatch[1]), engine,
         'userscript must embed the exact current page-audio-hook engine');
 });
