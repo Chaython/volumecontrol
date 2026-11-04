@@ -83,7 +83,7 @@ const engineSource = enginePath ? readFileSync(enginePath, "utf8") : null;
 // Tampermonkey updates the userscript when ONLY the userscript template
 // changes (the extension's own version stays untouched). Bump this whenever
 // the template is edited without a matching manifest bump.
-const USERSCRIPT_REVISION = 6;
+const USERSCRIPT_REVISION = 7;
 
 let version = "7.1.0";
 let manifestVersion = null;
