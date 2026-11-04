@@ -2,7 +2,8 @@
   "name": "volume-control",
   "private": true,
   "scripts": {
-    "test": "node --test scripts/test-build.mjs"
+    "test": "node --test scripts/test-build.mjs",
+    "test:eme": "node --test scripts/test-eme-simulation.mjs"
   },
   "engines": {
     "node": ">=18"
