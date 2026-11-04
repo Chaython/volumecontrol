@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Volume Control — Per-Site Volume Booster
 // @namespace    https://github.com/Chaython/volumecontrol
-// @version      7.1.6
+// @version      7.1.7
 // @description  Real per-site volume control from the Volume Control browser extension: ±32 dB boost, music/adaptive normalizer, mono down-mix and a safety limiter — running the extension's actual page-audio-hook engine on any site.
 // @author       Chaython
 // @license      ISC
@@ -260,7 +260,7 @@
     }
     function siteBlockedByLists() { return listsBlockUrl(lists, PAGE_URL); }
     // ---- remembered-profile keys (shared.js ranked settings matching) ----
-    // Remembered profiles — and, since 7.1.6, the per-site Normalize
+    // Remembered profiles — and, since 7.1.7, the per-site Normalize
     // preference — are keyed by ENTRY, not just host:
     //   "youtube.com"               whole site (legacy vc-site:<host> keys
     //                               have this shape; the matcher canonicalizes)
@@ -1112,7 +1112,7 @@
         var advSdDrm = advRoot.querySelector('#adv-sd-drm');
         var advSdCors = advRoot.querySelector('#adv-sd-cors');
         var advSdRoute = advRoot.querySelector('#adv-sd-route');
-        // normalizer default + management lists + about (v7.1.6)
+        // normalizer default + management lists + about (v7.1.7)
         var advNormDefault = advRoot.querySelector('#adv-normalizer-default');
         var advMemoryList = advRoot.querySelector('#adv-memory-list');
         var advDebugList = advRoot.querySelector('#adv-debug-list');
@@ -2082,7 +2082,7 @@
         '    </div>' +
         '    <div class="vc-adv-section">' +
         '      <div class="vc-adv-h">About</div>' +
-        '      <div class="vc-adv-row vc-adv-about"><span>About Volume Control <strong>v7.1.6</strong></span>' +
+        '      <div class="vc-adv-row vc-adv-about"><span>About Volume Control <strong>v7.1.7</strong></span>' +
         '        <a class="vc-adv-site" href="https://chaython.github.io/volumecontrol/" target="_blank" rel="noreferrer">chaython.github.io/volumecontrol \u2197</a></div>' +
         '      <div class="vc-adv-hint">Open Source project hosted on GitHub. Developed by Chaython.</div>' +
         '    </div>' +
