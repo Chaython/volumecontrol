@@ -260,7 +260,7 @@
     }
     function siteBlockedByLists() { return listsBlockUrl(lists, PAGE_URL); }
     // ---- remembered-profile keys (shared.js ranked settings matching) ----
-    // Remembered profiles — and, since 7.1.7, the per-site Normalize
+    // Remembered profiles — and, since 7.1.6, the per-site Normalize
     // preference — are keyed by ENTRY, not just host:
     //   "youtube.com"               whole site (legacy vc-site:<host> keys
     //                               have this shape; the matcher canonicalizes)
@@ -1112,7 +1112,7 @@
         var advSdDrm = advRoot.querySelector('#adv-sd-drm');
         var advSdCors = advRoot.querySelector('#adv-sd-cors');
         var advSdRoute = advRoot.querySelector('#adv-sd-route');
-        // normalizer default + management lists + about (v7.1.7)
+        // normalizer default + management lists + about (v7.1.6)
         var advNormDefault = advRoot.querySelector('#adv-normalizer-default');
         var advMemoryList = advRoot.querySelector('#adv-memory-list');
         var advDebugList = advRoot.querySelector('#adv-debug-list');
