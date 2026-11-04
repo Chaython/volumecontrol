@@ -4627,16 +4627,16 @@ test('Tampermonkey drag implementation, published copies, and update revision st
     const moveStart = userscript.indexOf("window.addEventListener('pointermove'");
     const moveEnd = userscript.indexOf("window.addEventListener('pointerup'", moveStart);
     assert.ok(moveStart >= 0 && moveEnd > moveStart);
-    assert.doesNotMatch(userscript.slice(moveStart, moveEnd), /store\\.set\\(/,
+    assert.doesNotMatch(userscript.slice(moveStart, moveEnd), /store\.set\(/,
         'drag movement must not perform persistent storage writes');
-    assert.match(userscript, /store\\.set\\('vc-btn-pos', \\{ right: completed\\.right, bottom: completed\\.bottom \\}\\)/,
+    assert.match(userscript, /store\.set\('vc-btn-pos', \{ right: completed\.right, bottom: completed\.bottom \}\)/,
         'final drag position must be persisted once at drag completion');
-    assert.match(userscript, /\\.vc-tm-dragging \\.vc-tm-btn[^']*transition:none;transform:none;/,
+    assert.match(userscript, /\.vc-tm-dragging \.vc-tm-btn[^']*transition:none;transform:none;/,
         'hover scaling must be disabled while dragging');
 
-    const revisionMatch = builder.match(/const USERSCRIPT_REVISION = (\\d+);/);
+    const revisionMatch = builder.match(/const USERSCRIPT_REVISION = (\d+);/);
     assert.ok(revisionMatch, 'builder must declare the userscript-only update revision');
-    assert.equal(userscript.match(/^\\/\\/ @version\\s+(.+)$/m)?.[1],
+    assert.equal(userscript.match(/^\/\/ @version\s+(.+)$/m)?.[1],
         manifest.version + '.' + revisionMatch[1],
         'published userscript version must include the current template revision');
     assert.ok(userscript.includes('var ENGINE_SOURCE = ' + JSON.stringify(engine) + ';'),
