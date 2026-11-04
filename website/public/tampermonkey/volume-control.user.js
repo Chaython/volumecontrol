@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Volume Control — Per-Site Volume Booster
 // @namespace    https://github.com/Chaython/volumecontrol
-// @version      7.1.6
+// @version      7.1.7
 // @description  Real per-site volume control from the Volume Control browser extension: ±32 dB boost, music/adaptive normalizer, mono down-mix and a safety limiter — running the extension's actual page-audio-hook engine on any site.
 // @author       Chaython
 // @license      ISC
@@ -260,7 +260,7 @@
     }
     function siteBlockedByLists() { return listsBlockUrl(lists, PAGE_URL); }
     // ---- remembered-profile keys (shared.js ranked settings matching) ----
-    // Remembered profiles — and, since 7.1.6, the per-site Normalize
+    // Remembered profiles — and, since 7.1.7, the per-site Normalize
     // preference — are keyed by ENTRY, not just host:
     //   "youtube.com"               whole site (legacy vc-site:<host> keys
     //                               have this shape; the matcher canonicalizes)
@@ -1112,7 +1112,7 @@
         var advSdDrm = advRoot.querySelector('#adv-sd-drm');
         var advSdCors = advRoot.querySelector('#adv-sd-cors');
         var advSdRoute = advRoot.querySelector('#adv-sd-route');
-        // normalizer default + management lists + about (v7.1.6)
+        // normalizer default + management lists + about (v7.1.7)
         var advNormDefault = advRoot.querySelector('#adv-normalizer-default');
         var advMemoryList = advRoot.querySelector('#adv-memory-list');
         var advDebugList = advRoot.querySelector('#adv-debug-list');
@@ -1654,36 +1654,56 @@
         });
 
         // ---- drag (button) ----------------------------------------------------
+        // Anchor the drag to the pointer-down position. Re-measuring the
+        // element and writing persistent storage on every pointermove creates
+        // a feedback loop: layout/storage work can lag behind the pointer,
+        // making the button appear to rubber-band or catch up in bursts.
         var drag = null;
+        function finishDrag(e) {
+            if (!drag || (e && e.pointerId !== drag.pointerId)) return;
+            var completed = drag;
+            drag = null;
+            host.classList.remove('vc-tm-dragging');
+            if (completed.moved) {
+                btn.dataset.dragged = '1';
+                // Persist once, after the final visual position is committed.
+                store.set('vc-btn-pos', { right: completed.right, bottom: completed.bottom });
+                setTimeout(function () { delete btn.dataset.dragged; }, 50);
+            }
+        }
         btn.addEventListener('pointerdown', function (e) {
-            if (e.button !== 0) return;
-            drag = { x: e.clientX, y: e.clientY, moved: false };
+            if (e.button !== 0 || drag) return;
+            var rect = host.getBoundingClientRect();
+            drag = {
+                pointerId: e.pointerId,
+                startX: e.clientX,
+                startY: e.clientY,
+                startRight: window.innerWidth - rect.right,
+                startBottom: window.innerHeight - rect.bottom,
+                right: window.innerWidth - rect.right,
+                bottom: window.innerHeight - rect.bottom,
+                width: rect.width,
+                height: rect.height,
+                moved: false
+            };
         });
         window.addEventListener('pointermove', function (e) {
-            if (!drag) return;
-            var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+            if (!drag || e.pointerId !== drag.pointerId) return;
+            var dx = e.clientX - drag.startX;
+            var dy = e.clientY - drag.startY;
             if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 6) return;
             drag.moved = true;
-            // Measure the HOST, not the button: while dragging, the pointer
-            // stays over the button, so its :hover scale(1.06) transform is
-            // active — deriving position from btn.getBoundingClientRect()
-            // accumulates the scale error on every pointermove and the button
-            // drifts away from the pointer. The host is never transformed.
-            var rect = host.getBoundingClientRect();
-            var right = window.innerWidth - rect.right - dx;
-            var bottom = window.innerHeight - rect.bottom - dy;
-            right = Math.max(4, Math.min(window.innerWidth - rect.width - 4, right));
-            bottom = Math.max(4, Math.min(window.innerHeight - rect.height - 4, bottom));
-            host.style.right = right + 'px';
-            host.style.bottom = bottom + 'px';
-            drag.x = e.clientX; drag.y = e.clientY;
-            store.set('vc-btn-pos', { right: right, bottom: bottom });
+            host.classList.add('vc-tm-dragging');
+            var maxRight = Math.max(4, window.innerWidth - drag.width - 4);
+            var maxBottom = Math.max(4, window.innerHeight - drag.height - 4);
+            drag.right = Math.max(4, Math.min(maxRight, drag.startRight - dx));
+            drag.bottom = Math.max(4, Math.min(maxBottom, drag.startBottom - dy));
+            host.style.right = drag.right + 'px';
+            host.style.bottom = drag.bottom + 'px';
         });
-        window.addEventListener('pointerup', function () {
-            if (drag && drag.moved) btn.dataset.dragged = '1';
-            drag = null;
-            setTimeout(function () { delete btn.dataset.dragged; }, 50);
-        });
+        window.addEventListener('pointerup', finishDrag);
+        window.addEventListener('pointercancel', finishDrag);
+        window.addEventListener('blur', function () { finishDrag(); });
 
 
         // restore position
@@ -2062,7 +2082,7 @@
         '    </div>' +
         '    <div class="vc-adv-section">' +
         '      <div class="vc-adv-h">About</div>' +
-        '      <div class="vc-adv-row vc-adv-about"><span>About Volume Control <strong>v7.1.6</strong></span>' +
+        '      <div class="vc-adv-row vc-adv-about"><span>About Volume Control <strong>v7.1.7</strong></span>' +
         '        <a class="vc-adv-site" href="https://chaython.github.io/volumecontrol/" target="_blank" rel="noreferrer">chaython.github.io/volumecontrol \u2197</a></div>' +
         '      <div class="vc-adv-hint">Open Source project hosted on GitHub. Developed by Chaython.</div>' +
         '    </div>' +
@@ -2084,6 +2104,7 @@
         'cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;',
         'transition:transform .12s ease,box-shadow .12s ease;}',
         '.vc-tm-btn:hover{transform:scale(1.06);box-shadow:0 4px 14px rgba(0,0,0,.3);}',
+        '.vc-tm-dragging .vc-tm-btn,.vc-tm-dragging .vc-tm-btn:hover{transition:none;transform:none;cursor:grabbing;}',
         '.vc-tm-btn:active{transform:scale(.97);}',
         '.vc-tm-badge{position:absolute;top:-7px;right:-7px;min-width:20px;height:18px;padding:0 5px;',
         'border-radius:9px;font:bold 11px/18px "Segoe UI",Tahoma,sans-serif;color:#fff;',
