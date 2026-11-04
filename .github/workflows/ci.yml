@@ -52,6 +52,9 @@ jobs:
       - name: Run regression tests
         run: npm test
 
+      - name: Simulate Firefox and Chromium EME/DRM playback
+        run: npm run test:eme
+
       - name: Build Firefox and Chrome packages
         shell: powershell
         run: .\scripts\build.ps1
@@ -119,4 +122,3 @@ jobs:
         env:
           VC_EXTENSION_DIR: dist/smoke/firefox
         run: node scripts/firefox-extension-smoke.mjs
-
