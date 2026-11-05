@@ -4641,6 +4641,10 @@ test('Tampermonkey drag implementation, published copies, and update revision st
         'published userscript version must include the current template revision');
     const embeddedEngineMatch = userscript.match(/var ENGINE_SOURCE = ("(?:\\.|[^"\\])*");/);
     assert.ok(embeddedEngineMatch, 'generated userscript must contain a serialized audio engine');
-    assert.equal(JSON.parse(embeddedEngineMatch[1]), engine,
+    const embeddedEngine = JSON.parse(embeddedEngineMatch[1]);
+    // Windows checkouts may convert repository LF files to CRLF while the
+    // generated JSON string retains the builder's original line endings.
+    // Compare source content with checkout-only newline conversion removed.
+    assert.equal(embeddedEngine.replace(/\r\n/g, "\n"), engine.replace(/\r\n/g, "\n"),
         'userscript must embed the exact current page-audio-hook engine');
 });
