@@ -45,6 +45,7 @@ function createEmeHarness(userAgent = 'Mozilla/5.0 Firefox/159.0') {
                 isGecko: isGeckoRuntime(),
                 audioSilencedWhenRouted: EME_AUDIO_SILENCED_WHEN_ROUTED,
                 isLikelyDrmMedia,
+                updateEmeKeysAttachedMarker,
                 resetEmePending
             };
         })()
@@ -82,6 +83,23 @@ test('Firefox 159 keeps EME/MSE media unrouted until keys attach or clear playba
     element.dataset.vcEmeKeysAttached = 'true';
     assert.equal(h.isLikelyDrmMedia(element), false,
         'once Gecko keys are attached, the route may be created');
+});
+
+
+test('Firefox clears the keys-attached marker after successful setMediaKeys(null)', () => {
+    const h = createEmeHarness();
+    const element = mediaElement();
+    h.document.documentElement.dataset.vcPageUsesEme = 'true';
+
+    h.updateEmeKeysAttachedMarker(element, {});
+    assert.equal(h.isLikelyDrmMedia(element), false,
+        'attached keys permit Gecko routing');
+
+    h.updateEmeKeysAttachedMarker(element, null);
+    assert.equal(element.dataset.vcEmeKeysAttached, undefined,
+        'detaching keys must remove the cached marker');
+    assert.equal(h.isLikelyDrmMedia(element), true,
+        'a reused blob: element must return to the pending EME gate');
 });
 
 test('Firefox EME probe does not permanently block clear MSE after decoded time advances', () => {
