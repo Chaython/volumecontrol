@@ -6,6 +6,9 @@ on:
       - master
   pull_request:
   workflow_dispatch:
+  # Recheck browser/runtime compatibility after hosted browser updates.
+  schedule:
+    - cron: "23 7 * * 1"
 
 permissions:
   contents: read
@@ -37,6 +40,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
               throw "Could not check out the workflow revision."
           }
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
       - name: Show toolchain versions
         shell: pwsh
@@ -122,3 +131,56 @@ jobs:
         env:
           VC_EXTENSION_DIR: dist/smoke/firefox
         run: node scripts/firefox-extension-smoke.mjs
+
+
+  node-compatibility:
+    name: Node.js ${{ matrix.node-version }} compatibility
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Show runtime versions
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          $PSVersionTable.PSVersion.ToString()
+
+      - name: Install pinned dependencies
+        run: npm ci
+
+      - name: Run regression suite
+        run: npm test
+
+      - name: Run EME lifecycle simulations
+        run: npm run test:eme
+
+      - name: Verify package builds on this Node version
+        shell: powershell
+        run: .\\scripts\\build.ps1
+
+      - name: Verify both browser packages were produced
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw -LiteralPath manifest.json | ConvertFrom-Json
+          foreach ($browser in @("chrome", "firefox")) {
+              $package = Join-Path "dist" ("volume-control-" + $browser + "-v" + $manifest.version + ".zip")
+              if (-not (Test-Path -LiteralPath $package)) {
+                  throw "Missing $browser package: $package"
+              }
+              $item = Get-Item -LiteralPath $package
+              if ($item.Length -lt 1024) { throw "$browser package is unexpectedly small." }
+              Write-Host "$browser package verified: $($item.Length) bytes"
+          }
