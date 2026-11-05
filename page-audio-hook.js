@@ -952,6 +952,12 @@
     // (MozAudioCaptured), so EME elements become routable only AFTER keys
     // attach. The setMediaKeys patch below writes vcEmeKeysAttached on
     // native success.
+    function updateEmeKeysAttachedMarker(element, mediaKeys) {
+        if (!element || !element.dataset) return;
+        if (mediaKeys) element.dataset.vcEmeKeysAttached = "true";
+        else delete element.dataset.vcEmeKeysAttached;
+    }
+
     function elementEmeKeysAttached(element) {
         if (!element) return false;
         try {
@@ -1198,17 +1204,17 @@
                             }
                         }
                         const setResult = nativeSetMediaKeys.apply(this, arguments);
-                        if (mediaKeys && !EME_AUDIO_SILENCED_WHEN_ROUTED) {
+                        if (!EME_AUDIO_SILENCED_WHEN_ROUTED) {
                             // Gecko: route only AFTER keys attach —
                             // setMediaKeys throws NotSupportedError on an
-                            // already-audio-captured element. On success, mark
-                            // the element routable and apply state promptly so
-                            // the route forms without waiting for the next
-                            // media event.
+                            // already-audio-captured element. Keep the marker
+                            // synchronized with native success, including
+                            // setMediaKeys(null), so a reused element cannot
+                            // retain stale "keys attached" evidence.
                             const el = this;
                             Promise.resolve(setResult).then(() => {
                                 try {
-                                    if (el.dataset) el.dataset.vcEmeKeysAttached = "true";
+                                    updateEmeKeysAttachedMarker(el, mediaKeys);
                                 } catch (e) {}
                                 updatePageMediaRestriction();
                                 applyMediaElementState(el);
