@@ -169,7 +169,7 @@ jobs:
 
       - name: Verify package builds on this Node version
         shell: powershell
-        run: .\\scripts\\build.ps1
+        run: .\scripts\build.ps1
 
       - name: Verify both browser packages were produced
         shell: pwsh
