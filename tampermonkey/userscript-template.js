@@ -1031,7 +1031,9 @@
         // A real 42x42 box (not a 0x0 point): it is the positioning context
         // for the absolute button (inset 0) and the popup anchor (52px above
         // its bottom edge). Dragging rewrites right/bottom on this host.
-        host.style.cssText = 'position:fixed;z-index:2147483647;right:18px;bottom:18px;width:42px;height:42px;';
+        // visibility:hidden until guardStyle() confirms the shadow stylesheet is
+        // in effect (see "style guard" below) — never show unstyled markup.
+        host.style.cssText = 'position:fixed;z-index:2147483647;right:18px;bottom:18px;width:42px;height:42px;visibility:hidden;';
         var shadow = host.attachShadow({ mode: 'open' });
 
         var style = document.createElement('style');
@@ -1052,6 +1054,45 @@
         shadow.appendChild(btn);
 
         var badge = btn.querySelector('.vc-tm-badge');
+
+        // ---- style guard --------------------------------------------------------
+        // The button's position and the popup's hidden state (opacity:0) come ONLY
+        // from the shadow-root stylesheet. If that sheet is not in effect — a strict
+        // page CSP blocking the inline <style>, or the page still churning its DOM
+        // while it initialises — the raw popup markup renders as loose text over the
+        // page. So the host stays visibility:hidden until the sheet is verified
+        // (computed style of the button), falls back to a constructable stylesheet
+        // (not subject to CSP style-src), and is re-verified whenever the host is
+        // (re)attached and on the 2 s heartbeat.
+        function styleInEffect() {
+            try {
+                return host.isConnected && getComputedStyle(btn).position === 'absolute';
+            } catch (e) { return false; }
+        }
+        var sheetAdopted = false;
+        var styleTimer = 0;
+        var styleTries = 0;
+        function guardStyle() {
+            clearTimeout(styleTimer);
+            var ok = styleInEffect();
+            if (!ok && !sheetAdopted && host.isConnected) {
+                sheetAdopted = true;
+                try {
+                    var sheet = new CSSStyleSheet();
+                    sheet.replaceSync(POPUP_CSS + FLOATING_CSS + ADVANCED_CSS);
+                    shadow.adoptedStyleSheets = [sheet];
+                } catch (e) { /* constructable sheets unsupported — keep waiting */ }
+                ok = styleInEffect();
+            }
+            var want = ok ? '' : 'hidden';
+            if (host.style.visibility !== want) host.style.visibility = want;
+            if (ok) {
+                styleTries = 0;
+            } else if (styleTries++ < 12) {
+                styleTimer = setTimeout(guardStyle, Math.min(100 * styleTries, 1000));
+            }
+            return ok;
+        }
 
         // ---- popup (popup.html structure, popup.css classes) ----------------
         var popupWrap = document.createElement('div');
@@ -1730,6 +1771,7 @@
                 } else if (!fs && host.parentNode !== document.documentElement) {
                     document.documentElement.appendChild(host);
                 }
+                guardStyle();
             } catch (e) { /* page blocked the move — stay put */ }
         }
         document.addEventListener('fullscreenchange', adoptFullscreen);
@@ -1742,6 +1784,7 @@
         setInterval(function () {
             try {
                 if (!document.contains(host)) document.documentElement.appendChild(host);
+                guardStyle();
             } catch (e) { /* page blocked the move — retry next tick */ }
         }, 2000);
 
@@ -1867,6 +1910,7 @@
         refresh();
 
         document.documentElement.appendChild(host);
+        guardStyle();
         return {
             refresh: refresh,
             setOpen: setOpen,
