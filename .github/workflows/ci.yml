@@ -58,6 +58,27 @@ jobs:
       - name: Install pinned build dependencies
         run: npm ci
 
+      # The committed root userscript is the release-quality canonical artifact.
+      # Keep GitHub Pages in sync with it; do not regenerate/replace it from the
+      # template during CI, which can publish an older or less complete copy.
+      - name: Sync canonical Tampermonkey userscript for regression tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $canonical = "tampermonkey/volume-control.user.js"
+          $published = "website/public/tampermonkey/volume-control.user.js"
+          if (-not (Test-Path -LiteralPath $canonical)) {
+              throw "Canonical Tampermonkey userscript is missing: $canonical"
+          }
+          New-Item -ItemType Directory -Path (Split-Path -Parent $published) -Force | Out-Null
+          Copy-Item -LiteralPath $canonical -Destination $published -Force
+          $canonicalHash = (Get-FileHash -LiteralPath $canonical -Algorithm SHA256).Hash
+          $publishedHash = (Get-FileHash -LiteralPath $published -Algorithm SHA256).Hash
+          if ($canonicalHash -ne $publishedHash) {
+              throw "GitHub Pages userscript does not match the canonical Tampermonkey script."
+          }
+          Write-Host "Canonical userscript synchronized ($canonicalHash)."
+
       - name: Run regression tests
         run: npm test
 
