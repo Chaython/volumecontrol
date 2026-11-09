@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Volume Control — Per-Site Volume Booster
 // @namespace    https://github.com/Chaython/volumecontrol
-// @version      7.1.7
+// @version      7.1.8
 // @description  Real per-site volume control from the Volume Control browser extension: ±32 dB boost, music/adaptive normalizer, mono down-mix and a safety limiter — running the extension's actual page-audio-hook engine on any site.
 // @author       Chaython
 // @license      ISC
