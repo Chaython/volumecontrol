@@ -45,19 +45,22 @@ jobs:
           cp -f popup.css website/public/
           sed -i 's|\.\./popup\.css|popup.css|g' website/public/preview.html
 
-      - name: Build Tampermonkey userscript
+      - name: Publish canonical Tampermonkey userscript
         run: |
-          if [ -f scripts/build-userscript.mjs ] && [ -f page-audio-hook.js ]; then
-            node scripts/build-userscript.mjs
-          elif [ -f tampermonkey/volume-control.user.js ]; then
-            mkdir -p website/public/tampermonkey
-            cp tampermonkey/volume-control.user.js website/public/tampermonkey/
-            echo "[userscript] used committed root artifact"
-          fi
-          test -f website/public/tampermonkey/volume-control.user.js || {
-            echo "::error::website/public/tampermonkey/volume-control.user.js missing (need scripts/build-userscript.mjs + page-audio-hook.js, a committed tampermonkey/ folder, or the file inside website/public/tampermonkey/)"
+          set -euo pipefail
+          canonical="tampermonkey/volume-control.user.js"
+          published="website/public/tampermonkey/volume-control.user.js"
+          test -s "$canonical" || {
+            echo "::error::Canonical Tampermonkey userscript is missing or empty: $canonical"
             exit 1
           }
+          mkdir -p "$(dirname "$published")"
+          cp -f "$canonical" "$published"
+          cmp -s "$canonical" "$published" || {
+            echo "::error::GitHub Pages userscript differs from the canonical Tampermonkey script"
+            exit 1
+          }
+          echo "[userscript] publishing canonical artifact: $(grep -m1 '^// @version' "$canonical" | sed 's|^// @version[[:space:]]*||')"
 
       - name: Install dependencies
         working-directory: website
