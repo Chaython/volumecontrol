@@ -4636,7 +4636,7 @@ test('Tampermonkey drag implementation, published copies, and update revision st
 
     const revisionMatch = builder.match(/const USERSCRIPT_REVISION = (\d+);/);
     assert.ok(revisionMatch, 'builder must declare the userscript-only update revision');
-    const publishedVersion = userscript.match(/^\\/\\/ @version\\s+(.+)$/m)?.[1];
+    const publishedVersion = userscript.match(/^\/\/ @version\s+(.+)$/m)?.[1];
     const generatedVersion = manifest.version + '.' + revisionMatch[1];
     assert.ok(publishedVersion, 'published userscript must declare an update version');
     const versionParts = value => String(value).split('.').map(part => Number.parseInt(part, 10));
