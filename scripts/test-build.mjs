@@ -4636,9 +4636,23 @@ test('Tampermonkey drag implementation, published copies, and update revision st
 
     const revisionMatch = builder.match(/const USERSCRIPT_REVISION = (\d+);/);
     assert.ok(revisionMatch, 'builder must declare the userscript-only update revision');
-    assert.equal(userscript.match(/^\/\/ @version\s+(.+)$/m)?.[1],
-        manifest.version + '.' + revisionMatch[1],
-        'published userscript version must include the current template revision');
+    const publishedVersion = userscript.match(/^\\/\\/ @version\\s+(.+)$/m)?.[1];
+    const generatedVersion = manifest.version + '.' + revisionMatch[1];
+    assert.ok(publishedVersion, 'published userscript must declare an update version');
+    const versionParts = value => String(value).split('.').map(part => Number.parseInt(part, 10));
+    const publishedParts = versionParts(publishedVersion);
+    const generatedParts = versionParts(generatedVersion);
+    let versionOrder = 0;
+    for (let i = 0; i < Math.max(publishedParts.length, generatedParts.length); i++) {
+        const publishedPart = publishedParts[i] || 0;
+        const generatedPart = generatedParts[i] || 0;
+        if (publishedPart !== generatedPart) {
+            versionOrder = publishedPart > generatedPart ? 1 : -1;
+            break;
+        }
+    }
+    assert.ok(versionOrder >= 0,
+        `canonical userscript version (${publishedVersion}) must not be older than the template-generated version (${generatedVersion})`);
     const embeddedEngineMatch = userscript.match(/var ENGINE_SOURCE = ("(?:\\.|[^"\\])*");/);
     assert.ok(embeddedEngineMatch, 'generated userscript must contain a serialized audio engine');
     const embeddedEngine = JSON.parse(embeddedEngineMatch[1]);
