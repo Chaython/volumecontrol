@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-10T16:28:54.697Z",
+  "generatedAt": "2026-11-11T16:21:45.116Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 77881,
-    "weeklyDownloads": 3424,
+    "averageDailyUsers": 78089,
+    "weeklyDownloads": 3381,
     "rating": 3.8186,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
@@ -16,7 +16,7 @@
     "status": "available",
     "extensionId": "ipbghdjdmefdioebhaneohmkidjakfbc",
     "url": "https://microsoftedge.microsoft.com/addons/detail/ipbghdjdmefdioebhaneohmkidjakfbc",
-    "activeInstallCount": 711,
+    "activeInstallCount": 699,
     "rating": 4,
     "ratingCount": 4,
     "version": "7.0",
@@ -25,18 +25,13 @@
   },
   "github": {
     "status": "available",
-    "stars": 99,
-    "forks": 17,
+    "stars": 98,
+    "forks": 16,
     "watchers": 3,
     "url": "https://github.com/Chaython/volumecontrol",
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-10-27T00:00:00Z",
-          "count": 8,
-          "uniques": 5
-        },
         {
           "timestamp": "2026-10-28T00:00:00Z",
           "count": 4,
@@ -101,16 +96,16 @@
           "timestamp": "2026-11-09T00:00:00Z",
           "count": 7,
           "uniques": 3
+        },
+        {
+          "timestamp": "2026-11-10T00:00:00Z",
+          "count": 5,
+          "uniques": 5
         }
       ],
-      "totalViews": 138,
-      "uniqueVisitors": 57,
+      "totalViews": 135,
+      "uniqueVisitors": 56,
       "clones": [
-        {
-          "timestamp": "2026-10-27T00:00:00Z",
-          "count": 3,
-          "uniques": 3
-        },
         {
           "timestamp": "2026-10-28T00:00:00Z",
           "count": 9,
@@ -175,25 +170,30 @@
           "timestamp": "2026-11-09T00:00:00Z",
           "count": 39,
           "uniques": 15
+        },
+        {
+          "timestamp": "2026-11-10T00:00:00Z",
+          "count": 23,
+          "uniques": 12
         }
       ],
-      "totalClones": 237,
-      "uniqueCloners": 116,
+      "totalClones": 257,
+      "uniqueCloners": 123,
       "referrers": [
         {
           "referrer": "Google",
-          "count": 27,
-          "uniques": 19
+          "count": 22,
+          "uniques": 17
+        },
+        {
+          "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
+          "count": 4,
+          "uniques": 4
         },
         {
           "referrer": "github.com",
           "count": 4,
           "uniques": 2
-        },
-        {
-          "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
-          "count": 3,
-          "uniques": 3
         },
         {
           "referrer": "search.brave.com",
