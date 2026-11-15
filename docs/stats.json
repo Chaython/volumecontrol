@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-14T15:12:46.960Z",
+  "generatedAt": "2026-11-15T15:43:42.107Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 79412,
-    "weeklyDownloads": 3235,
+    "averageDailyUsers": 79198,
+    "weeklyDownloads": 3209,
     "rating": 3.8186,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
@@ -25,18 +25,13 @@
   },
   "github": {
     "status": "available",
-    "stars": 98,
+    "stars": 100,
     "forks": 16,
     "watchers": 3,
     "url": "https://github.com/Chaython/volumecontrol",
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-10-31T00:00:00Z",
-          "count": 28,
-          "uniques": 6
-        },
         {
           "timestamp": "2026-11-01T00:00:00Z",
           "count": 8,
@@ -101,16 +96,16 @@
           "timestamp": "2026-11-13T00:00:00Z",
           "count": 16,
           "uniques": 7
+        },
+        {
+          "timestamp": "2026-11-14T00:00:00Z",
+          "count": 30,
+          "uniques": 8
         }
       ],
-      "totalViews": 158,
-      "uniqueVisitors": 70,
+      "totalViews": 160,
+      "uniqueVisitors": 72,
       "clones": [
-        {
-          "timestamp": "2026-10-31T00:00:00Z",
-          "count": 3,
-          "uniques": 3
-        },
         {
           "timestamp": "2026-11-01T00:00:00Z",
           "count": 4,
@@ -175,20 +170,25 @@
           "timestamp": "2026-11-13T00:00:00Z",
           "count": 9,
           "uniques": 8
+        },
+        {
+          "timestamp": "2026-11-14T00:00:00Z",
+          "count": 20,
+          "uniques": 12
         }
       ],
-      "totalClones": 254,
-      "uniqueCloners": 127,
+      "totalClones": 271,
+      "uniqueCloners": 135,
       "referrers": [
         {
           "referrer": "Google",
-          "count": 28,
-          "uniques": 21
+          "count": 31,
+          "uniques": 22
         },
         {
           "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
-          "count": 6,
-          "uniques": 6
+          "count": 7,
+          "uniques": 7
         },
         {
           "referrer": "github.com",
@@ -202,11 +202,6 @@
         },
         {
           "referrer": "DuckDuckGo",
-          "count": 1,
-          "uniques": 1
-        },
-        {
-          "referrer": "kdroidwin.codeberg.page",
           "count": 1,
           "uniques": 1
         }
