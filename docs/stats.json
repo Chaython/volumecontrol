@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-15T15:43:42.107Z",
+  "generatedAt": "2026-11-16T18:41:32.039Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 79198,
-    "weeklyDownloads": 3209,
+    "averageDailyUsers": 79040,
+    "weeklyDownloads": 3234,
     "rating": 3.8186,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
