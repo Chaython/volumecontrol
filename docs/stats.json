@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-18T17:22:19.848Z",
+  "generatedAt": "2026-11-19T17:27:43.457Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 79373,
-    "weeklyDownloads": 3315,
+    "averageDailyUsers": 79643,
+    "weeklyDownloads": 3346,
     "rating": 3.8186,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
@@ -24,189 +24,21 @@
     "message": "Public listing metadata only; weekly users, daily installs, and impressions require Partner Center analytics."
   },
   "github": {
-    "status": "available",
-    "stars": 100,
-    "forks": 16,
-    "watchers": 3,
+    "status": "unavailable",
+    "error": "HTTP 403 from api.github.com",
+    "stars": null,
+    "forks": null,
     "url": "https://github.com/Chaython/volumecontrol",
     "traffic": {
-      "status": "available",
-      "views": [
-        {
-          "timestamp": "2026-11-04T00:00:00Z",
-          "count": 18,
-          "uniques": 7
-        },
-        {
-          "timestamp": "2026-11-05T00:00:00Z",
-          "count": 11,
-          "uniques": 6
-        },
-        {
-          "timestamp": "2026-11-06T00:00:00Z",
-          "count": 11,
-          "uniques": 5
-        },
-        {
-          "timestamp": "2026-11-07T00:00:00Z",
-          "count": 1,
-          "uniques": 1
-        },
-        {
-          "timestamp": "2026-11-08T00:00:00Z",
-          "count": 11,
-          "uniques": 6
-        },
-        {
-          "timestamp": "2026-11-09T00:00:00Z",
-          "count": 7,
-          "uniques": 3
-        },
-        {
-          "timestamp": "2026-11-10T00:00:00Z",
-          "count": 5,
-          "uniques": 5
-        },
-        {
-          "timestamp": "2026-11-11T00:00:00Z",
-          "count": 8,
-          "uniques": 4
-        },
-        {
-          "timestamp": "2026-11-12T00:00:00Z",
-          "count": 11,
-          "uniques": 8
-        },
-        {
-          "timestamp": "2026-11-13T00:00:00Z",
-          "count": 16,
-          "uniques": 7
-        },
-        {
-          "timestamp": "2026-11-14T00:00:00Z",
-          "count": 30,
-          "uniques": 8
-        },
-        {
-          "timestamp": "2026-11-15T00:00:00Z",
-          "count": 23,
-          "uniques": 10
-        },
-        {
-          "timestamp": "2026-11-16T00:00:00Z",
-          "count": 16,
-          "uniques": 11
-        },
-        {
-          "timestamp": "2026-11-17T00:00:00Z",
-          "count": 4,
-          "uniques": 4
-        }
-      ],
-      "totalViews": 172,
-      "uniqueVisitors": 82,
-      "clones": [
-        {
-          "timestamp": "2026-11-04T00:00:00Z",
-          "count": 48,
-          "uniques": 32
-        },
-        {
-          "timestamp": "2026-11-05T00:00:00Z",
-          "count": 18,
-          "uniques": 11
-        },
-        {
-          "timestamp": "2026-11-06T00:00:00Z",
-          "count": 39,
-          "uniques": 19
-        },
-        {
-          "timestamp": "2026-11-07T00:00:00Z",
-          "count": 14,
-          "uniques": 10
-        },
-        {
-          "timestamp": "2026-11-08T00:00:00Z",
-          "count": 13,
-          "uniques": 8
-        },
-        {
-          "timestamp": "2026-11-09T00:00:00Z",
-          "count": 39,
-          "uniques": 15
-        },
-        {
-          "timestamp": "2026-11-10T00:00:00Z",
-          "count": 23,
-          "uniques": 12
-        },
-        {
-          "timestamp": "2026-11-11T00:00:00Z",
-          "count": 9,
-          "uniques": 7
-        },
-        {
-          "timestamp": "2026-11-12T00:00:00Z",
-          "count": 6,
-          "uniques": 4
-        },
-        {
-          "timestamp": "2026-11-13T00:00:00Z",
-          "count": 9,
-          "uniques": 8
-        },
-        {
-          "timestamp": "2026-11-14T00:00:00Z",
-          "count": 20,
-          "uniques": 12
-        },
-        {
-          "timestamp": "2026-11-15T00:00:00Z",
-          "count": 7,
-          "uniques": 5
-        },
-        {
-          "timestamp": "2026-11-16T00:00:00Z",
-          "count": 22,
-          "uniques": 13
-        },
-        {
-          "timestamp": "2026-11-17T00:00:00Z",
-          "count": 8,
-          "uniques": 6
-        }
-      ],
-      "totalClones": 275,
-      "uniqueCloners": 137,
-      "referrers": [
-        {
-          "referrer": "Google",
-          "count": 36,
-          "uniques": 25
-        },
-        {
-          "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
-          "count": 7,
-          "uniques": 7
-        },
-        {
-          "referrer": "search.brave.com",
-          "count": 5,
-          "uniques": 3
-        },
-        {
-          "referrer": "github.com",
-          "count": 3,
-          "uniques": 3
-        },
-        {
-          "referrer": "DuckDuckGo",
-          "count": 2,
-          "uniques": 2
-        }
-      ],
-      "error": null
+      "status": "needs_token",
+      "views": [],
+      "totalViews": null,
+      "uniqueVisitors": null,
+      "clones": [],
+      "totalClones": null,
+      "uniqueCloners": null,
+      "referrers": [],
+      "error": "HTTP 403 from api.github.com"
     }
   }
 }
