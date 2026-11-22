@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-21T16:15:05.703Z",
+  "generatedAt": "2026-11-22T16:27:58.348Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 80313,
-    "weeklyDownloads": 3299,
+    "averageDailyUsers": 79996,
+    "weeklyDownloads": 3245,
     "rating": 3.8241,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
@@ -32,16 +32,6 @@
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-11-06T00:00:00Z",
-          "count": 11,
-          "uniques": 5
-        },
-        {
-          "timestamp": "2026-11-07T00:00:00Z",
-          "count": 1,
-          "uniques": 1
-        },
         {
           "timestamp": "2026-11-08T00:00:00Z",
           "count": 11,
@@ -101,21 +91,21 @@
           "timestamp": "2026-11-19T00:00:00Z",
           "count": 13,
           "uniques": 7
+        },
+        {
+          "timestamp": "2026-11-20T00:00:00Z",
+          "count": 10,
+          "uniques": 7
+        },
+        {
+          "timestamp": "2026-11-21T00:00:00Z",
+          "count": 8,
+          "uniques": 4
         }
       ],
-      "totalViews": 181,
-      "uniqueVisitors": 87,
+      "totalViews": 187,
+      "uniqueVisitors": 93,
       "clones": [
-        {
-          "timestamp": "2026-11-06T00:00:00Z",
-          "count": 39,
-          "uniques": 19
-        },
-        {
-          "timestamp": "2026-11-07T00:00:00Z",
-          "count": 14,
-          "uniques": 10
-        },
         {
           "timestamp": "2026-11-08T00:00:00Z",
           "count": 13,
@@ -175,20 +165,30 @@
           "timestamp": "2026-11-19T00:00:00Z",
           "count": 18,
           "uniques": 12
+        },
+        {
+          "timestamp": "2026-11-20T00:00:00Z",
+          "count": 5,
+          "uniques": 5
+        },
+        {
+          "timestamp": "2026-11-21T00:00:00Z",
+          "count": 6,
+          "uniques": 6
         }
       ],
-      "totalClones": 239,
-      "uniqueCloners": 115,
+      "totalClones": 197,
+      "uniqueCloners": 103,
       "referrers": [
         {
           "referrer": "Google",
-          "count": 29,
-          "uniques": 21
+          "count": 35,
+          "uniques": 26
         },
         {
           "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
-          "count": 7,
-          "uniques": 7
+          "count": 6,
+          "uniques": 6
         },
         {
           "referrer": "search.brave.com",
