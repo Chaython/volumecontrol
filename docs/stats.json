@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-23T20:22:34.540Z",
+  "generatedAt": "2026-11-24T19:34:36.858Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 79789,
-    "weeklyDownloads": 3226,
+    "averageDailyUsers": 79866,
+    "weeklyDownloads": 3198,
     "rating": 3.8295,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
@@ -25,18 +25,13 @@
   },
   "github": {
     "status": "available",
-    "stars": 103,
+    "stars": 104,
     "forks": 17,
     "watchers": 3,
     "url": "https://github.com/Chaython/volumecontrol",
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-11-09T00:00:00Z",
-          "count": 7,
-          "uniques": 3
-        },
         {
           "timestamp": "2026-11-10T00:00:00Z",
           "count": 5,
@@ -101,16 +96,16 @@
           "timestamp": "2026-11-22T00:00:00Z",
           "count": 10,
           "uniques": 5
+        },
+        {
+          "timestamp": "2026-11-23T00:00:00Z",
+          "count": 16,
+          "uniques": 12
         }
       ],
-      "totalViews": 186,
-      "uniqueVisitors": 92,
+      "totalViews": 195,
+      "uniqueVisitors": 101,
       "clones": [
-        {
-          "timestamp": "2026-11-09T00:00:00Z",
-          "count": 39,
-          "uniques": 15
-        },
         {
           "timestamp": "2026-11-10T00:00:00Z",
           "count": 23,
@@ -175,15 +170,20 @@
           "timestamp": "2026-11-22T00:00:00Z",
           "count": 18,
           "uniques": 12
+        },
+        {
+          "timestamp": "2026-11-23T00:00:00Z",
+          "count": 12,
+          "uniques": 8
         }
       ],
-      "totalClones": 202,
-      "uniqueCloners": 106,
+      "totalClones": 175,
+      "uniqueCloners": 100,
       "referrers": [
         {
           "referrer": "Google",
-          "count": 31,
-          "uniques": 23
+          "count": 37,
+          "uniques": 27
         },
         {
           "referrer": "github.com",
@@ -202,8 +202,8 @@
         },
         {
           "referrer": "DuckDuckGo",
-          "count": 2,
-          "uniques": 2
+          "count": 1,
+          "uniques": 1
         }
       ],
       "error": null
