@@ -120,7 +120,18 @@ try {
     const targets = await waitFor(async () => {
         const { targetInfos } = await cdp.send('Target.getTargets');
         const tab = targetInfos.find(t => t.type === 'page' && t.url.startsWith(origin));
-        const ext = targetInfos.find(t => t.url.startsWith('chrome-extension://') && t.url.includes('/background.js'));
+        const extensionTargets = targetInfos.filter(t =>
+            t.type === 'service_worker' && t.url.startsWith('chrome-extension://') &&
+            t.url.includes('/background.js'));
+        let ext = null;
+        for (const candidate of extensionTargets) {
+            const session = await cdp.attach(candidate.targetId);
+            const manifest = await cdp.eval(session, 'chrome.runtime.getManifest()');
+            if (manifest?.name === 'Volume Control') {
+                ext = candidate;
+                break;
+            }
+        }
         return tab && ext ? { tab, ext } : null;
     }, 20000);
     const id = new URL(targets.ext.url).hostname;
@@ -130,7 +141,7 @@ try {
         'document.body.classList.contains("vc-init") && (AudioNode.prototype.__volumeControlPatched || AudioNode.prototype.connect.name === "patchedConnect")'));
     check('Real MAIN and isolated content scripts injected', true);
     const { targetId: settingsTarget } = await cdp.send('Target.createTarget', {
-        url: 'chrome-extension://' + id + '/options.html'
+        url: 'chrome-extension://' + id + '/options.html', background: true
     });
     const settingsSession = await cdp.attach(settingsTarget);
     await sleep(750);

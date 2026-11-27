@@ -107,8 +107,14 @@ try {
     cdp = await CDP.open('ws://127.0.0.1:' + connection.port + connection.path);
     const worker = await waitFor(async () => {
         const { targetInfos } = await cdp.send('Target.getTargets');
-        return targetInfos.find(t => t.type === 'service_worker' &&
+        const extensionTargets = targetInfos.filter(t => t.type === 'service_worker' &&
             t.url.startsWith('chrome-extension://') && t.url.includes('/background.js'));
+        for (const candidate of extensionTargets) {
+            const session = await cdp.attach(candidate.targetId);
+            const manifest = await cdp.evaluate(session, 'chrome.runtime.getManifest()');
+            if (manifest?.name === 'Volume Control') return candidate;
+        }
+        return null;
     });
     const extensionId = new URL(worker.url).hostname;
     const { targetId: optionsId } = await cdp.send('Target.createTarget',

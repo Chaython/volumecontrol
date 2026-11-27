@@ -4526,6 +4526,21 @@ test('MAIN sampler reconciles when an AudioContext resumes without a new play ev
 });
 
 
+test('Chromium probes identify the packaged worker by its runtime manifest', () => {
+    for (const file of ['scripts/chromium-functional-smoke.mjs', 'scripts/chromium-real-sites.mjs']) {
+        const source = readFileSync(join(root, file), 'utf8');
+        assert.match(source, /const extensionTargets = targetInfos\.filter/,
+            file + ' must consider every extension service worker');
+        assert.match(source, /for \(const candidate of extensionTargets\)/,
+            file + ' must not assume the first extension worker is Volume Control');
+        assert.match(source, /chrome\.runtime\.getManifest\(\)/,
+            file + ' must inspect the runtime manifest');
+        assert.match(source, /manifest\?\.name === 'Volume Control'/,
+            file + ' must select only the extension under test');
+    }
+});
+
+
 test('streaming workflow fails closed when required decoded-media coverage disappears', () => {
     const probe = readFileSync(join(root, 'scripts/chromium-real-sites.mjs'), 'utf8');
     const workflow = readFileSync(join(root, '.github/workflows/real-sites.yml'), 'utf8');
