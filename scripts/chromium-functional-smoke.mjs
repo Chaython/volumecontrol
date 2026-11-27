@@ -130,7 +130,7 @@ try {
         'document.body.classList.contains("vc-init") && (AudioNode.prototype.__volumeControlPatched || AudioNode.prototype.connect.name === "patchedConnect")'));
     check('Real MAIN and isolated content scripts injected', true);
     const { targetId: settingsTarget } = await cdp.send('Target.createTarget', {
-        url: 'chrome-extension://' + id + '/options.html', background: true
+        url: 'chrome-extension://' + id + '/options.html'
     });
     const settingsSession = await cdp.attach(settingsTarget);
     await sleep(750);
