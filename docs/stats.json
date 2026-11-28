@@ -1,15 +1,15 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-27T18:17:12.989Z",
+  "generatedAt": "2026-11-28T16:59:38.854Z",
   "repository": "Chaython/volumecontrol",
   "firefox": {
     "status": "available",
     "addonName": {
       "en-CA": "Volume Control [Boost volume]"
     },
-    "averageDailyUsers": 80412,
-    "weeklyDownloads": 3201,
-    "rating": 3.8295,
+    "averageDailyUsers": 80539,
+    "weeklyDownloads": 3212,
+    "rating": 3.8349,
     "url": "https://addons.mozilla.org/en-US/firefox/addon/volume-control-boost-volume/"
   },
   "edge": {
@@ -32,11 +32,6 @@
     "traffic": {
       "status": "available",
       "views": [
-        {
-          "timestamp": "2026-11-13T00:00:00Z",
-          "count": 16,
-          "uniques": 7
-        },
         {
           "timestamp": "2026-11-14T00:00:00Z",
           "count": 30,
@@ -101,16 +96,16 @@
           "timestamp": "2026-11-26T00:00:00Z",
           "count": 7,
           "uniques": 3
+        },
+        {
+          "timestamp": "2026-11-27T00:00:00Z",
+          "count": 7,
+          "uniques": 2
         }
       ],
-      "totalViews": 193,
-      "uniqueVisitors": 101,
+      "totalViews": 184,
+      "uniqueVisitors": 96,
       "clones": [
-        {
-          "timestamp": "2026-11-13T00:00:00Z",
-          "count": 9,
-          "uniques": 8
-        },
         {
           "timestamp": "2026-11-14T00:00:00Z",
           "count": 20,
@@ -175,30 +170,35 @@
           "timestamp": "2026-11-26T00:00:00Z",
           "count": 17,
           "uniques": 9
+        },
+        {
+          "timestamp": "2026-11-27T00:00:00Z",
+          "count": 31,
+          "uniques": 20
         }
       ],
-      "totalClones": 190,
-      "uniqueCloners": 110,
+      "totalClones": 212,
+      "uniqueCloners": 122,
       "referrers": [
         {
           "referrer": "Google",
-          "count": 41,
-          "uniques": 32
+          "count": 36,
+          "uniques": 29
         },
         {
           "referrer": "github.com",
-          "count": 7,
-          "uniques": 5
-        },
-        {
-          "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
           "count": 6,
-          "uniques": 6
+          "uniques": 4
         },
         {
           "referrer": "search.brave.com",
           "count": 5,
           "uniques": 3
+        },
+        {
+          "referrer": "prod.outgoing.prod.webservices.mozgcp.net",
+          "count": 4,
+          "uniques": 4
         },
         {
           "referrer": "DuckDuckGo",
